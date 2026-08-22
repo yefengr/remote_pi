@@ -2252,7 +2252,9 @@ a {
   --pwa-accent: #4fc3f7;
   --pwa-green: #73e2a4;
   width: 100%;
+  max-width: 100%;
   min-height: 100dvh;
+  overflow-x: clip;
   color: var(--pwa-ink);
   background:
     radial-gradient(750px 500px at 88% -10%, rgba(79, 195, 247, 0.11), transparent 65%),
@@ -2350,8 +2352,10 @@ a {
 .pwa-chat-empty-icon { width: 45px; height: 45px; display: grid; place-items: center; margin: 0 auto 15px; border: 1px solid var(--pwa-line-strong); border-radius: 14px; color: var(--pwa-accent); background: rgba(79,195,247,.08); }
 .pwa-chat-empty h3, .pwa-zero h2 { margin: 0; font: 600 24px var(--ff-display); letter-spacing: -.04em; }
 .pwa-chat-empty p, .pwa-zero p { color: var(--pwa-dim); font-size: 13px; }
-.pwa-composer { width: min(900px, 100%); margin: auto auto 0; padding: 0 clamp(22px, 5vw, 70px) 25px; display: flex; gap: 10px; align-items: flex-end; }
-.pwa-composer textarea, .pwa-field input { width: 100%; resize: vertical; min-height: 48px; padding: 13px 14px; border: 1px solid var(--pwa-line-strong); border-radius: 10px; outline: none; color: var(--pwa-ink); background: rgba(9,13,15,.94); font: 14px/1.5 var(--ff-body); }
+.pwa-composer { box-sizing: border-box; width: min(900px, 100%); min-width: 0; margin: auto auto 0; padding: 0 clamp(22px, 5vw, 70px) 25px; display: flex; gap: 10px; align-items: flex-end; }
+.pwa-composer textarea { flex: 1 1 0; min-width: 0; width: auto; }
+.pwa-composer textarea, .pwa-field input { resize: vertical; min-height: 48px; padding: 13px 14px; border: 1px solid var(--pwa-line-strong); border-radius: 10px; outline: none; color: var(--pwa-ink); background: rgba(9,13,15,.94); font: 16px/1.5 var(--ff-body); }
+.pwa-composer .pwa-primary-button { flex: 0 0 auto; }
 .pwa-composer textarea:focus, .pwa-field input:focus { border-color: rgba(79,195,247,.65); box-shadow: 0 0 0 3px rgba(79,195,247,.08); }
 .pwa-composer textarea:disabled { opacity: .55; cursor: not-allowed; }
 .pwa-primary-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 42px; padding: 0 16px; border: 1px solid var(--pwa-accent); border-radius: 9px; color: #06131a; background: var(--pwa-accent); font: 600 12px var(--ff-mono); cursor: pointer; white-space: nowrap; transition: transform .2s, filter .2s, opacity .2s; }
@@ -2419,8 +2423,9 @@ a {
   .pwa-room-control { display: none; }
   .pwa-message-list { padding: 22px 16px 70px; }
   .pwa-message.user { width: 88%; }
-  .pwa-composer { padding: 0 16px 16px; }
+  .pwa-composer { width: 100%; padding: 0 16px 16px; }
   .pwa-composer textarea { min-height: 44px; }
+  .pwa-field input, .pwa-manual-pairing textarea { font-size: 16px; }
   .pwa-composer .pwa-primary-button { min-width: 73px; padding: 0 10px; }
   .pwa-settings { top: 60px; min-height: calc(100% - 60px); }
   .pwa-scanner, .pwa-pairing-card { padding: 18px; }
