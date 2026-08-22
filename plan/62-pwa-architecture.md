@@ -6,7 +6,7 @@
 
 在现有 `site/` Next.js 项目内实现 Remote Pi PWA，使用浏览器直接连接 Relay，复用现有 QR 配对、Ed25519 challenge-response、Peer/Room 路由和 Client/Server message wire protocol。
 
-本方案只覆盖 A2 首版范围：本地浏览器身份、配对、单 Pi 实时连接、文本聊天、流式输出、Room 切换、本地历史和 O1 离线只读。账号服务、云端 Vault、聊天历史同步、Push、图片和语音不进入本方案。
+本方案只覆盖 A2 首版范围：本地浏览器身份、Pi / Room 配对、单当前 Pi / Room 实时连接、文本聊天、流式输出、Room 切换、本地历史和 O1 离线只读。账号服务、云端 Vault、聊天历史同步、Push、图片和语音不进入本方案。
 
 ## 2. 技术基线
 
@@ -97,13 +97,14 @@ site/
 IndexedDB 至少保存：
 
 ```text
-PeerRecord
+PairingRecord
+- id = (remoteEpk, roomId) 的稳定本地键
 - remoteEpk
 - sessionName
 - relayUrl
 - pairedAt
 - nickname?
-- roomId?
+- roomId
 - harness?
 ```
 
@@ -172,12 +173,12 @@ models_list
 
 ### 5.3 ConnectionManager
 
-- 同一时间只维护一个 active Peer 的实时连接。
+- 同一时间只维护一个 active Pi / Room 配对的实时连接。
 - 状态至少包含 `noPeer`、`connecting`、`online`、`retrying`、`offline`。
 - 重连使用 1、2、5、10、30 秒 backoff，上限固定。
 - 页面从后台回到前台时取消旧连接并尝试一次重新连接。
 - 网络离线时停止连接尝试，恢复 online 事件后重新开始。
-- 切换 Peer 时先关闭旧连接，再建立新连接。
+- 切换 Pi / Room 配对时先关闭旧连接，再建立新连接。
 - 切换 Room 不关闭 WebSocket，只更新后续 envelope 的 `room` 字段。
 - 连接未达到 `online` 时，发送操作必须被阻止。
 
@@ -220,7 +221,7 @@ Room 切换时必须按 `(remoteEpk, roomId)` 隔离接收和写入，不能让�
 - 扫描结果先严格解析 scheme、host、token、epk、name 和可选 room。
 - Relay mismatch 时显示明确提示，不静默切换用户配置。
 - 配对过程显示等待、成功、token 过期、token 已消费、Relay 不匹配和未知错误。
-- `pair_ok` 成功后保存 PeerRecord，并将其加入本地列表。
+- `pair_ok` 成功后保存 PairingRecord；同一 Pi 的不同 `roomId` 使用不同本地记录并加入配对列表。
 - 用户可以取消未完成的配对；取消后关闭临时 WebSocket。
 
 ## 8. IndexedDB 与生命周期

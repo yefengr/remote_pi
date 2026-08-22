@@ -17,6 +17,7 @@ import {
   listPwaMessages,
   listPwaPeers,
   listPwaRooms,
+  makePwaPeerId,
   type PwaMessageRecord,
   type PwaPeerRecord,
   type PwaRoomRecord,
@@ -45,7 +46,9 @@ function browserName(): string {
 }
 
 function displayPeer(peer: PwaPeerRecord): string {
-  return peer.nickname?.trim() || peer.sessionName || "Remote Pi";
+  if (peer.nickname?.trim()) return peer.nickname.trim();
+  if (peer.sessionName && peer.sessionName.toLowerCase() !== "remote-pi") return peer.sessionName;
+  return `${peer.sessionName || "Remote Pi"} / ${peer.roomId}`;
 }
 
 function toStoredKey(key: Uint8Array): string {
@@ -104,12 +107,12 @@ export function PwaApp() {
   }, [roomId]);
 
   const activePeer = useMemo(
-    () => peers.find((peer) => peer.remoteEpk === activePeerId) ?? null,
+    () => peers.find((peer) => peer.id === activePeerId) ?? null,
     [activePeerId, peers],
   );
   const activeRooms = useMemo(
-    () => rooms.filter((room) => room.peerEpk === activePeerId).sort((a, b) => (a.name || a.cwd || a.roomId).localeCompare(b.name || b.cwd || b.roomId)),
-    [activePeerId, rooms],
+    () => rooms.filter((room) => room.peerEpk === activePeer?.remoteEpk).sort((a, b) => (a.name || a.cwd || a.roomId).localeCompare(b.name || b.cwd || b.roomId)),
+    [activePeer?.remoteEpk, rooms],
   );
 
   const persistMessage = useCallback(async (message: PwaMessageRecord) => {
@@ -138,14 +141,14 @@ export function PwaApp() {
 
   const handleControlFrame = useCallback((frame: import("@/lib/remote-pi/types").ControlFrame) => {
     if (frame.type === "presence") return;
-    if (!activePeerId) return;
+    if (!activePeer) return;
     let framePeer: string;
     try {
       framePeer = normalizePeerId(frame.peer);
     } catch {
       return;
     }
-    if (framePeer !== activePeerId) return;
+    if (framePeer !== activePeer.remoteEpk) return;
     if (frame.type === "rooms") {
       const now = Date.now();
       void upsertRooms(framePeer, frame.rooms.map((room) => ({
@@ -185,7 +188,7 @@ export function PwaApp() {
       const nextRooms = roomsRef.current.filter((room) => room.peerEpk === framePeer).map((room) => room.roomId === frame.room_id ? { ...room, online: false, updatedAt: Date.now() } : room);
       void upsertRooms(framePeer, nextRooms);
     }
-  }, [activePeerId, upsertRooms]);
+  }, [activePeer, upsertRooms]);
 
   const applySessionHistory = useCallback(async (peerEpk: string, selectedRoom: string, events: SessionHistoryEvent[]) => {
     const records: PwaMessageRecord[] = [];
@@ -203,13 +206,14 @@ export function PwaApp() {
 
   const handleServerMessage = useCallback(
     (message: ServerMessage) => {
-      if (!activePeerId) return;
+      if (!activePeer) return;
+      const peerEpk = activePeer.remoteEpk;
       const now = Date.now();
       if (message.type === "agent_chunk") {
         const existing = messagesRef.current.find((item) => item.replyTo === message.in_reply_to && item.kind === "assistant");
         addOrUpdateMessage({
           id: existing?.id ?? `assistant-${message.in_reply_to}`,
-          peerEpk: activePeerId,
+          peerEpk,
           roomId: roomIdRef.current,
           kind: "assistant",
           text: `${existing?.text ?? ""}${message.delta}`,
@@ -224,7 +228,7 @@ export function PwaApp() {
         const existing = messagesRef.current.find((item) => item.replyTo === message.in_reply_to && item.kind === "assistant");
         addOrUpdateMessage({
           id: existing?.id ?? `assistant-${message.in_reply_to}`,
-          peerEpk: activePeerId,
+          peerEpk,
           roomId: roomIdRef.current,
           kind: "assistant",
           text: message.text,
@@ -236,7 +240,7 @@ export function PwaApp() {
         if (!messagesRef.current.some((item) => item.id === message.id)) {
           addOrUpdateMessage({
             id: message.id,
-            peerEpk: activePeerId,
+            peerEpk,
             roomId: roomIdRef.current,
             kind: "user",
             text: message.text,
@@ -245,12 +249,12 @@ export function PwaApp() {
           });
         }
       } else if (message.type === "session_history") {
-        void applySessionHistory(activePeerId, roomIdRef.current, message.events);
+        void applySessionHistory(peerEpk, roomIdRef.current, message.events);
       } else if (message.type === "error") {
-        addOrUpdateMessage({ id: `error-${message.in_reply_to ?? id()}-${now}`, peerEpk: activePeerId, roomId: roomIdRef.current, kind: "system", text: message.message, createdAt: now, status: "error" });
+        addOrUpdateMessage({ id: `error-${message.in_reply_to ?? id()}-${now}`, peerEpk, roomId: roomIdRef.current, kind: "system", text: message.message, createdAt: now, status: "error" });
       }
     },
-    [activePeerId, addOrUpdateMessage, applySessionHistory],
+    [activePeer, addOrUpdateMessage, applySessionHistory],
   );
 
   const connectActivePeer = useCallback(async () => {
@@ -317,13 +321,20 @@ export function PwaApp() {
       ]);
       if (cancelled) return;
       setIdentity(nextIdentity);
-      const normalizedPeers = storedPeers.map((peer) => ({ ...peer, remoteEpk: normalizePeerId(peer.remoteEpk) }));
-      if (normalizedPeers.some((peer, index) => peer.remoteEpk !== storedPeers[index]?.remoteEpk)) {
-        await database.peers.bulkPut(normalizedPeers);
+      const normalizedPeers = storedPeers.map((peer) => {
+        const remoteEpk = normalizePeerId(peer.remoteEpk);
+        const roomId = peer.roomId || "main";
+        return { ...peer, id: peer.id || makePwaPeerId(remoteEpk, roomId), remoteEpk, roomId };
+      });
+      if (normalizedPeers.some((peer, index) => peer.id !== storedPeers[index]?.id || peer.remoteEpk !== storedPeers[index]?.remoteEpk || peer.roomId !== storedPeers[index]?.roomId)) {
+        await database.pairings.bulkPut(normalizedPeers);
       }
       setPeers(normalizedPeers);
       setRelayUrl(storedRelay?.value || DEFAULT_RELAY);
-      setActivePeerId(storedActive?.value ? normalizePeerId(storedActive.value) : normalizedPeers[0]?.remoteEpk || null);
+      const storedActivePeer = storedActive?.value
+        ? normalizedPeers.find((peer) => peer.id === storedActive.value) ?? normalizedPeers.find((peer) => peer.remoteEpk === normalizePeerId(storedActive.value))
+        : undefined;
+      setActivePeerId(storedActivePeer?.id || normalizedPeers[0]?.id || null);
     })();
     void Promise.race([
       startup,
@@ -341,29 +352,29 @@ export function PwaApp() {
   }, []);
 
   useEffect(() => {
-    if (!activePeerId) {
+    if (!activePeerId || !activePeer) {
       void Promise.resolve().then(() => {
         setMessages([]);
         setRoomId("main");
       });
       return;
     }
-    const selectedRoom = peers.find((peer) => peer.remoteEpk === activePeerId)?.roomId || "main";
-    void listPwaRooms(activePeerId).then((storedRooms) => {
+    const selectedRoom = activePeer.roomId || "main";
+    void listPwaRooms(activePeer.remoteEpk).then((storedRooms) => {
       roomsRef.current = storedRooms;
       setRooms(storedRooms);
     }).catch(() => setError("Could not read local rooms."));
-    void getPwaDatabase().settings.get(`${ACTIVE_ROOM_SETTING}${activePeerId}`).then((storedRoom) => {
+    void getPwaDatabase().settings.get(`${ACTIVE_ROOM_SETTING}${activePeer.id}`).then((storedRoom) => {
       const nextRoom = storedRoom?.value || selectedRoom;
       setRoomId(nextRoom);
       roomIdRef.current = nextRoom;
-      return listPwaMessages(activePeerId, nextRoom);
+      return listPwaMessages(activePeer.remoteEpk, nextRoom);
     }).then((storedMessages) => {
       messagesRef.current = storedMessages;
       setMessages(storedMessages);
     }).catch(() => setError("Could not read local history."));
-    void getPwaDatabase().settings.put({ key: ACTIVE_PEER_SETTING, value: activePeerId });
-  }, [activePeerId, peers]);
+    void getPwaDatabase().settings.put({ key: ACTIVE_PEER_SETTING, value: activePeer.id });
+  }, [activePeer, activePeerId]);
 
   useEffect(() => {
     if (startupState !== "ready" || !activePeer || !identity) return;
@@ -394,9 +405,9 @@ export function PwaApp() {
     };
   }, [activePeerId, connectActivePeer]);
 
-  const selectPeer = useCallback((remoteEpk: string) => {
+  const selectPeer = useCallback((peerId: string) => {
     setError(null);
-    setActivePeerId(remoteEpk);
+    setActivePeerId(peerId);
   }, []);
 
   const sendMessage = useCallback(() => {
@@ -448,7 +459,8 @@ export function PwaApp() {
           remotePeer,
           roomId: payload.roomId || "main",
           onPairOk: (ok) => {
-            finish({ remoteEpk: remotePeer, sessionName: ok.session_name, relayUrl: payload.relayUrl || relayUrl, pairedAt: new Date().toISOString(), roomId: ok.room_id || payload.roomId || "main" });
+            const pairedRoomId = ok.room_id || payload.roomId || "main";
+            finish({ id: makePwaPeerId(remotePeer, pairedRoomId), remoteEpk: remotePeer, sessionName: ok.session_name, relayUrl: payload.relayUrl || relayUrl, pairedAt: new Date().toISOString(), roomId: pairedRoomId });
           },
           onPairError: (pairError) => {
             setError(pairError.message || pairError.code);
@@ -470,9 +482,9 @@ export function PwaApp() {
       closePairing();
       relay.close();
       if (pairedPeer) {
-        await getPwaDatabase().peers.put(pairedPeer);
+        await getPwaDatabase().pairings.put(pairedPeer);
         setPeers(await listPwaPeers());
-        setActivePeerId(pairedPeer.remoteEpk);
+        setActivePeerId(pairedPeer.id);
         setPairState("idle");
       } else {
         setPairState("scanning");
@@ -488,18 +500,18 @@ export function PwaApp() {
     setSettingsOpen(false);
   }, []);
 
-  const removePeer = useCallback(async (remoteEpk: string) => {
-    await getPwaDatabase().peers.delete(remoteEpk);
+  const removePeer = useCallback(async (peerId: string) => {
+    await getPwaDatabase().pairings.delete(peerId);
     const nextPeers = await listPwaPeers();
     setPeers(nextPeers);
-    setActivePeerId((current) => (current === remoteEpk ? nextPeers[0]?.remoteEpk || null : current));
+    setActivePeerId((current) => (current === peerId ? nextPeers[0]?.id || null : current));
   }, []);
 
   const renamePeer = useCallback(async (peer: PwaPeerRecord) => {
     const nickname = window.prompt("Name this Pi", peer.nickname || peer.sessionName)?.trim();
     if (!nickname) return;
     const updated = { ...peer, nickname };
-    await getPwaDatabase().peers.put(updated);
+    await getPwaDatabase().pairings.put(updated);
     setPeers(await listPwaPeers());
   }, []);
 
@@ -527,13 +539,13 @@ export function PwaApp() {
         <aside className="pwa-sidebar">
           <div className="pwa-sidebar-head"><div><span className="pwa-kicker">Workspace</span><h1>Paired Pis</h1></div><button className="pwa-round-button" type="button" onClick={() => setPairState("scanning")} aria-label="Pair a Pi" title="Pair a Pi"><Plus size={18} /></button></div>
           <div className="pwa-peer-list">
-            {peers.length === 0 ? <div className="pwa-empty"><Radio size={22} /><strong>No Pi paired yet</strong><span>Open <code>/remote-pi pair</code> in Pi and scan its QR.</span><button className="pwa-primary-button" type="button" onClick={() => setPairState("scanning")}><Link2 size={16} /> Pair a Pi</button></div> : peers.map((peer) => <PeerCard key={peer.remoteEpk} peer={peer} active={peer.remoteEpk === activePeerId} online={peer.remoteEpk === activePeerId && connection === "online"} onSelect={() => selectPeer(peer.remoteEpk)} onRename={() => void renamePeer(peer)} onRemove={() => void removePeer(peer.remoteEpk)} />)}
+            {peers.length === 0 ? <div className="pwa-empty"><Radio size={22} /><strong>No Pi paired yet</strong><span>Open <code>/remote-pi pair</code> in Pi and scan its QR.</span><button className="pwa-primary-button" type="button" onClick={() => setPairState("scanning")}><Link2 size={16} /> Pair a Pi</button></div> : peers.map((peer) => <PeerCard key={peer.id} peer={peer} active={peer.id === activePeerId} online={peer.id === activePeerId && connection === "online"} onSelect={() => selectPeer(peer.id)} onRename={() => void renamePeer(peer)} onRemove={() => void removePeer(peer.id)} />)}
           </div>
           <div className="pwa-sidebar-foot"><span><span className="pwa-local-dot" /> Local workspace</span><button className="pwa-text-button" type="button" onClick={clearLocalData}>Clear data</button></div>
         </aside>
         <main className="pwa-main">
           {connection === "offline" || connection === "retrying" ? <div className="pwa-offline-banner"><WifiOff size={16} /><span>{connection === "retrying" ? "Reconnecting to Relay..." : "Offline. Local history is read-only."}</span>{connection === "retrying" ? <button className="pwa-text-button" type="button" onClick={() => void connectActivePeer()}><RefreshCw size={14} /> Retry</button> : null}</div> : null}
-          {activePeer ? <><div className="pwa-chat-head"><div><span className="pwa-kicker">Active session</span><h2>{displayPeer(activePeer)}</h2><span className="pwa-chat-meta"><span className={connection === "online" ? "pwa-status-dot online" : "pwa-status-dot"} />{connection === "online" ? "Live" : "Local history"} <span className="pwa-separator">/</span> room <code>{roomId}</code></span></div><div className="pwa-room-control"><label htmlFor="room-id">Room</label><select id="room-id" value={roomId} disabled={connection !== "online"} onChange={(event) => { const next = event.target.value; setRoomId(next); roomIdRef.current = next; channelRef.current?.setRoom(next); void getPwaDatabase().settings.put({ key: `${ACTIVE_ROOM_SETTING}${activePeer.remoteEpk}`, value: next }); channelRef.current?.send({ type: "session_sync", id: id(), limit: 200 }); void listPwaMessages(activePeer.remoteEpk, next).then((storedMessages) => { messagesRef.current = storedMessages; setMessages(storedMessages); }); }}><option value={roomId}>{roomId}</option>{activeRooms.filter((room) => room.roomId !== roomId && room.online).map((room) => <option key={room.roomId} value={room.roomId}>{room.name || room.cwd || room.roomId}</option>)}</select></div></div><MessageList messages={messages} /><form className="pwa-composer" onSubmit={(event) => { event.preventDefault(); sendMessage(); }}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={connection === "online" ? "Send a message to your agent..." : "Reconnect to send a message"} disabled={connection !== "online"} rows={2} /><button className="pwa-primary-button" type="submit" disabled={connection !== "online" || !draft.trim()}>Send <span>↗</span></button></form></> : <EmptyWorkspace onPair={() => setPairState("scanning")} />}
+          {activePeer ? <><div className="pwa-chat-head"><div><span className="pwa-kicker">Active session</span><h2>{displayPeer(activePeer)}</h2><span className="pwa-chat-meta"><span className={connection === "online" ? "pwa-status-dot online" : "pwa-status-dot"} />{connection === "online" ? "Live" : "Local history"} <span className="pwa-separator">/</span> room <code>{roomId}</code></span></div><div className="pwa-room-control"><label htmlFor="room-id">Room</label><select id="room-id" value={roomId} disabled={connection !== "online"} onChange={(event) => { const next = event.target.value; setRoomId(next); roomIdRef.current = next; channelRef.current?.setRoom(next); void getPwaDatabase().settings.put({ key: `${ACTIVE_ROOM_SETTING}${activePeer.id}`, value: next }); channelRef.current?.send({ type: "session_sync", id: id(), limit: 200 }); void listPwaMessages(activePeer.remoteEpk, next).then((storedMessages) => { messagesRef.current = storedMessages; setMessages(storedMessages); }); }}><option value={roomId}>{roomId}</option>{activeRooms.filter((room) => room.roomId !== roomId && room.online).map((room) => <option key={room.roomId} value={room.roomId}>{room.name || room.cwd || room.roomId}</option>)}</select></div></div><MessageList messages={messages} /><form className="pwa-composer" onSubmit={(event) => { event.preventDefault(); sendMessage(); }}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={connection === "online" ? "Send a message to your agent..." : "Reconnect to send a message"} disabled={connection !== "online"} rows={2} /><button className="pwa-primary-button" type="submit" disabled={connection !== "online" || !draft.trim()}>Send <span>↗</span></button></form></> : <EmptyWorkspace onPair={() => setPairState("scanning")} />}
         </main>
         {settingsOpen ? <SettingsPanel relayUrl={relayUrl} onSave={saveRelayUrl} onClose={() => setSettingsOpen(false)} /> : null}
       </div>
