@@ -1,0 +1,246 @@
+import { signChallenge, publicKeyToRelayId } from "./crypto";
+import { decodeRelayFrame, decodeChallenge, encodeControlFrame, encodeOuterEnvelope, parseJson } from "./protocol";
+import { decodeUtf8, toWebSocketUrl } from "./encoding";
+import { normalizePeerId } from "./encoding";
+import type {
+  ClientMessage,
+  ControlFrame,
+  ControlOutbound,
+  OwnerKeyPair,
+  PeerEnvelope,
+  RelayClientState,
+  RelayFrame,
+} from "./types";
+
+export interface WebSocketLike {
+  readonly readyState: number;
+  onopen: ((event: Event) => void) | null;
+  onmessage: ((event: MessageEvent<unknown>) => void) | null;
+  onerror: ((event: Event) => void) | null;
+  onclose: ((event: CloseEvent) => void) | null;
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+}
+
+export type WebSocketFactory = (url: string) => WebSocketLike;
+
+export interface RelayClientOptions {
+  relayUrl: string;
+  identity: OwnerKeyPair;
+  roomId?: string;
+  webSocketFactory?: WebSocketFactory;
+}
+
+export interface RelayClientEventMap {
+  state: (state: RelayClientState) => void;
+  authenticated: () => void;
+  envelope: (envelope: PeerEnvelope) => void;
+  control: (frame: ControlFrame) => void;
+  error: (error: Error) => void;
+  close: (event: CloseEvent) => void;
+}
+
+type EventName = keyof RelayClientEventMap;
+
+type EventCallback<K extends EventName> = RelayClientEventMap[K];
+
+const OPEN = 1;
+
+/** Browser-native Relay connection and hello/challenge/auth adapter. */
+export class RelayClient {
+  private socket: WebSocketLike | null = null;
+  private authenticated = false;
+  private connectPromise: Promise<void> | null = null;
+  private currentState: RelayClientState = "idle";
+  private currentRoomId: string;
+  private subscribedPeers: string[] = [];
+  private readonly listeners: { [K in EventName]: Set<EventCallback<K>> } = {
+    state: new Set(),
+    authenticated: new Set(),
+    envelope: new Set(),
+    control: new Set(),
+    error: new Set(),
+    close: new Set(),
+  } as { [K in EventName]: Set<EventCallback<K>> };
+
+  constructor(private readonly options: RelayClientOptions) {
+    this.currentRoomId = options.roomId ?? "main";
+  }
+
+  get state(): RelayClientState {
+    return this.currentState;
+  }
+
+  get roomId(): string {
+    return this.currentRoomId;
+  }
+
+  get peerId(): string {
+    return publicKeyToRelayId(this.options.identity.publicKey);
+  }
+
+  setRoom(roomId: string): void {
+    if (!roomId) throw new Error("Room id cannot be empty");
+    this.currentRoomId = roomId;
+  }
+
+  on<K extends EventName>(event: K, callback: EventCallback<K>): () => void {
+    this.listeners[event].add(callback);
+    return () => this.listeners[event].delete(callback);
+  }
+
+  async connect(): Promise<void> {
+    if (this.currentState === "open") return;
+    if (this.connectPromise) return this.connectPromise;
+    this.setState("connecting");
+    this.connectPromise = new Promise<void>((resolve, reject) => {
+      const factory = this.options.webSocketFactory ?? ((url: string) => new WebSocket(url));
+      let socket: WebSocketLike;
+      try {
+        socket = factory(toWebSocketUrl(this.options.relayUrl));
+      } catch (error) {
+        this.connectPromise = null;
+        this.setState("closed");
+        reject(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
+      this.socket = socket;
+      this.authenticated = false;
+      socket.onopen = () => {
+        this.setState("authenticating");
+        try {
+          socket.send(JSON.stringify({ type: "hello", pubkey: this.peerId, room_id: "main" }));
+        } catch (error) {
+          this.failConnection(error, reject);
+        }
+      };
+      socket.onmessage = (event) => {
+        void this.handleMessage(event.data, resolve, reject);
+      };
+      socket.onerror = () => {
+        const error = new Error("Relay WebSocket error");
+        this.emit("error", error);
+        if (!this.authenticated) this.failConnection(error, reject);
+      };
+      socket.onclose = (event) => {
+        const wasAuthenticated = this.authenticated;
+        this.authenticated = false;
+        this.socket = null;
+        this.setState("closed");
+        this.emit("close", event);
+        if (!wasAuthenticated) reject(new Error("Relay closed during authentication"));
+        this.connectPromise = null;
+      };
+    });
+    try {
+      await this.connectPromise;
+    } finally {
+      this.connectPromise = null;
+    }
+  }
+
+  sendMessage(peer: string, message: ClientMessage, room = this.currentRoomId): boolean {
+    return this.sendEnvelope(encodeOuterEnvelope(peer, message, room));
+  }
+
+  sendEnvelope(envelope: PeerEnvelope): boolean {
+    if (!this.socket || this.socket.readyState !== OPEN || !this.authenticated) return false;
+    try {
+      this.socket.send(JSON.stringify(envelope));
+      return true;
+    } catch (error) {
+      this.emit("error", error instanceof Error ? error : new Error(String(error)));
+      return false;
+    }
+  }
+
+  subscribeRooms(peers: string[]): boolean {
+    this.subscribedPeers = peers.map((peer) => normalizePeerId(peer));
+    return this.sendControl({ type: "subscribe_rooms", peers: this.subscribedPeers });
+  }
+
+  checkRooms(): boolean {
+    return this.sendControl({ type: "rooms_check", peers: this.subscribedPeers });
+  }
+
+  sendControl(frame: ControlOutbound): boolean {
+    if (!this.socket || this.socket.readyState !== OPEN || !this.authenticated) return false;
+    try {
+      this.socket.send(encodeControlFrame(frame));
+      return true;
+    } catch (error) {
+      this.emit("error", error instanceof Error ? error : new Error(String(error)));
+      return false;
+    }
+  }
+
+  close(code = 1000, reason = "client closing"): void {
+    this.setState("closing");
+    this.authenticated = false;
+    this.socket?.close(code, reason);
+    if (!this.socket) this.setState("closed");
+  }
+
+  private async handleMessage(
+    raw: unknown,
+    resolve: () => void,
+    reject: (reason?: unknown) => void,
+  ): Promise<void> {
+    const text = await toText(raw);
+    if (text === undefined) return;
+    if (!this.authenticated) {
+      const challenge = decodeChallenge(text);
+      if (!challenge) {
+        const error = new Error("Expected Relay challenge");
+        this.failConnection(error, reject);
+        return;
+      }
+      try {
+        const signature = await signChallenge(this.options.identity.privateKey, challenge.nonce);
+        this.socket?.send(JSON.stringify({ type: "auth", sig: signature }));
+        this.authenticated = true;
+        this.setState("open");
+        this.emit("authenticated");
+        resolve();
+      } catch (error) {
+        this.failConnection(error, reject);
+      }
+      return;
+    }
+
+    const frame: RelayFrame | undefined = decodeRelayFrame(parseJson(text));
+    if (!frame) return;
+    if (frame.kind === "envelope") this.emit("envelope", frame.envelope);
+    else this.emit("control", frame.frame);
+  }
+
+  private failConnection(error: unknown, reject: (reason?: unknown) => void): void {
+    const normalized = error instanceof Error ? error : new Error(String(error));
+    this.emit("error", normalized);
+    reject(normalized);
+    this.socket?.close(1002, normalized.message.slice(0, 120));
+    this.socket = null;
+    this.connectPromise = null;
+    this.setState("closed");
+  }
+
+  private setState(state: RelayClientState): void {
+    if (this.currentState === state) return;
+    this.currentState = state;
+    this.emit("state", state);
+  }
+
+  private emit<K extends EventName>(event: K, ...args: Parameters<RelayClientEventMap[K]>): void {
+    for (const callback of this.listeners[event]) {
+      (callback as (...values: Parameters<RelayClientEventMap[K]>) => void)(...args);
+    }
+  }
+}
+
+async function toText(raw: unknown): Promise<string | undefined> {
+  if (typeof raw === "string") return raw;
+  if (raw instanceof ArrayBuffer) return decodeUtf8(new Uint8Array(raw));
+  if (raw instanceof Uint8Array) return decodeUtf8(raw);
+  if (typeof Blob !== "undefined" && raw instanceof Blob) return decodeUtf8(new Uint8Array(await raw.arrayBuffer()));
+  return undefined;
+}
