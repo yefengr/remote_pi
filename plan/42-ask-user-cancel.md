@@ -314,7 +314,7 @@ test/ui/chat/chat_viewmodel_test.dart` após instalar Android SDK em
 
 ## Próximo plano possível
 
-- **43 — `ask_user` completo no app**: espelhar o contrato RPC/Cockpit
+- **43 — `ask_user` completo no app**: espelhar o contrato RPC
   `extension_ui_request` + `extension_ui_response`, cards inline no chat,
   first-response-wins para múltiplos phones, e replay/resolução em `session_sync`.
 - **44 — Steering/follow-up no app**: usar `sendUserMessage(...,{deliverAs})`,

@@ -9,7 +9,7 @@ resolveu só o **cancelamento** (Stop remoto via `abort`). Este plano traz a
 **renderização interativa completa** no app (responder de verdade pelo celular).
 
 Direção do maintainer (plano 42, "próximo plano possível"): *espelhar o contrato
-RPC/Cockpit `extension_ui_request` + `extension_ui_response`*.
+RPC `extension_ui_request` + `extension_ui_response`*.
 
 ### Achados da pesquisa
 
@@ -20,8 +20,8 @@ RPC/Cockpit `extension_ui_request` + `extension_ui_response`*.
    interativos: `select` / `confirm` / `input` / `editor` (+ `notify`
    fire-and-forget; `setStatus`/`setWidget`/`setTitle`/`set_editor_text` são
    chrome do TUI).
-2. O Cockpit (`cockpit/.../rpc_event_mapper.dart`) já mapeia esse contrato — mas
-   em **RPC mode**. O **pi-extension roda o Pi em modo TUI**, onde o SDK **não**
+2. O cliente RPC já mapeia esse contrato — mas em **RPC mode**. O
+   **pi-extension roda o Pi em modo TUI**, onde o SDK **não**
    emite `extension_ui_request`. Logo o pi-extension não tem frames pra
    forwardar diretamente.
 3. O pi-ask publica um contrato de eventos **same-process** (`pi.events`:
@@ -49,8 +49,8 @@ ou notes. "Espelhar o contrato" e "suportar as adições do pi-ask" conflitam.
 - Reversível: dropar o envelope degrada limpo pra `select` simples (revert de
   1 campo) caso o maintainer queira mirror estrito.
 
-Assim o canal é o **mesmo** contrato do Cockpit (UI interativa unificada — vale
-pra pi-ask hoje e prompts genéricos no futuro), as adições do pi-ask viajam sem
+Assim o canal usa um contrato UI interativo compartilhado (vale pra pi-ask hoje
+ e prompts genéricos no futuro), as adições do pi-ask viajam sem
 divergir do contrato base, e sem pi-ask nada quebra.
 
 Casing: **snake_case** no wire (consistente com o resto do protocolo relay:

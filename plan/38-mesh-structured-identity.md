@@ -194,7 +194,7 @@ Consequências:
    - **Persistência sem drift** (decisão E): `_cmdJoin` (`index.ts:2760`) **não**
      grava o `assigned` (com `#N`) em `agent_name`; só nome explícito persiste.
      O evento `name-assigned` (`index.ts:2752`, runtime) continua informando o
-     Cockpit do nome efetivo.
+     consumidor da sessão sobre o nome efetivo.
    - **Migração no load**: `agent_name` com `#N` (só vem de assignment — o usuário
      nunca grava `#`, que `sanitizeSegment` troca por `-`) tem o sufixo removido e
      re-deriva; idem o legado `parent/folder` (contém `/`).
@@ -374,5 +374,3 @@ Da versão anterior deste plano (identidade estruturada de 4 eixos):
   por pasta; sem multiagente-no-app). Reabrir só se o padrão mudar.
 - ~~**Roster da malha no app**~~ — **declinado** (redundante; agentes já se falam
   headless). Vira observabilidade futura, se houver demanda de monitorar a frota.
-- **Reachability do cockpit (plano 37)**: agentes spawnados pela extensão entram
-  na malha já com `(cwd, nome)` de graça.

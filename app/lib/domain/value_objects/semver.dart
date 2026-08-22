@@ -2,8 +2,8 @@
 ///
 /// Ignora sufixos de pré-release/build (`-beta`, `+1`): considera só os três
 /// primeiros componentes numéricos. Componentes ausentes contam como 0
-/// (`1.2` == `1.2.0`); não-numéricos contam como 0. Espelha a versão do
-/// Cockpit (plano 43) — o app baixa o `latest.json` com o mesmo schema.
+/// (`1.2` == `1.2.0`); não-numéricos contam como 0. A versão é usada para
+/// comparar a versão instalada com a do `latest.json` do App.
 library;
 
 List<int> _parse(String v) {

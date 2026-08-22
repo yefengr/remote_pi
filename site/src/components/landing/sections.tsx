@@ -8,7 +8,6 @@ import {
   IconAndroid,
   IconPlay,
   IconApple,
-  IconDownload,
   IconMic,
   IconImage,
   IconOpenSource,
@@ -147,13 +146,6 @@ const STORES: Store[] = [
     sub: "Signed · with sha256",
     href: "/download",
   },
-  {
-    glyph: <IconDownload />,
-    top: "Desktop app",
-    name: "Cockpit",
-    sub: "macOS · Windows · Linux",
-    href: "/cockpit",
-  },
 ];
 
 export function GetApp() {
@@ -165,8 +157,7 @@ export function GetApp() {
           <h2>Pair your phone, drive your agents.</h2>
           <p>
             The authenticator and the remote control. Get it on the App Store or
-            Google Play, grab the Android APK direct, or download the desktop
-            Cockpit.
+            Google Play, or grab the Android APK direct.
           </p>
         </div>
         <div className="app-grid">

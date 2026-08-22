@@ -5,9 +5,9 @@ import 'package:app/domain/value_objects/semver.dart';
 import 'package:app/ui/core/viewmodel/viewmodel.dart';
 import 'package:app/ui/update/states/update_banner_state.dart';
 
-/// Aviso de atualização in-app, **Android-only** (plano 44, passo 3 — espelho
-/// do passo 7 do plano 43 do Cockpit). No [check] (disparado no mount da Home,
-/// = startup) consulta o manifest; se houver versão **maior** que a atual e que
+/// Aviso de atualização in-app, **Android-only**, baseado no schema do
+/// `latest.json`. No [check] (disparado no mount da Home, = startup) consulta
+/// o manifest; se houver versão **maior** que a atual e que
 /// **não foi dispensada**, emite [UpdateBannerVisible]. Tudo best-effort:
 /// falhas são silenciosas.
 ///

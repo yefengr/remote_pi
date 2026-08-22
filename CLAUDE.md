@@ -11,7 +11,7 @@ Você está na **raiz** do monorepo Remote Pi. Esta pasta é exclusivamente para
 
 ## O que NÃO fazer aqui
 
-- Não editar código em `app/`, `pi-extension/`, `relay/`, `site/`, `cockpit/`
+- Não editar código em `app/`, `pi-extension/`, `relay/`, `site/`
 - Não rodar comandos de build/test dos subprojetos a partir daqui
 - Para implementar algo, despache via `cmux send` pro pane do subprojeto
   alvo (ver seção [Panes deste workspace cmux](#panes-deste-workspace-cmux)
@@ -52,7 +52,6 @@ formato fixo:
 - `scout-pi-extension` — Node/TS (`pi-extension/`)
 - `scout-relay` — Rust (`relay/`)
 - `scout-site` — NextJS (`site/`)
-- `scout-cockpit` — Flutter Desktop (`cockpit/`)
 
 Dispare múltiplos numa única mensagem para rodar em paralelo. Cada reporte
 volta com Stack & versões, Dependências, Estrutura, Saúde (lint/build/testes)
@@ -60,7 +59,7 @@ e Smells detectados.
 
 ## Panes deste workspace cmux
 
-Este workspace ("Remote PI") tem 5 panes dedicados — um por subprojeto — e este
+Este workspace ("Remote PI") tem 4 panes dedicados — um por subprojeto — e este
 Orquestrador. Cada pane já tem um `claude` rodando em sessão própria. **Use os
 panes existentes em vez de pedir pro usuário abrir terminal novo.**
 
@@ -70,62 +69,10 @@ panes existentes em vez de pedir pro usuário abrir terminal novo.**
 | `Relay` | `relay/` |
 | `Extension` | `pi-extension/` |
 | `Site` | `site/` |
-| `Cockpit` | `cockpit/` |
 | `Orquestrador` (você) | raiz do monorepo |
-
-> **Cockpit é o pane mais novo** e por enquanto é **iniciado manualmente** pelo
-> usuário — ele **ainda não está** no `cmux-bootstrap-agents.sh` (que cria os 4
-> originais: App/Relay/Extension/Site). Ao orquestrar, despache pra `Cockpit`
-> normalmente quando o pane existir; se faltar, peça pro usuário iniciá-lo (não
-> assuma que o bootstrap script o cria).
 
 > **Nunca hardcode surface IDs nesta documentação.** Eles mudam a cada
 > bootstrap dos panes. Sempre resolva por título via `cmux tree`.
-
-### ⚠️ Migração cmux → Cockpit (em andamento)
-
-A comunicação/orquestração está **migrando do cmux pro Cockpit** (o 5º
-subprojeto, que agora tem CLI interna própria — ver memória
-`project_cockpit_internal_cli`). O caminho novo é preferido; o cmux abaixo
-fica como fallback enquanto a migração não fecha.
-
-**Dispatch pelo Cockpit** — mesmo protocolo (`[ORCH:<id>]`, result file,
-`--wait`), só troca o transporte:
-
-```bash
-# label manual do pane (match exato) OU tab-id direto
-scripts/cockpit-dispatch.sh Extension 03-ts-codec "Implemente passo 3 do plan/03-protocol.md"
-scripts/cockpit-dispatch.sh --wait Extension 25-wave-x "..."   # rode em background
-scripts/cockpit-dispatch.sh t319 quick-check "roda os testes"  # tab-id literal
-```
-
-Diferenças-chave vs cmux:
-- **Resolução de pane por LABEL manual**: dê um nome estável ao pane —
-  **duplo-clique na tab** do terminal (ou botão-direito → "Rename"). Esse label
-  é app-managed e **imune à sobrescrita do OSC-title do claude** (o `✳ <resumo>`
-  segue mexendo só no `title` dinâmico oculto). O wrapper resolve nome→pane pelo
-  campo `label` do `cockpit list-panes --json` (match exato, case-insensitive).
-  Labels devem ser **únicos**; colisão = erro (nunca chuta pane — foi o que já
-  causou um dispatch pro pane errado). "Reset to automatic" no menu destrava.
-- **NÃO se resolve por**: `title` (dinâmico, o claude reescreve), `workspaceId`
-  (é a raiz do workspace, igual pra todos num monorepo) nem cwd (volátil, o
-  usuário faz `cd`). Só o `label`. Se o pane não tem label, passe o tab-id.
-- **Tab-ids mudam a cada boot do app** — nunca hardcode; sempre `list-panes`.
-  (Labels, ao contrário, **persistem entre boots** — ancorados no id de sessão
-  do layout, não no tab-id.)
-- **`--wait` tem sinal extra**: além do result-file poll (contrato do
-  `INSTRUCTIONS.md`), observa o campo nativo `working: true→false` do
-  `list-panes --json` como reforço (cobre agente que esqueceu o result file).
-- **Conversa solo**: `cockpit send --tab-id <id> "<texto>"` +
-  `cockpit send-key --tab-id <id> Enter` (Enter separado, mesma razão do cmux).
-
-Skill de referência: [`cockpit-cli`](file:///Users/jacob/.claude/skills/cockpit-cli/SKILL.md).
-
-**Push de conclusão (implementado 2026-07-19)**: quando o dispatch roda de
-dentro de um pane do Cockpit, o script embute `[ORCH-REPLY:$COCKPIT_PANE_ID]`
-no prompt e o worker (per `INSTRUCTIONS.md`) manda a conclusão direto pro
-pane do orquestrador via `cockpit send --tab-id <orch>` + Enter — o `--wait`
-com polling continua como fallback pra worker que esquecer o push.
 
 ### Descobrir o surface ID por título
 

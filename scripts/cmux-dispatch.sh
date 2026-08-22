@@ -22,7 +22,7 @@ set -euo pipefail
 #                       result file está nos CLAUDE.md de cada subprojeto.
 #   --timeout <s>       (opcional, default 1800) timeout em segundos pro --wait
 #   --poll-interval <s> (opcional, default 2) intervalo entre checagens
-#   <Pane>              App | Relay | Extension | Site | Cockpit
+#   <Pane>              App | Relay | Extension | Site
 #   <task-id>           ID curto (kebab/snake: a-z 0-9 . _ -)
 #   <prompt>            texto do prompt (use aspas se tem espaços)
 #
@@ -71,7 +71,7 @@ task_id="$2"
 shift 2
 prompt="$*"
 
-valid_panes=(App Relay Extension Site Cockpit)
+valid_panes=(App Relay Extension Site)
 case " ${valid_panes[*]} " in
   *" $pane "*) ;;
   *)

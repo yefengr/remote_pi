@@ -69,9 +69,6 @@ export function SiteHeader() {
 
         {/* Desktop links */}
         <nav className="nav-links" aria-label="Primary">
-          <Link className="lnk" href="/cockpit">
-            Cockpit
-          </Link>
           <Link className="lnk" href="/tutorials">
             Tutorials
           </Link>
@@ -115,13 +112,6 @@ export function SiteHeader() {
           aria-hidden={false}
         >
           <div className="wrap mobile-nav-inner">
-            <Link
-              className="m-lnk"
-              href="/cockpit"
-              onClick={() => setMenuOpen(false)}
-            >
-              Cockpit
-            </Link>
             <Link
               className="m-lnk"
               href="/tutorials"

@@ -1,6 +1,6 @@
 /// Manifest de release (`latest.json` na VPS) — contrato com o CI/Site.
 ///
-/// Schema (mesmo do Cockpit, plano 43/44, com 1 artefato Android):
+/// Schema do App (com 1 artefato Android):
 /// ```json
 /// {
 ///   "version": "1.1.0",

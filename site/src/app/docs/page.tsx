@@ -823,8 +823,7 @@ export default function DocsPage() {
           <InlineCode>.pi/remote-pi/</InlineCode> of its own. You can set the
           same variable yourself to override{" "}
           <InlineCode>&lt;cwd&gt;/.pi/remote-pi/config.json</InlineCode> for a
-          single run — an escape hatch for CI, ops, and the Cockpit desktop
-          client:
+          single run — an escape hatch for CI and ops:
         </p>
         <CodeBlock
           code={`REMOTE_PI_DIRECT_CONFIG='{"agent_name":"ci","auto_start_relay":true}' pi`}
@@ -928,12 +927,6 @@ export default function DocsPage() {
             Tutorials:{" "}
             <Link href="/tutorials" className="text-accent underline">
               hands-on guides
-            </Link>
-          </li>
-          <li>
-            Cockpit reference:{" "}
-            <Link href="/cockpit/docs" className="text-accent underline">
-              CLI, layouts, tasks, themes
             </Link>
           </li>
           <li>

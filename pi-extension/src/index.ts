@@ -141,7 +141,7 @@ export type RemoteState = "idle" | "started";
 let _state: RemoteState = "idle";
 let _relay: RelayClient | null = null;
 
-/** Relay connectivity as seen by an RPC client (Cockpit). Derived from
+/** Relay connectivity as seen by an RPC client. Derived from
  *  `_state` + `_relay`: "disconnected" = relay off (idle); "connected" = live
  *  WS; "reconnecting" = was on, WS dropped, retrying. Surfaced via the
  *  `remote-pi:relay-state` custom message (see `_emitRelayState`). */
@@ -625,7 +625,7 @@ function _isReceivedImageContextMessage(message: unknown): boolean {
  * agent burned tokens on internal telemetry and sometimes reasoned about it as
  * if it were user input.
  *
- * The filter is non-destructive: the entries stay in the session (Cockpit and
+ * The filter is non-destructive: the entries stay in the session (RPC clients and
  * any other RPC client still read them off the stream), the LLM just never sees
  * them. Keyed on `display === false` rather than a customType allowlist, so any
  * pure-data event we add later is covered by construction. Events meant for the
@@ -1582,7 +1582,7 @@ async function _attemptReconnect(
   _emitRelayState();
 }
 
-// ── Relay state event + transparent control channel (Cockpit toggle) ─────────
+// ── Relay state event + transparent control channel ───────────────────────────
 
 /** Current relay connectivity, derived from `_state` + `_relay`. */
 function _relayStatus(): RelayConnectivity {
@@ -1591,7 +1591,7 @@ function _relayStatus(): RelayConnectivity {
 }
 
 /**
- * Emit the `remote-pi:relay-state` custom message so an RPC client (Cockpit)
+ * Emit the `remote-pi:relay-state` custom message so an RPC client
  * can render a relay on/off indicator. Pure data (`display:false`) — never
  * shown in the transcript. De-duped on the connectivity value; pass
  * `force=true` to answer an explicit `relay:status` query regardless.
@@ -1635,7 +1635,7 @@ function _controlCtx(): Pick<ExtensionContext, "ui" | "cwd"> {
 
 /**
  * `ui.notify` for headless contexts (daemon auto-init + control channel). There
- * is no TUI, and the RPC client (Cockpit) already gets everything it needs via
+ * is no TUI, and the RPC client already gets everything it needs via
  * structured events (`remote-pi:relay-state`, `remote-pi:name-assigned`,
  * room_meta) — so routine INFO chatter would just pollute the client's captured
  * stderr. We drop info and forward only warnings/errors (kept for the
@@ -1651,7 +1651,7 @@ function _headlessUi(): { notify: (msg: string, type?: "info" | "warning" | "err
 }
 
 /**
- * Handle a transparent control command from an RPC client (Cockpit), received
+ * Handle a transparent control command from an RPC client, received
  * as a `CTRL_PREFIX`-tagged input the `input` hook swallowed. Toggles the relay
  * WITHOUT leaving the local mesh (relay-only: `_cmdStart` up / `_goIdle` down),
  * then emits the fresh state. `relay:status` just re-emits (no change) so the
@@ -1703,7 +1703,7 @@ export async function _handleControl(cmd: string): Promise<void> {
  *      name = a new room. We cycle the relay (`_goIdle` → `_cmdStart`) so the
  *      room follows; the app re-keys the conversation onto the new tile (the
  *      inherent cost of room-per-name). Skipped when the relay was off.
- * Finally re-emits `remote-pi:name-assigned` so the Cockpit updates its label.
+ * Finally re-emits `remote-pi:name-assigned` so the client updates its label.
  *
  * The explicit name IS persisted (decision E only skips the runtime `#N`).
  */
@@ -2014,7 +2014,7 @@ async function _handlePairRequest(
     hostname: _HOSTNAME,
   });
 
-  // Notify local RPC clients (e.g. Cockpit) that pairing completed, so they can
+  // Notify local RPC clients that pairing completed, so they can
   // close the QR screen and show the new device. Pure data event (display:false)
   // — still emitted to the RPC stdout via the session stream.
   _pi?.sendMessage({
@@ -2122,7 +2122,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // avoid a double turnId.
   pi.on("input", (event) => {
     // Transparent control channel: a `CTRL_PREFIX`-tagged input from an RPC
-    // client (Cockpit button) toggles the relay. Run it and SWALLOW the input
+    // client button toggles the relay. Run it and SWALLOW the input
     // (`action:"handled"`) so it never reaches the LLM or the transcript.
     // Checked first, before the peer-broadcast path, and regardless of source.
     if (event.text.startsWith(CTRL_PREFIX)) {
@@ -2410,7 +2410,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
 
   // Tear down THIS instance's live handles when the SDK replaces the session
   // (switch_session / new / fork / reload / quit). This is the fix for the
-  // "double mesh connection" the Cockpit hits when it restores a saved
+  // "double mesh connection" a client can hit when it restores a saved
   // conversation via switch_session on boot.
   //
   // Why it happens: the Pi SDK loads extensions through jiti with
@@ -2418,7 +2418,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // FRESH — a brand-new instance whose `_meshNode`, `_relay`, and `_cwdLock`
   // start back at null. The OUTGOING instance's broker socket, relay WS, and
   // cwd-lock UDS keep running regardless (module state is gone, but the OS
-  // handles aren't). In daemon mode (REMOTE_PI_DAEMON=1, set by the Cockpit) the
+  // handles aren't). In daemon mode (REMOTE_PI_DAEMON=1) the
   // fresh instance re-runs `_cmdRoot` on load, so without releasing the old
   // handles first we end up with TWO mesh peers under the same name on the
   // broker + two rooms on the relay. The per-cwd lock is meant to stop the
@@ -3153,7 +3153,7 @@ async function _cmdPair(ctx: Pick<ExtensionContext, "ui" | "cwd">, args = ""): P
   // raw path snippet).
   const sessionName = _displayName(cwd);
 
-  // Optional `--ttl <seconds>` — RPC clients (e.g. Cockpit) pass a caller-
+  // Optional `--ttl <seconds>` — RPC clients pass a caller-
   // defined expiry. Defaults to TOKEN_TTL_MS, clamped to the safe window.
   const ttlMatch = /--ttl\s+(\d+)/.exec(args);
   const ttlMs = ttlMatch ? clampPairTtlMs(Number(ttlMatch[1]) * 1000) : TOKEN_TTL_MS;
@@ -3175,7 +3175,7 @@ async function _cmdPair(ctx: Pick<ExtensionContext, "ui" | "cwd">, args = ""): P
       content:
         `📱 Scan to pair:\n\n${qrAscii}\n` +
         `📋 Or copy this pairing code (camera-less devices):\n\n${qrUri}`,
-      // Structured payload for RPC clients (e.g. Cockpit): render their own QR
+      // Structured payload for RPC clients: render their own QR
       // from `uri` + show the expiry, without scraping the display string.
       details: { uri: qrUri, token, expiresAt, roomId, name: sessionName },
       display: true,
@@ -3403,7 +3403,7 @@ function _cmdConfig(ctx: Pick<ExtensionContext, "ui">): void {
  * exactly the case where our own docs warn the operator sees routed plaintext.
  *
  * Verbs map onto the same primitives the RPC control channel already uses
- * (`_handleControl`), so the slash command and the Cockpit button can't drift:
+ * (`_handleControl`), so the slash command and the client control can't drift:
  * relay-only up (`_cmdStart`) / relay-only down (`_goIdle`), never touching
  * local-mesh membership — that stays `/remote-pi stop`'s job.
  */
@@ -3926,7 +3926,7 @@ async function _cronLog(rest: string, ctx: Pick<ExtensionContext, "ui">): Promis
  * `remote-pi` at the Pi-extension copy and diverge on upgrades.
  */
 /** Returns true on success, false when install failed (so the standalone CLI
- *  can exit non-zero — e.g. the Cockpit / CI detect failure by exit code).
+ *  can exit non-zero so callers and CI detect failure by exit code).
  *  We do NOT process.exit here: this also runs inside the Pi TUI, where exiting
  *  would kill the session. */
 function _cmdInstall(ctx: Pick<ExtensionContext, "ui">, opts: { linkCli?: boolean } = {}): boolean {
@@ -4295,7 +4295,7 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
     // arrives — the newcomer doesn't get retroactive joined events. Ask the
     // broker for the live peer list to seed the count correctly on join.
     _refreshSessionPeerCount(peer, ctx);
-    // Tell RPC clients (e.g. Cockpit) the EFFECTIVE mesh name. The broker
+    // Tell RPC clients the EFFECTIVE mesh name. The broker
     // appends a `#N` suffix only on a same-(cwd,name) collision, so the name we
     // requested and the one actually assigned can differ. Emit a pure-data event
     // (display:false) carrying both + a `changed` flag so the client can rename
@@ -5005,11 +5005,11 @@ export function _mapAgentMessagesToEvents(
  * `remote-pi restart-supervisor` — restarts the `pi-supervisord` PROCESS
  * (not the daemons). The supervisor is a long-running Node process with no
  * hot-reload, so after a `dist` rebuild the old code keeps running until the
- * process is restarted. The Cockpit "Restart supervisor" button shells out to
+ * process is restarted. The CLI command shells out to
  * this; the OS-specific restart lives here so the app stays cross-platform.
  *
  * Restarting the supervisor re-spawns every daemon as a side effect. Exits 0
- * on success, non-zero on failure (the Cockpit detects failure by exit code).
+ * on success, non-zero on failure (callers detect failure by exit code).
  */
 /** One step of a restart sequence. `ignoreFailure` steps (e.g. `schtasks /End`
  *  when the task isn't running) don't abort the sequence. */
@@ -5226,7 +5226,7 @@ if (_isDirectRun()) {
     // global prefix. Explicit `linkCli: false` so we never stomp those
     // with symlinks pointing at a parallel Pi-extension install.
     const stubCtx = { ui: { notify: (msg: string) => console.log(msg) } as unknown as ExtensionContext["ui"] };
-    // Propagate failure as a non-zero exit so callers (Cockpit / CI) detect it
+    // Propagate failure as a non-zero exit so callers and CI detect it
     // — installService throws on a failed schtasks/launchctl/systemctl step.
     if (!_cmdInstall(stubCtx, { linkCli: false })) process.exit(1);
   } else if (subcmd === "uninstall") {

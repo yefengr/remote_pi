@@ -18,7 +18,7 @@ export type QueuedMessageItem = {
 // @eko24ive/pi-ask) natively instead of stranding the mobile user. The wire
 // mirrors the SDK's `pi --mode rpc` extension_ui_request/response contract
 // (RpcExtensionUIRequest/Response in dist/modes/rpc/rpc-types.d.ts) so the
-// mobile app and the Cockpit share one interactive-UI vocabulary. Casing is
+// mobile clients share one interactive-UI vocabulary. Casing is
 // snake_case to match the rest of the relay protocol (mirror is semantic, not
 // literal). pi-ask's richer schema (multi/preview/notes) rides in an optional
 // `ask` envelope; strict clients ignore it. Inert when pi-ask is absent.

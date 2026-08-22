@@ -18,7 +18,7 @@ const ARTIFACT_EXTENSIONS: [&str; 5] = [".dmg", ".exe", ".deb", ".rpm", ".zip"];
 /// Só manifests podem ser publicados via upload — binários ficam nos assets
 /// da GitHub Release, então o endpoint nunca aceita artefato grande.
 fn is_uploadable_manifest(name: &str) -> bool {
-    name == "latest.json" || name == "SHA256SUMS" || name.ends_with(".xml")
+    name == "latest.json" || name == "SHA256SUMS"
 }
 
 struct UploadConfig {
@@ -99,7 +99,7 @@ async fn upload_manifest(
         !s.is_empty() && s != "." && s != ".." && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
     };
     if !safe_segment(&product) || !safe_segment(&file) || !is_uploadable_manifest(&file) {
-        return (StatusCode::FORBIDDEN, "só manifests (latest.json, *.xml, SHA256SUMS)\n");
+        return (StatusCode::FORBIDDEN, "só manifests (latest.json, SHA256SUMS)\n");
     }
     if body.is_empty() {
         return (StatusCode::BAD_REQUEST, "corpo vazio\n");

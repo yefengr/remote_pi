@@ -56,22 +56,8 @@ visualmente sem abrir o arquivo. Exemplo:
 
 ### 3. Notifique o orquestrador
 
-**Caminho preferido — push via Cockpit.** Se o prompt contém um marker
-`[ORCH-REPLY:<tab-id>]`, o orquestrador está num pane do Cockpit esperando
-push. Mande a conclusão direto pro pane dele (Enter em comando separado —
-`\n` no send vira newline no prompt, não submit):
-
-```bash
-cockpit send --tab-id <tab-id> "[ORCH:<task-id>] <status> — <1 linha do resumo>"
-cockpit send-key --tab-id <tab-id> Enter
-```
-
-Faça isso **depois** de gravar o result file (passo 1) — o push é o aviso;
-o arquivo é o relatório. Se o `cockpit send` falhar (pane sumiu, socket
-indisponível), siga em frente: o orquestrador tem o polling do result file
-como fallback.
-
-**Fallback — sem marker de reply (dispatch via cmux).** Notifique via cmux:
+**Notifique via cmux.** O result file é a fonte de verdade; envie uma notificação
+curta para o orquestrador:
 
 ```bash
 cmux notify --title "[ORCH:<task-id>] <status>" \

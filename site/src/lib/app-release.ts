@@ -1,21 +1,19 @@
 /* ===========================================================
    Remote Pi App (Android) — release manifest
-   Mirror of src/lib/cockpit-release.ts for the mobile app (plan/44).
-   Same `latest.json` schema as the cockpit (plan/43, step 4), but the
-   app ships a single artifact: an Android APK (platform "android",
+   The app ships a single artifact: an Android APK (platform "android",
    arch "universal", format "apk"). Distribution is direct APK — no
    Play Store — so the URL points at the GitHub Release asset.
 
    The host (rp-s3) may not have the manifest yet, so the URL is
    configurable (NEXT_PUBLIC_APP_MANIFEST_URL) and the loader falls back
-   to APP_MOCK_MANIFEST — same shape — whenever the fetch fails.
+   to APP_MOCK_MANIFEST whenever the fetch fails.
    =========================================================== */
 
 export type AppPlatform = "android";
 export type AppArch = "universal";
 export type AppFormat = "apk";
 
-/** One downloadable app build. Produced by app-release.yml (plan/44). */
+/** One downloadable Android app build. Produced by app-release.yml (plan/44). */
 export type AppArtifact = {
   platform: AppPlatform;
   arch: AppArch;

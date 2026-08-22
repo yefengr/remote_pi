@@ -35,7 +35,7 @@ trânsito, mas o operador do Relay pode observar o conteúdo atual.
 
 ## Fora de escopo
 
-- Alterações no app Android/iOS, Cockpit ou Site.
+- Alterações no app Android/iOS ou Site.
 - Mudança de pareamento, short IDs, room IDs ou formato de `peers.json`.
 - Migração ou mudança de schema do SQLite do Relay.
 - Floor anti-rollback persistente entre reinícios ou coordenação SelfRevoke

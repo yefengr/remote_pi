@@ -1387,8 +1387,8 @@ class Bye extends ServerMessage {
 // Interactive extension prompts (ask_user today, via @eko24ive/pi-ask) are
 // rendered natively instead of stranding the mobile user. The wire mirrors the
 // SDK's `pi --mode rpc` extension_ui_request / extension_ui_response contract
-// (RpcExtensionUIRequest/Response), so the app and the Cockpit share one
-// interactive-UI vocabulary. pi-ask's richer schema (multi/preview/notes) rides
+// (RpcExtensionUIRequest/Response), so clients share one interactive-UI
+// vocabulary. pi-ask's richer schema (multi/preview/notes) rides
 // in an optional `ask` envelope; strict handling ignores it. Inert when pi-ask
 // is absent (the tool doesn't exist → no frames ever arrive).
 // ---------------------------------------------------------------------------
