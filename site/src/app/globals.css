@@ -1982,7 +1982,7 @@ a {
 .pwa-icon-button { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 10px; }
 .pwa-round-button { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; }
 .pwa-icon-button:hover, .pwa-round-button:hover { color: var(--pwa-ink); border-color: var(--pwa-line-strong); background: rgba(255,255,255,.06); transform: translateY(-1px); }
-.pwa-layout { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(250px, 320px) minmax(0, 1fr); position: relative; }
+.pwa-layout { flex: 1 1 0; min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(250px, 320px) minmax(0, 1fr); position: relative; overflow: hidden; }
 .pwa-sidebar { min-width: 0; border-right: 1px solid var(--pwa-line); background: rgba(7, 10, 11, .6); display: flex; flex-direction: column; min-height: 0; }
 .pwa-sidebar-head { padding: 30px 22px 20px; display: flex; justify-content: space-between; align-items: end; }
 .pwa-sidebar-head h1, .pwa-chat-head h2, .pwa-settings-head h2, .pwa-scanner-head h2, .pwa-pairing-card h2 { margin: 7px 0 0; font: 600 24px/1.1 var(--ff-display); letter-spacing: -.04em; }
@@ -2012,7 +2012,7 @@ a {
 .pwa-sidebar-foot > span { display: inline-flex; align-items: center; gap: 7px; }
 .pwa-text-button { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; color: var(--pwa-accent); background: transparent; font: 11px var(--ff-mono); cursor: pointer; }
 .pwa-text-button:hover { text-decoration: underline; text-underline-offset: 3px; }
-.pwa-main { min-width: 0; max-width: 100%; min-height: 0; display: flex; flex-direction: column; background: rgba(4,6,7,.42); }
+.pwa-main { min-width: 0; width: 100%; max-width: 100%; min-height: 0; height: 100%; display: flex; flex-direction: column; overflow: hidden; background: rgba(4,6,7,.42); }
 .pwa-chat-head { min-width: 0; max-width: 100%; display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; padding: 37px clamp(22px, 5vw, 70px) 25px; border-bottom: 1px solid var(--pwa-line); }
 .pwa-chat-head > div:first-child { min-width: 0; }
 .pwa-chat-head h2 { min-width: 0; overflow-wrap: anywhere; font-size: clamp(25px, 3vw, 38px); }
@@ -2020,9 +2020,9 @@ a {
 .pwa-separator { color: #536268; }
 .pwa-room-control { display: grid; gap: 5px; color: var(--pwa-dim); font: 10px var(--ff-mono); text-transform: uppercase; letter-spacing: .1em; }
 .pwa-room-control select { min-width: 130px; padding: 9px 11px; border: 1px solid var(--pwa-line); border-radius: 8px; color: var(--pwa-ink); background: var(--pwa-panel-strong); font: 12px var(--ff-mono); }
-.pwa-message-list { box-sizing: border-box; flex: 1 1 auto; min-width: 0; min-height: 0; max-width: 100%; width: min(900px, 100%); margin: 0 auto; padding: 30px clamp(22px, 5vw, 70px) 24px; display: grid; align-content: start; gap: 24px; overflow-x: hidden; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable; }
+.pwa-message-list { box-sizing: border-box; flex: 1 1 auto; min-width: 0; min-height: 0; max-width: 100%; width: min(900px, 100%); margin: 0 auto; padding: 30px clamp(22px, 5vw, 70px) 24px; display: grid; align-content: start; gap: 24px; overflow-x: hidden; overflow-y: auto; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y; scrollbar-gutter: stable; }
 .pwa-bottom-sentinel { width: 1px; height: 1px; }
-.pwa-message { width: min(100%, 780px); max-width: 780px; min-width: 0; overflow: hidden; padding-left: 14px; border-left: 2px solid var(--pwa-line); position: relative; }
+.pwa-message { width: min(100%, 780px); max-width: 780px; min-width: 0; overflow: visible; padding-left: 14px; border-left: 2px solid var(--pwa-line); position: relative; }
 .pwa-message > * { min-width: 0; max-width: 100%; }
 .pwa-message.user { justify-self: end; width: min(80%, 680px); border-left: 0; border-right: 2px solid rgba(79,195,247,.35); padding: 12px 15px 12px 20px; background: linear-gradient(90deg, transparent, rgba(79,195,247,.07)); text-align: right; }
 .pwa-message.system { border-left-color: #f5c66a; color: #f5c66a; }
@@ -2137,9 +2137,9 @@ a {
   .pwa-topbar-actions { gap: 6px; }
   .pwa-session-trigger { display: inline-flex; max-width: min(170px, calc(100vw - 140px)); }
   .pwa-connection { width: 12px; font-size: 0; gap: 0; justify-content: center; }
-  .pwa-layout { display: block; }
+  .pwa-layout { display: flex; flex-direction: column; }
   .pwa-sidebar { display: none; }
-  .pwa-main { height: 100%; }
+  .pwa-main { height: auto; }
   .pwa-chat-head { display: none; }
   .pwa-room-control { display: none; }
   .pwa-message-list { width: 100%; padding: 18px 16px 14px; }
