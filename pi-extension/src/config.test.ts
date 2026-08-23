@@ -91,6 +91,6 @@ describe("toHttpUrl (ws(s):// → http(s)://)", () => {
 describe("kDefaultRelayUrl", () => {
   test("is canonical https:// form (no scheme conversion needed at resolve time)", () => {
     expect(kDefaultRelayUrl).toMatch(/^https:\/\//);
-    expect(kDefaultRelayUrl).toBe("https://relay-rp1.jacobmoura.work");
+    expect(kDefaultRelayUrl).toBe("https://relay-pi.yefengr.cn");
   });
 });

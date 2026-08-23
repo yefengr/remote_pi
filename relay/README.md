@@ -44,7 +44,7 @@ Every device authenticates with an Ed25519 keypair during the WebSocket handshak
 A shared relay is available at:
 
 ```
-https://relay-rp1.jacobmoura.work
+https://relay-pi.yefengr.cn
 ```
 
 You can use it to get started without any setup. However, be aware of the security

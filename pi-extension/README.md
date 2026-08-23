@@ -280,7 +280,7 @@ You have two options:
 
 ### Option A — Use the community relay
 
-`https://relay-rp1.jacobmoura.work` (default). Zero setup. Good for trying
+`https://relay-pi.yefengr.cn` (default). Zero setup. Good for trying
 things out or for casual use. (The extension converts to `wss://…`
 internally when opening the connection — both schemes point at the same
 endpoint.)
@@ -331,7 +331,7 @@ order (highest precedence first):
 
 1. `REMOTE_PI_RELAY` environment variable (CI / one-off overrides)
 2. `~/.pi/remote/config.json`
-3. The built-in default (`https://relay-rp1.jacobmoura.work`)
+3. The built-in default (`https://relay-pi.yefengr.cn`)
 
 Verify the active URL and its source with:
 

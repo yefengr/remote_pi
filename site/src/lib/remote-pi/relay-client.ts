@@ -1,6 +1,6 @@
 import { signChallenge, publicKeyToRelayId } from "./crypto";
 import { decodeRelayFrame, decodeChallenge, encodeControlFrame, encodeOuterEnvelope, parseJson } from "./protocol";
-import { decodeUtf8, toWebSocketUrl } from "./encoding";
+import { decodeUtf8, toWebSocketUrl, truncateUtf8 } from "./encoding";
 import { normalizePeerId } from "./encoding";
 import type {
   ClientMessage,
@@ -45,12 +45,14 @@ type EventName = keyof RelayClientEventMap;
 type EventCallback<K extends EventName> = RelayClientEventMap[K];
 
 const OPEN = 1;
+const APPLICATION_ERROR_CLOSE_CODE = 4002;
 
 /** Browser-native Relay connection and hello/challenge/auth adapter. */
 export class RelayClient {
   private socket: WebSocketLike | null = null;
   private authenticated = false;
   private connectPromise: Promise<void> | null = null;
+  private connectReject: ((reason?: unknown) => void) | null = null;
   private currentState: RelayClientState = "idle";
   private currentRoomId: string;
   private subscribedPeers: string[] = [];
@@ -94,12 +96,13 @@ export class RelayClient {
     if (this.connectPromise) return this.connectPromise;
     this.setState("connecting");
     this.connectPromise = new Promise<void>((resolve, reject) => {
+      this.connectReject = reject;
       const factory = this.options.webSocketFactory ?? ((url: string) => new WebSocket(url));
       let socket: WebSocketLike;
       try {
         socket = factory(toWebSocketUrl(this.options.relayUrl));
       } catch (error) {
-        this.connectPromise = null;
+        this.clearConnectionState();
         this.setState("closed");
         reject(error instanceof Error ? error : new Error(String(error)));
         return;
@@ -124,18 +127,18 @@ export class RelayClient {
       };
       socket.onclose = (event) => {
         const wasAuthenticated = this.authenticated;
-        this.authenticated = false;
-        this.socket = null;
+        const pendingReject = this.connectReject;
+        this.clearConnectionState();
         this.setState("closed");
         this.emit("close", event);
-        if (!wasAuthenticated) reject(new Error("Relay closed during authentication"));
-        this.connectPromise = null;
+        if (!wasAuthenticated) pendingReject?.(new Error("Relay closed during authentication"));
       };
     });
     try {
       await this.connectPromise;
     } finally {
       this.connectPromise = null;
+      this.connectReject = null;
     }
   }
 
@@ -175,10 +178,20 @@ export class RelayClient {
   }
 
   close(code = 1000, reason = "client closing"): void {
-    this.setState("closing");
-    this.authenticated = false;
-    this.socket?.close(code, reason);
-    if (!this.socket) this.setState("closed");
+    const socket = this.socket;
+    const reject = this.connectReject;
+    this.clearConnectionState();
+    this.setState(socket ? "closing" : "closed");
+    reject?.(new Error("Relay connection closed by client"));
+    if (!socket) return;
+    try {
+      const closeCode = code === 1002 ? APPLICATION_ERROR_CLOSE_CODE : code;
+      socket.close(closeCode, truncateUtf8(reason, 123));
+    } catch (error) {
+      this.emit("error", error instanceof Error ? error : new Error(String(error)));
+    } finally {
+      this.setState("closed");
+    }
   }
 
   private async handleMessage(
@@ -216,12 +229,24 @@ export class RelayClient {
 
   private failConnection(error: unknown, reject: (reason?: unknown) => void): void {
     const normalized = error instanceof Error ? error : new Error(String(error));
+    const socket = this.socket;
+    this.clearConnectionState();
+    this.setState("closed");
     this.emit("error", normalized);
     reject(normalized);
-    this.socket?.close(1002, normalized.message.slice(0, 120));
+    if (!socket) return;
+    try {
+      socket.close(APPLICATION_ERROR_CLOSE_CODE, truncateUtf8(normalized.message, 123));
+    } catch (closeError) {
+      this.emit("error", closeError instanceof Error ? closeError : new Error(String(closeError)));
+    }
+  }
+
+  private clearConnectionState(): void {
+    this.authenticated = false;
     this.socket = null;
     this.connectPromise = null;
-    this.setState("closed");
+    this.connectReject = null;
   }
 
   private setState(state: RelayClientState): void {

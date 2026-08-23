@@ -44,6 +44,14 @@ export function decodeUtf8(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes);
 }
 
+export function truncateUtf8(value: string, maxBytes: number): string {
+  const bytes = encodeUtf8(value);
+  if (bytes.length <= maxBytes) return value;
+  let end = Math.max(0, maxBytes);
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end -= 1;
+  return decodeUtf8(bytes.slice(0, end));
+}
+
 export function toWebSocketUrl(value: string | URL): string {
   const url = new URL(value.toString());
   if (url.protocol === "http:") url.protocol = "ws:";

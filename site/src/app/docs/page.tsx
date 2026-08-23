@@ -346,7 +346,7 @@ export default function DocsPage() {
 
         <DocsSubsection id="community-relay" title="Option A — Use the community relay">
           <p>
-            <InlineCode>https://relay-rp1.jacobmoura.work</InlineCode> (default).
+            <InlineCode>https://relay-pi.yefengr.cn</InlineCode> (default).
             Zero setup. Good for trying things out or for casual use.
             (Internally the extension uses the WebSocket form{" "}
             <InlineCode>wss://…</InlineCode> — both schemes point at the same
@@ -448,7 +448,7 @@ export default function DocsPage() {
             <li><InlineCode>~/.pi/remote/config.json</InlineCode></li>
             <li>
               The built-in default (
-              <InlineCode>https://relay-rp1.jacobmoura.work</InlineCode>)
+              <InlineCode>https://relay-pi.yefengr.cn</InlineCode>)
             </li>
           </ol>
           <p>Verify the active URL and its source with:</p>

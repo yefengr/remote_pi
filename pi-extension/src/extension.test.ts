@@ -2886,7 +2886,7 @@ describe("/remote-pi set-relay + config", () => {
     await status("", ctx);
 
     const text = (ctx.ui.notify.mock.calls[0]![0]) as string;
-    expect(text).toContain("https://relay-rp1.jacobmoura.work");
+    expect(text).toContain("https://relay-pi.yefengr.cn");
   });
 
   test("/remote-pi status reflects env override (canonicalized to https://)", async () => {

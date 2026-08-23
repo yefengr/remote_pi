@@ -54,7 +54,7 @@ void main() {
       expect(isValidRelayUrl('http://localhost'), isTrue);
       expect(isValidRelayUrl('http://127.0.0.1:8080'), isTrue);
       expect(isValidRelayUrl('https://relay.example.com'), isTrue);
-      expect(isValidRelayUrl('https://relay-rp1.jacobmoura.work'), isTrue);
+      expect(isValidRelayUrl('https://relay-pi.yefengr.cn'), isTrue);
     });
 
     test('rejects ws:// and wss:// — those are conversions only', () {
@@ -125,8 +125,8 @@ void main() {
       expect(resolveRelayUrl(p), kDefaultRelayUrl);
     });
 
-    test('kDefaultRelayUrl is https://', () {
-      expect(kDefaultRelayUrl, startsWith('https://'));
+    test('kDefaultRelayUrl uses the project Relay', () {
+      expect(kDefaultRelayUrl, 'https://relay-pi.yefengr.cn');
     });
   });
 }

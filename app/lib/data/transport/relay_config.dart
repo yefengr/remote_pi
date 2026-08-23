@@ -22,7 +22,7 @@ import 'package:app/data/preferences/preferences.dart';
 
 /// Public community relay. Hardcoded; not configurable at build time
 /// to keep the onboarding flow deterministic.
-const String kDefaultRelayUrl = 'https://relay-rp1.jacobmoura.work';
+const String kDefaultRelayUrl = 'https://relay-pi.yefengr.cn';
 
 /// User-facing message returned when [isValidRelayUrl] rejects a value.
 /// Surfaced verbatim by Settings and Onboarding — keep stable for

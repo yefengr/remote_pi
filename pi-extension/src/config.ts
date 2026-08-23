@@ -12,7 +12,8 @@ const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
  * URL has no explicit port and the WebSocket upgrade rides on the same TLS
  * connection as the HTTPS endpoints used by the mesh client.
  */
-export const kDefaultRelayUrl = "https://relay-rp1.jacobmoura.work";
+const kLegacyDefaultRelayUrl = "https://relay-rp1.jacobmoura.work";
+export const kDefaultRelayUrl = "https://relay-pi.yefengr.cn";
 
 export type RemotePiConfig = { relay?: string };
 
@@ -52,7 +53,10 @@ export function resolveRelayUrl(): RelayResolution {
   const env = process.env["REMOTE_PI_RELAY"];
   if (env && env.length > 0) return { url: toHttpUrl(env), source: "env" };
   const cfg = loadConfig();
-  if (cfg.relay && cfg.relay.length > 0) return { url: toHttpUrl(cfg.relay), source: "config" };
+  if (cfg.relay && cfg.relay.length > 0) {
+    const configuredUrl = toHttpUrl(cfg.relay);
+    return { url: configuredUrl === kLegacyDefaultRelayUrl ? kDefaultRelayUrl : configuredUrl, source: "config" };
+  }
   return { url: toHttpUrl(kDefaultRelayUrl), source: "default" };
 }
 
