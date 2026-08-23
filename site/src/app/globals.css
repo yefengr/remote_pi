@@ -2020,9 +2020,10 @@ a {
 .pwa-separator { color: #536268; }
 .pwa-room-control { display: grid; gap: 5px; color: var(--pwa-dim); font: 10px var(--ff-mono); text-transform: uppercase; letter-spacing: .1em; }
 .pwa-room-control select { min-width: 130px; padding: 9px 11px; border: 1px solid var(--pwa-line); border-radius: 8px; color: var(--pwa-ink); background: var(--pwa-panel-strong); font: 12px var(--ff-mono); }
-.pwa-message-list { box-sizing: border-box; flex: 1 1 auto; min-width: 0; min-height: 0; max-width: 100%; width: min(900px, 100%); margin: 0 auto; padding: 30px clamp(22px, 5vw, 70px) 24px; display: grid; align-content: start; gap: 24px; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable; }
+.pwa-message-list { box-sizing: border-box; flex: 1 1 auto; min-width: 0; min-height: 0; max-width: 100%; width: min(900px, 100%); margin: 0 auto; padding: 30px clamp(22px, 5vw, 70px) 24px; display: grid; align-content: start; gap: 24px; overflow-x: hidden; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable; }
 .pwa-bottom-sentinel { width: 1px; height: 1px; }
-.pwa-message { max-width: 780px; padding-left: 14px; border-left: 2px solid var(--pwa-line); position: relative; }
+.pwa-message { width: min(100%, 780px); max-width: 780px; min-width: 0; overflow: hidden; padding-left: 14px; border-left: 2px solid var(--pwa-line); position: relative; }
+.pwa-message > * { min-width: 0; max-width: 100%; }
 .pwa-message.user { justify-self: end; width: min(80%, 680px); border-left: 0; border-right: 2px solid rgba(79,195,247,.35); padding: 12px 15px 12px 20px; background: linear-gradient(90deg, transparent, rgba(79,195,247,.07)); text-align: right; }
 .pwa-message.system { border-left-color: #f5c66a; color: #f5c66a; }
 .pwa-message-label { margin-bottom: 7px; color: var(--pwa-accent); font: 10px var(--ff-mono); letter-spacing: .12em; text-transform: uppercase; }
