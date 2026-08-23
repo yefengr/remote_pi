@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Trash2, X } from "lucide-react";
+import { Check, RefreshCw, Trash2, X } from "lucide-react";
 
 type SettingsPanelProps = {
   relayUrl: string;
@@ -9,9 +9,10 @@ type SettingsPanelProps = {
   onSave: (value: string) => Promise<void>;
   onClose: () => void;
   onClearData: () => Promise<void>;
+  onResetLayout: () => void;
 };
 
-export function SettingsPanel({ relayUrl, defaultRelayUrl, onSave, onClose, onClearData }: SettingsPanelProps) {
+export function SettingsPanel({ relayUrl, defaultRelayUrl, onSave, onClose, onClearData, onResetLayout }: SettingsPanelProps) {
   const [value, setValue] = useState(relayUrl);
 
   useEffect(() => {
@@ -35,6 +36,8 @@ export function SettingsPanel({ relayUrl, defaultRelayUrl, onSave, onClose, onCl
       </label>
       <div className="pwa-settings-note"><Check size={15} /><span>Owner identity and session history live in this browser only.</span></div>
       <button className="pwa-primary-button" type="button" onClick={() => void onSave(value)}>Save settings</button>
+      <button className="pwa-secondary-button pwa-layout-reset-button" type="button" onClick={onResetLayout}><RefreshCw size={15} /> Reset layout</button>
+      <small className="pwa-layout-reset-note">Closes panels, restores the chat scroll, and recalculates the viewport. Local data is kept.</small>
       <button className="pwa-danger-button" type="button" onClick={() => void onClearData()}><Trash2 size={15} /> Clear local data</button>
     </aside>
   );

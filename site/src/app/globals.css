@@ -2069,6 +2069,8 @@ a {
 .pwa-field small { color: var(--pwa-dim); font: 11px/1.5 var(--ff-body); }
 .pwa-settings-note { display: flex; gap: 9px; margin: 28px 0; padding: 13px; border: 1px solid rgba(115,226,164,.18); border-radius: 10px; color: var(--pwa-dim); font-size: 12px; line-height: 1.5; }
 .pwa-settings-note svg { flex-shrink: 0; color: var(--pwa-green); }
+.pwa-layout-reset-button { width: 100%; margin-top: 12px; }
+.pwa-layout-reset-note { display: block; margin-top: 8px; color: var(--pwa-dim); font: 11px/1.5 var(--ff-body); }
 .pwa-modal-backdrop { box-sizing: border-box; position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: calc(20px + var(--pwa-safe-top)) 20px calc(20px + var(--pwa-safe-bottom)); background: rgba(0,0,0,.72); backdrop-filter: blur(8px); }
 .pwa-pairing-dialog { min-width: 0; max-width: 100%; width: min(480px, 100%); max-height: min(92dvh, 760px); overflow: auto; }
 .pwa-scanner, .pwa-pairing-card { box-sizing: border-box; min-width: 0; max-width: 100%; width: 100%; padding: 24px; border: 1px solid var(--pwa-line-strong); border-radius: 18px; background: #0a0e10; box-shadow: 0 25px 90px rgba(0,0,0,.55); }

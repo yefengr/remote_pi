@@ -53,6 +53,7 @@ export function PwaApp() {
   const [pairState, setPairState] = useState<PairState>("idle");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sessionSheetOpen, setSessionSheetOpen] = useState(false);
+  const [layoutRevision, setLayoutRevision] = useState(0);
   const [selectionReady, setSelectionReady] = useState(false);
   const [followingOutput, setFollowingOutput] = useState(true);
   const [unreadOutput, setUnreadOutput] = useState(0);
@@ -659,13 +660,40 @@ export function PwaApp() {
     window.location.reload();
   }, [invalidateConnection]);
 
+  const resetLayout = useCallback(() => {
+    setSettingsOpen(false);
+    setSessionSheetOpen(false);
+    setPairState("idle");
+    setDraft("");
+    scrollOnNextMessagesRef.current = false;
+    followOutputRef.current = true;
+    setFollowingOutput(true);
+    setUnreadOutput(0);
+
+    document.documentElement.style.removeProperty("width");
+    document.documentElement.style.removeProperty("height");
+    document.documentElement.style.removeProperty("overflow");
+    document.body.style.removeProperty("width");
+    document.body.style.removeProperty("height");
+    document.body.style.removeProperty("overflow");
+    document.querySelector<HTMLElement>(".pwa-root")?.style.removeProperty("width");
+    document.querySelector<HTMLElement>(".pwa-root")?.style.removeProperty("height");
+    document.querySelector<HTMLElement>(".pwa-root")?.style.removeProperty("overflow");
+
+    setLayoutRevision((revision) => revision + 1);
+    window.dispatchEvent(new Event("resize"));
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => scrollToLatest(false));
+    });
+  }, [scrollToLatest]);
+
   const closeSessionSheet = useCallback(() => setSessionSheetOpen(false), []);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
   if (startupState === "loading") return <StartupLoading />;
   if (startupState === "error") return <StartupErrorView error={startupError} onRetry={() => window.location.reload()} />;
 
   return (
-    <div className="pwa-root">
+    <div className="pwa-root" key={layoutRevision}>
       <header className="pwa-topbar">
         <div className="pwa-brand"><span className="pwa-brand-mark">π</span><span>Remote Pi</span><span className="pwa-brand-tag">BROWSER APP</span></div>
         <div className="pwa-topbar-actions">
@@ -687,7 +715,7 @@ export function PwaApp() {
             <form className="pwa-composer" onSubmit={(event) => { event.preventDefault(); sendMessage(); }}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={connection === "online" ? "Send a message to your agent..." : "Reconnect to send a message"} disabled={connection !== "online"} rows={2} /><button className="pwa-primary-button" type="submit" disabled={connection !== "online" || !draft.trim()}>Send <span>↗</span></button></form>
           </> : <EmptyWorkspace onPair={() => setPairState("scanning")} />}
         </main>
-        {settingsOpen ? <SettingsPanel relayUrl={relayUrl} defaultRelayUrl={DEFAULT_RELAY} onSave={saveRelayUrl} onClose={closeSettings} onClearData={clearLocalData} /> : null}
+        {settingsOpen ? <SettingsPanel relayUrl={relayUrl} defaultRelayUrl={DEFAULT_RELAY} onSave={saveRelayUrl} onClose={closeSettings} onClearData={clearLocalData} onResetLayout={resetLayout} /> : null}
       </div>
       {sessionSheetOpen ? <SessionSheet peers={peers} rooms={rooms} activePeerId={activePeerId} activeRoomId={roomId} connection={connection} onSelectPeer={selectPeer} onSelectRoom={selectRoom} onPair={() => setPairState("scanning")} onRename={(peer) => void renamePeer(peer)} onRemove={(peer) => void removePeer(peer)} onClose={closeSessionSheet} /> : null}
       {pairState !== "idle" ? <div className="pwa-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && pairState === "scanning") setPairState("idle"); }} role="presentation">{pairState === "scanning" ? <PairingDialog onScan={pairFromQr} onClose={() => setPairState("idle")} /> : <div className="pwa-pairing-card"><Activity className="pwa-spin" /><span className="pwa-kicker">Pairing</span><h2>Connecting to your Pi</h2><p>Waiting for the Pi to confirm this browser.</p></div>}</div> : null}
