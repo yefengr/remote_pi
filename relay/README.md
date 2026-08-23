@@ -1,6 +1,6 @@
 # Remote Pi — Relay
 
-A lightweight WebSocket relay server that connects the **Remote Pi** mobile app to
+A lightweight WebSocket relay server that connects the **Remote Pi browser PWA** to
 `pi-extension` processes running on your operating system. It handles peer routing,
 presence, authorized Pi-to-Pi forwarding, and signed membership metadata.
 
@@ -23,7 +23,7 @@ for everything the relay enforces on the wire.
 Every device authenticates with an Ed25519 keypair during the WebSocket handshake
 (challenge-response). The Relay then applies these content boundaries:
 
-- For App↔Pi traffic, the outer `ct` remains opaque and is never decoded.
+- For PWA↔Pi traffic, the outer `ct` remains opaque and is never decoded.
 - Pi→Pi `pi_envelope` frames and signed membership blobs are parsed in memory only
   as needed for routing and authorization.
 - No envelope body, key material, or signature is logged or persisted as a message
@@ -56,10 +56,10 @@ Messages are protected in two ways on the public relay:
 
 - **TLS (SSL)** — the WebSocket connection is encrypted in transit.
 - **Ed25519 connection key** — challenge-response authenticates possession of the
-  announced connection key. It does not itself prove App pairing or authorize every
+  announced connection key. It does not itself prove PWA pairing or authorize every
   route.
 
-App↔Pi pairing and room addressing are client protocol responsibilities. Pi→Pi
+PWA↔Pi pairing and room addressing are client protocol responsibilities. Pi→Pi
 forwarding has separate Relay route eligibility: any correctly signed Owner blob
 must directly list both Pi keys. This does not prove that the Owner paired with
 or controls either Pi, and is not a stronger trust guarantee.
@@ -99,7 +99,7 @@ surfaces at once:
 - `GET /health` — health check (returns `200 OK`)
 - `GET / POST /mesh/<owner_pk_hash>` — signed membership versions
 
-Point your app and `pi-extension` to `ws://<your-server-ip>:3000` (or `wss://`
+Point your browser PWA and `pi-extension` to `ws://<your-server-ip>:3000` (or `wss://`
 if you put it behind a TLS-terminating reverse proxy such as Caddy or nginx).
 
 **`/data` volume**: the relay stores its SQLite database (signed membership
@@ -133,9 +133,9 @@ docker run -d \
 ### Mesh membership endpoint
 
 The `/mesh/<owner_pk_hash>` endpoint stores **Owner-signed** lists of Pi keys,
-keyed by `sha256(owner_pk)` in lowercase hex. It enables an app on a new device
-(same Apple ID / Google account) to recover its peer list automatically after
-restoring the Owner Ed25519 key from iCloud Keychain / Block Store.
+keyed by `sha256(owner_pk)` in lowercase hex. It enables a browser PWA
+profile to recover its peer list after restoring its Owner Ed25519 key from
+its own IndexedDB data.
 
 The relay verifies every `POST` against the embedded `owner_pk` using Ed25519
 and only accepts versions strictly greater than the current one (monotonic).
@@ -181,7 +181,7 @@ relay.yourdomain.com {
 }
 ```
 
-Then set your app and `pi-extension` relay URL to `wss://relay.yourdomain.com`.
+Then set your browser PWA and `pi-extension` relay URL to `wss://relay.yourdomain.com`.
 
 ---
 

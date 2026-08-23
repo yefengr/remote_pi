@@ -11,7 +11,6 @@ export function SiteFooter() {
           source under the MIT license.
         </div>
         <nav className="footer-links">
-          <Link href="/download">Download</Link>
           <Link href="/terms">Terms of Service</Link>
           <Link href="/privacy">Privacy Policy</Link>
           <a

@@ -75,9 +75,6 @@ export function SiteHeader() {
           <Link className="lnk" href="/docs">
             Docs
           </Link>
-          <Link className="lnk" href="/download">
-            Download
-          </Link>
           <a
             className="lnk"
             href={GITHUB_URL}
@@ -125,13 +122,6 @@ export function SiteHeader() {
               onClick={() => setMenuOpen(false)}
             >
               Docs
-            </Link>
-            <Link
-              className="m-lnk"
-              href="/download"
-              onClick={() => setMenuOpen(false)}
-            >
-              Download
             </Link>
             <a
               className="m-lnk"

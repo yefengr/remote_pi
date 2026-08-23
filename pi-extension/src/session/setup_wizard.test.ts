@@ -83,7 +83,7 @@ describe("runSetupWizard (2 prompts + confirm)", () => {
       "Agent name: (default: default-name)",
     ]);
     expect(ui.selectCalls.map((c) => c.title)).toEqual([
-      "Use the relay on this terminal to connect to the remote mesh (mobile + PCs)?",
+      "Use the relay on this terminal to connect to the remote mesh (PWA + PCs)?",
       "Save and activate?",
     ]);
   });
@@ -134,7 +134,7 @@ describe("runSetupWizard (2 prompts + confirm)", () => {
     expect(
       ui.notifies.some((n) =>
         n.msg.includes("relay forwards encrypted messages") ||
-        n.msg.includes("Remote Pi mobile app"),
+        n.msg.includes("Remote Pi browser PWA"),
       ),
     ).toBe(true);
     // No daemon-context notify — daemon mode was removed from the wizard.

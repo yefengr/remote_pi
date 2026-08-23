@@ -24,8 +24,8 @@ export default function TermsPage() {
     >
       <LegalSection id="acceptance" number={1} title="Acceptance of Terms">
         <p>
-          By installing, accessing, or using the Remote Pi mobile application,
-          the Remote Pi Pi-side extension, the Remote Pi relay service, or any
+          By accessing or using the Remote Pi browser PWA, the Remote Pi
+          Pi-side extension, the Remote Pi relay service, or any
           other software or service provided under the Remote Pi name
           (collectively, the &quot;Service&quot;), you agree to be bound by
           these Terms of Service (&quot;Terms&quot;). If you do not agree to
@@ -44,16 +44,17 @@ export default function TermsPage() {
           address, or provide personally identifiable information to use the
           Service. Instead, the Service uses an ephemeral, on-demand pairing
           flow: a QR code generated locally on the Pi-side extension is scanned
-          by the mobile app, establishing a mutually authenticated channel
-          between the two devices (Ed25519 challenge-response). See the
+          by the Remote Pi browser PWA, establishing a mutually authenticated
+          channel between the two peers (Ed25519 challenge-response). See the
           Privacy Policy, section 9, for the full trust model — application-
           layer end-to-end encryption of payloads is on the roadmap, not yet
           active.
         </p>
         <p>
-          Each pairing produces a cryptographic key pair stored locally on the
-          phone and the Pi. Pairings can be revoked at any time from either
-          device. You are responsible for keeping your devices secure; anyone
+          Each pairing produces a cryptographic key pair stored locally in the
+          browser profile and on the Pi. Pairings can be revoked at any time
+          from either side. You are responsible for keeping your browser profile
+          and machine secure; anyone
           with physical or remote access to a paired device can use that
           pairing.
         </p>
@@ -68,15 +69,16 @@ export default function TermsPage() {
         <ul className="ml-6 list-disc space-y-2">
           <li>
             Remote control of a Pi-based coding agent (such as Claude Code,
-            Codex, or similar) from a paired mobile device.
+            Codex, or similar) from the paired browser PWA.
           </li>
           <li>
             A local multi-agent messaging mesh on the Pi (UDS broker) that lets
-            multiple agents and the mobile peer exchange messages.
+            multiple agents exchange messages while the browser PWA controls
+            their paired Pi sessions.
           </li>
           <li>
-            An optional public relay service that forwards encrypted messages
-            between paired devices when they are not on the same local network.
+            An optional public relay service that forwards messages between the
+            paired browser PWA and Pi when they are not on the same local network.
             You may instead self-host your own relay using the open-source
             relay code.
           </li>
@@ -235,12 +237,12 @@ export default function TermsPage() {
       <LegalSection id="termination" number={11} title="Termination">
         <p>
           You may stop using the Service at any time. To terminate a specific
-          pairing, revoke it from the mobile app or, on the Pi side, run{" "}
+          pairing, revoke it from the browser PWA or, on the Pi side, run{" "}
           <code className="rounded bg-surface px-1.5 py-0.5 font-mono text-xs text-fg">
             /remote-pi revoke &lt;id&gt;
           </code>
-          . You may also uninstall the mobile application and the Pi-side
-          extension to fully stop using the Service.
+          . You may also clear Remote Pi&apos;s browser site data and stop or
+          uninstall the Pi-side extension to fully stop using the Service.
         </p>
         <p>
           We may suspend or terminate your access to the public relay if you

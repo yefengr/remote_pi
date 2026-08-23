@@ -58,11 +58,11 @@ export default function PrivacyPage() {
           cryptographic keys locally on your devices.
         </p>
         <p>
-          On the device itself, the mobile app stores a list of paired peers
-          (their public keys, a friendly name you choose, and the relay URL) in
-          the platform&apos;s secure storage (iOS Keychain / Android Keystore).
-          This information never leaves your device unless you explicitly send
-          it.
+          In the browser PWA, IndexedDB stores your local Remote Pi identity,
+          paired peers (their public keys, a friendly name you choose, and the
+          relay URL), session history, and messages in this browser profile.
+          Private keys remain in the browser profile and are never sent to the
+          relay.
         </p>
         <h3 className="text-base font-semibold text-fg">
           2.2 Data processed automatically by the public relay
@@ -121,10 +121,10 @@ export default function PrivacyPage() {
           2.3 Data we do NOT collect
         </h3>
         <ul className="ml-6 list-disc space-y-2">
-          <li>Precise device location.</li>
-          <li>Contacts, photos, microphone, or camera content.</li>
-          <li>The text of your prompts or the responses produced by your Pi-side agent.</li>
-          <li>Advertising identifiers (IDFA, AAID).</li>
+          <li>Precise device location or contacts.</li>
+          <li>Background microphone or camera access. The browser requests camera access only when you scan a pairing QR or explicitly attach an image.</li>
+          <li>The text of your prompts or the responses produced by your Pi-side agent beyond the live relay forwarding described above.</li>
+          <li>Advertising identifiers or native mobile device identifiers.</li>
           <li>Behavioral analytics or tracking telemetry.</li>
         </ul>
       </LegalSection>
@@ -211,8 +211,9 @@ export default function PrivacyPage() {
           planning.
         </p>
         <p>
-          Paired peers stored on your device persist until you revoke the
-          pairing or uninstall the app. We do not have access to that storage.
+          Paired peers and session data stored in the browser persist until you
+          revoke the pairing or clear Remote Pi&apos;s site data. We do not have
+          access to that browser storage.
         </p>
       </LegalSection>
 
@@ -267,9 +268,8 @@ export default function PrivacyPage() {
             cryptographically and identity squatting is prevented.
           </li>
           <li>
-            Private keys generated on-device and stored in the platform secure
-            storage (iOS Keychain / Android Keystore). Private keys never leave
-            your devices.
+            Private keys generated in the browser and stored in the local
+            IndexedDB workspace. Private keys never leave your browser profile.
           </li>
           <li>
             Operational separation between transport metadata and any other
@@ -320,8 +320,8 @@ export default function PrivacyPage() {
       <LegalSection id="cookies" number={11} title="Cookies">
         <p>
           This site does not use tracking, advertising, or analytics cookies.
-          The mobile application and the Pi-side extension do not use cookies
-          either. We may use strictly functional cookies on this site only if
+          The browser PWA and the Pi-side extension do not use cookies either.
+          We may use strictly functional cookies on this site only if
           needed for security (for example, CSRF protection on a future
           contact form); none are used today.
         </p>

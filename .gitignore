@@ -22,38 +22,6 @@ target/
 out/
 .vercel/
 
-# Flutter / Dart
-dockercache/
-.dart_tool/
-.flutter-plugins
-.flutter-plugins-dependencies
-build/
-.packages
-.pub-cache/
-.pub/
-
-# iOS
-ios/Pods/
-ios/.symlinks/
-ios/Flutter/Flutter.framework
-ios/Flutter/Flutter.podspec
-*.xcworkspace/xcuserdata/
-*.xcodeproj/xcuserdata/
-*.xcodeproj/project.xcworkspace/xcuserdata/
-ios/Runner/GeneratedPluginRegistrant.*
-ios/Flutter/ephemeral/
-
-# Android
-android/.gradle/
-android/local.properties
-android/app/release/
-android/.kotlin/
-**/android/captures/
-**/android/gradlew
-**/android/gradlew.bat
-**/android/local.properties
-**/android/**/GeneratedPluginRegistrant.java
-
 # Editor
 .vscode/
 .idea/

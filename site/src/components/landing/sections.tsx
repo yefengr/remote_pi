@@ -5,9 +5,6 @@ import {
   IconAlwaysOn,
   IconMesh,
   IconArrow,
-  IconAndroid,
-  IconPlay,
-  IconApple,
   IconMic,
   IconImage,
   IconOpenSource,
@@ -34,9 +31,9 @@ const PILLARS: Pillar[] = [
   {
     icon: <IconGateway />,
     tag: "01 / gateway",
-    title: "Drive any agent from your phone.",
+    title: "Drive any agent from a browser PWA.",
     proof:
-      "Pair with a QR; send prompts, voice, and images; switch models from anywhere.",
+      "Open the PWA, pair with a QR, then send prompts, voice, and images from anywhere.",
     link: "How pairing works",
     href: "#install",
   },
@@ -54,7 +51,7 @@ const PILLARS: Pillar[] = [
     tag: "03 / mesh",
     title: "Every machine, one network.",
     proof:
-      "Agents across PCs and servers join one mesh under a single key, reachable from your phone.",
+      "Agents across PCs and servers join one mesh under a single key, reachable from your browser PWA.",
     link: "See the protocol",
     href: PROTOCOL_URL,
   },
@@ -105,96 +102,6 @@ export function Pillars() {
               <PillarLink href={p.href} label={p.link} />
             </article>
           ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* ---------------- Get the app ---------------- */
-type Store = {
-  glyph: ReactNode;
-  top: string;
-  name: string;
-  sub: string;
-  href: string;
-  /** External store link (new tab). Internal hrefs route through /download. */
-  external?: boolean;
-};
-
-const STORES: Store[] = [
-  {
-    glyph: <IconApple />,
-    top: "Download on the",
-    name: "App Store",
-    sub: "iOS · iPhone & iPad",
-    href: "https://apps.apple.com/app/remote-pi-coding-agent/id6773499691",
-    external: true,
-  },
-  {
-    glyph: <IconPlay />,
-    top: "Get it on",
-    name: "Google Play",
-    sub: "Android",
-    href: "https://play.google.com/store/apps/details?id=work.jacobmoura.remotepi",
-    external: true,
-  },
-  {
-    glyph: <IconAndroid />,
-    top: "Direct download",
-    name: "Android APK",
-    sub: "Signed · with sha256",
-    href: "/download",
-  },
-];
-
-export function GetApp() {
-  return (
-    <section className="section" id="get-the-app" style={{ paddingTop: 0 }}>
-      <div className="wrap">
-        <div className="section-head reveal">
-          <span className="eyebrow">Get the app</span>
-          <h2>Pair your phone, drive your agents.</h2>
-          <p>
-            The authenticator and the remote control. Get it on the App Store or
-            Google Play, or grab the Android APK direct.
-          </p>
-        </div>
-        <div className="app-grid">
-          {STORES.map((s, i) => {
-            const inner = (
-              <>
-                <span className="glyph">{s.glyph}</span>
-                <span>
-                  <span className="s-top">{s.top}</span>
-                  <div className="s-name">{s.name}</div>
-                  <div className="s-sub">{s.sub}</div>
-                </span>
-              </>
-            );
-            const style = { transitionDelay: `${i * 0.06}s` };
-            return s.external ? (
-              <a
-                className="store reveal"
-                key={s.name}
-                href={s.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={style}
-              >
-                {inner}
-              </a>
-            ) : (
-              <Link
-                className="store reveal"
-                key={s.name}
-                href={s.href}
-                style={style}
-              >
-                {inner}
-              </Link>
-            );
-          })}
         </div>
       </div>
     </section>

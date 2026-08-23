@@ -24,7 +24,7 @@ export default function DaemonTutorial() {
               <p className="lede">
                 So far your agents only run while a terminal is open. Daemon
                 mode keeps a folder running as a background agent that survives
-                logout, restarts on crash, and answers your phone at 3am. This
+                logout, restarts on crash, and answers the browser PWA at 3am. This
                 is the <em>how</em>; for the <em>why</em> — and how it compares
                 to all-in-one platforms — see <Link href="/why">Why Pi</Link>.
               </p>
@@ -84,7 +84,7 @@ export default function DaemonTutorial() {
             config at spawn (a fixed <InlineCode>assistent</InlineCode>{" "}
             workspace, relay on), so the folder needs no{" "}
             <InlineCode>.pi/remote-pi/</InlineCode> of its own. To reach the
-            daemon from your phone, just make sure this machine has been paired
+            daemon from the browser PWA, just make sure this machine has been paired
             once — pairing is per-machine, so any earlier{" "}
             <InlineCode>/remote-pi pair</InlineCode> on it counts. Then register:
           </p>
@@ -130,7 +130,7 @@ remote-pi daemon stop              # stop all`}
           />
           <p>
             A daemon receives a prompt as if a user typed it; its response flows
-            back through the same mesh and relay you configured — your phone
+            back through the same mesh and relay you configured — the browser PWA
             sees it live, and other agents on the machine see it over the local
             mesh.
           </p>
@@ -227,7 +227,7 @@ remote-pi cron remove j_ab12       # delete the job`}
             language="bash"
           />
           <p>
-            The agent&apos;s reply is fire-and-forget into the mesh — your phone
+            The agent&apos;s reply is fire-and-forget into the mesh — the browser PWA
             and other agents see it live, exactly like a manual{" "}
             <InlineCode>daemon send</InlineCode>. Cron itself only audits the{" "}
             <em>trigger</em>: every fire and every skip appends one line to{" "}

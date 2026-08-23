@@ -24,9 +24,9 @@ const mono = JetBrains_Mono({
   display: "swap",
 });
 
-const siteTagline = "Remote Pi — Your coding agents, in your pocket";
+const siteTagline = "Remote Pi — Your coding agents, in your browser";
 const siteDescription =
-  "Pair your phone once, then drive any Pi coding agent from it — keep a fleet running 24/7 and link every machine into one mesh. Open source, self-hostable.";
+  "Open Remote Pi as a browser PWA, pair it once, then drive any Pi coding agent — keep a fleet running 24/7 and link every machine into one mesh. Open source, self-hostable.";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://remote-pi.jacobmoura.work"),
@@ -41,7 +41,7 @@ export const metadata: Metadata = {
     "Remote Pi",
     "coding agents",
     "Pi coding agent",
-    "mobile agent control",
+    "browser agent control",
     "24/7 agent daemon",
     "agent mesh",
     "self-hostable relay",

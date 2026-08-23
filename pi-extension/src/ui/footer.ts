@@ -4,7 +4,7 @@
  * Slot keys (intentionally namespaced so other extensions don't collide):
  *   - remote-pi:session   — current local session + peer count
  *   - remote-pi:relay     — relay state (off / on / paired)
- *   - remote-pi:peer-active — active mobile device, if paired
+ *   - remote-pi:peer-active — active browser PWA profile, if paired
  */
 export interface FooterContext {
   ui: {
@@ -17,7 +17,7 @@ export interface FooterState {
   session?: string;
   peerCount?: number;
   relayOn?: boolean;
-  /** Active device session right now (drives the 📱 slot).
+  /** Active browser session right now (drives the 📱 slot).
    *  Independent from `hasPairings` — a device may be paired globally
    *  in peers.json without being actively connected to THIS Pi process. */
   devicePaired?: string;

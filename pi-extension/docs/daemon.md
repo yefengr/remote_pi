@@ -170,9 +170,9 @@ isn't actually spawning. Possible reasons:
 
 ---
 
-## 5. Mobile app doesn't connect to a daemon
+## 5. Browser PWA doesn't connect to a daemon
 
-The daemon is up but the app doesn't see it.
+The daemon is up but the browser PWA doesn't see it.
 
 ### Confirm the daemon is paired
 
@@ -198,7 +198,7 @@ pi
 > /remote-pi status
 ```
 
-The relay line should match what the mobile app is connecting to. If
+The relay line should match what the browser PWA is connecting to. If
 not, update the relay URL and bounce the daemon:
 
 ```bash

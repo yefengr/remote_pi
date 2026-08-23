@@ -38,7 +38,7 @@ const INSTALL_TABS: Record<string, InstallTab> = {
       <>
         Run the first line in your shell; the <code>/remote-pi</code> lines run
         inside <b>Pi</b>. The first <code>/remote-pi</code> is a quick setup
-        wizard (name + relay), then <b>pair</b> shows a QR you scan with the app.
+        wizard (name + relay), then <b>pair</b> shows a QR for the browser PWA.
       </>
     ),
   },
@@ -63,8 +63,8 @@ export function Install() {
           <span className="eyebrow">Install</span>
           <h2>One command, then scan a QR.</h2>
           <p>
-            No accounts, no sign-up. Add the plugin to Pi, pair your phone once,
-            and you&apos;re driving every agent from your pocket.
+            No accounts, no sign-up. Add the plugin to Pi, open the browser PWA,
+            pair it once, and drive every agent from the browser.
           </p>
         </div>
 

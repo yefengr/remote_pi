@@ -6,9 +6,8 @@
 
 | 目录 | 技术栈 | 职责 |
 |---|---|---|
-| `app/` | Flutter | iOS / Android 移动客户端 |
-| `pi-extension/` | Node + TypeScript | Pi 扩展与远程会话协议 |
-| `relay/` | Rust + Tokio | WebSocket Relay 与路由 |
+| `pi-extension/` | Node + TypeScript | Pi 扩展、Daemon、Agent Mesh 与远程会话协议 |
+| `relay/` | Rust + Tokio | WebSocket Relay、Rooms 与跨 PC Agent Mesh 路由 |
 | `site/` | NextJS + React + TypeScript | 官网、文档与浏览器 PWA |
 
 ## 工作规则
@@ -35,7 +34,6 @@ cd site && pnpm lint
 cd site && pnpm build
 cd pi-extension && pnpm test
 cd relay && cargo test
-cd app && flutter test
 ```
 
 只运行与当前变更相关的命令；跨项目共享协议或部署配置变更时扩大验证范围。

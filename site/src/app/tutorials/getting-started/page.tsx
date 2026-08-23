@@ -10,7 +10,7 @@ import { RevealController } from "@/components/landing/reveal-controller";
 export const metadata: Metadata = {
   title: "Getting started",
   description:
-    "Install Remote Pi on Pi, pair your phone, and send your first command to an agent from the app — from install to first prompt.",
+    "Install Remote Pi on Pi, open the browser PWA, and send your first command to an agent — from install to first prompt."
 };
 
 export default function GettingStartedTutorial() {
@@ -24,9 +24,9 @@ export default function GettingStartedTutorial() {
               <h1>Getting started</h1>
               <p className="lede">
                 By the end of this guide you&apos;ll have Remote Pi running on
-                one machine, your phone paired to it, and your first command
-                sent from the app — the agent runs it and the result streams
-                back to your pocket. Plan on about five minutes.
+                one machine, the browser PWA paired to it, and your first command
+                sent from the browser — the agent runs it and the result streams
+                back to your browser. Plan on about five minutes.
               </p>
             </header>
 
@@ -39,30 +39,9 @@ export default function GettingStartedTutorial() {
               agent) and <strong className="text-fg">Node 20+</strong> installed.
             </li>
             <li>
-              The <strong className="text-fg">Remote Pi</strong> app on your
-              phone — from the{" "}
-              <a
-                className="text-accent underline"
-                href="https://apps.apple.com/app/remote-pi-coding-agent/id6773499691"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                App Store
-              </a>
-              ,{" "}
-              <a
-                className="text-accent underline"
-                href="https://play.google.com/store/apps/details?id=work.jacobmoura.remotepi"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Google Play
-              </a>
-              , or the{" "}
-              <Link className="text-accent underline" href="/download">
-                Android APK
-              </Link>{" "}
-              direct download.
+              The <Link className="text-accent underline" href="/app">Remote Pi browser PWA</Link>{" "}
+              open in a modern browser. You can optionally install it from the
+              browser as a PWA; no native app or store download is required.
             </li>
           </ul>
           <p className="text-sm">
@@ -100,8 +79,8 @@ export default function GettingStartedTutorial() {
               </li>
               <li>
                 <strong className="text-fg">Use the relay?</strong> — answer{" "}
-                <InlineCode>Yes</InlineCode> so your phone (and, later, other
-                PCs) can reach this agent.
+                <InlineCode>Yes</InlineCode> so your browser PWA (and, later,
+                other PCs) can reach this agent.
               </li>
             </ol>
             <p>
@@ -113,7 +92,7 @@ export default function GettingStartedTutorial() {
             <p>
               Prints a QR code (and a copy-paste pairing URI). Leave it on
               screen for the next step. Pairing is{" "}
-              <strong className="text-fg">per machine</strong>: once a phone is
+              <strong className="text-fg">per machine</strong>: once the browser PWA is
               paired, every Pi agent on this machine accepts it.
             </p>
           </DocsSubsection>
@@ -125,19 +104,19 @@ export default function GettingStartedTutorial() {
           </Callout>
         </DocsSection>
 
-        <DocsSection id="pair" title="2. Pair your phone">
+        <DocsSection id="pair" title="2. Pair the browser PWA">
           <p>With the QR on screen:</p>
           <ol className="ml-6 list-decimal space-y-2">
-            <li>Open the Remote Pi app on your phone.</li>
+            <li>Open the Remote Pi browser PWA at <Link href="/app" className="text-accent underline">/app</Link>.</li>
             <li>
               Tap <strong className="text-fg">Pair a device</strong> (or the
               scan button) and point the camera at the QR.
             </li>
             <li>
-              The app confirms the pairing and the agent shows up in your
-              device list. The Pi terminal footer flips to{" "}
+              The browser confirms the pairing and the agent shows up in your
+              workspace. The Pi terminal footer flips to{" "}
               <InlineCode>🟢 relay</InlineCode> and shows{" "}
-              <InlineCode>📱 &lt;shortid&gt;</InlineCode> while the phone is
+              <InlineCode>📱 &lt;shortid&gt;</InlineCode> while the browser PWA is
               connected.
             </li>
           </ol>
@@ -149,8 +128,8 @@ export default function GettingStartedTutorial() {
 
         <DocsSection id="first-command" title="3. Send your first command">
           <p>
-            You&apos;re now driving the agent from your phone. In the app&apos;s
-            chat for this agent, type a prompt and send it:
+            You&apos;re now driving the agent from the browser PWA. In its chat
+            for this agent, type a prompt and send it:
           </p>
           <CodeBlock
             code="List the files in this folder and tell me what this project is."
@@ -160,8 +139,8 @@ export default function GettingStartedTutorial() {
           <p>
             The prompt lands in the Pi session on your machine exactly as if you
             had typed it there. The agent runs, and its response streams back to
-            your phone live. That round trip — phone to agent and back — is the
-            whole point of Remote Pi.
+            the browser live. That round trip — browser to agent and back — is
+            the whole point of Remote Pi.
           </p>
           <p>
             Beyond chatting, the app can drive the session with a few typed
@@ -176,7 +155,7 @@ export default function GettingStartedTutorial() {
 
         <DocsSection id="next" title="Where to go next">
           <p>
-            That&apos;s one agent, one phone. From here you can let multiple
+            That&apos;s one agent, one browser workspace. From here you can let multiple
             agents talk to each other, reach across machines, or keep an agent
             running when you walk away:
           </p>

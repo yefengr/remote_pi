@@ -7,7 +7,7 @@ import { RevealController } from "@/components/landing/reveal-controller";
 export const metadata: Metadata = {
   title: "Why Pi",
   description:
-    "Deciding how to run an always-on coding agent? remote-pi keeps Pi alive 24/7 and puts it in your pocket. Here's when that's the right shape — and when an all-in-one platform isn't.",
+    "Deciding how to run an always-on coding agent? remote-pi keeps Pi alive 24/7 and puts it within reach through a browser PWA. Here's when that's the right shape — and when an all-in-one platform isn't.",
 };
 
 const GITHUB_URL = "https://github.com/jacobaraujo7/remote_pi";
@@ -29,9 +29,9 @@ const highlights = [
       "Extend Pi with the skills, plugins, and per-folder agents you actually need. The agent is yours to shape until it fits your work exactly.",
   },
   {
-    title: "Driven from your phone",
+    title: "Driven from a browser PWA",
     description:
-      "Pair once with a QR. Send prompts, switch models, start a fresh session, or compact context from iOS or Android — wherever you are.",
+      "Open the browser PWA and pair once with a QR. Send prompts, switch models, start a fresh session, or compact context from any modern browser.",
   },
   {
     title: "A mesh when you need it",
@@ -55,15 +55,15 @@ export default function WhyPage() {
             <h1>An always-on agent you assemble yourself.</h1>
             <p className="lede">
               remote-pi turns Pi into a background agent that never logs off —
-              and a phone in your pocket that drives it. This page is about that
-              choice: keeping a coding agent alive 24/7, and whether building it
+              and a browser PWA that drives it. This page is about that choice:
+              keeping a coding agent alive 24/7, and whether building it
               up from something small is the shape you want.
             </p>
           </header>
 
           <div className="section-head reveal" style={{ marginTop: 64 }}>
             <span className="eyebrow">What you get</span>
-            <h2>Pi, kept alive and put in your pocket.</h2>
+            <h2>Pi, kept alive and reachable from your browser.</h2>
           </div>
           <div
             className="reveal"
@@ -100,7 +100,7 @@ export default function WhyPage() {
             <p>
               remote-pi makes a different bet. It starts from Pi — a lightweight
               coding agent — and adds just the always-on layer: a supervisor
-              that keeps it running and a phone that drives it. Everything else,
+              that keeps it running and a browser PWA that drives it. Everything else,
               you assemble. The trade is real: less out of the box, more
               that&apos;s exactly yours.
             </p>
@@ -108,7 +108,7 @@ export default function WhyPage() {
               Want a complete, all-in-one platform, ready out of the box?
               OpenClaw and Hermes Agent are great places to start. Want a
               lightweight coding agent you assemble, keep alive 24/7, and
-              control from your phone? That&apos;s Pi with remote-pi.
+              control from a browser PWA? That&apos;s Pi with remote-pi.
             </Callout>
             <p style={{ fontSize: 14 }}>
               One note on scope: this comparison is about the{" "}
@@ -150,8 +150,8 @@ export default function WhyPage() {
                 maxWidth: 520,
               }}
             >
-              Add the plugin to Pi, pair your phone, and promote a folder to a
-              24/7 daemon. The how-to walks every step.
+              Add the plugin to Pi, open the browser PWA, and promote a folder to
+              a 24/7 daemon. The how-to walks every step.
             </p>
             <div
               style={{

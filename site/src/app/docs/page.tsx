@@ -27,8 +27,8 @@ const DOCS_TOC: TocItem[] = [
   { id: "what-it-does", label: "What it does" },
   { id: "install", label: "Install" },
   { id: "using-remote-pi", label: <>Using <InlineCode>/remote-pi</InlineCode></> },
-  { id: "pairing", label: "Pairing a mobile device" },
-  { id: "quick-actions", label: "Quick actions from the phone" },
+  { id: "pairing", label: "Pairing the browser PWA" },
+  { id: "quick-actions", label: "Quick actions from the browser" },
   { id: "agent-network", label: "Agent network" },
   { id: "daemon-mode", label: "Daemon mode" },
   {
@@ -56,7 +56,7 @@ const DOCS_TOC: TocItem[] = [
     label: "Troubleshooting",
     sub: [
       { id: "footer-stuck", label: "Stuck on pairing" },
-      { id: "timeout-mobile", label: "Mobile times out" },
+      { id: "timeout-pwa", label: "PWA times out" },
       { id: "timeout-request", label: "Reply never arrives" },
       { id: "one-pi-per-cwd", label: "One Pi per cwd" },
     ],
@@ -80,7 +80,7 @@ export default function DocsPage() {
               This is the <strong className="text-fg">reference</strong>. Remote
               Pi is a mesh for coding agents: agents on the same machine talk
               through a local UDS broker, agents on different machines reach each
-              other through an open-source relay, and your phone authenticates
+              other through an open-source relay, and the browser PWA authenticates
               new peers and drives sessions. The first supported harness is the{" "}
               <a
                 className="text-accent underline"
@@ -113,9 +113,9 @@ export default function DocsPage() {
 
               <DocsSection id="quick-start" title="Quick start">
         <p>
-          Install the plugin, run the setup wizard, and pair your phone in a few
-          commands — then send your first prompt from the app. The full
-          walkthrough, including the mobile side, is a tutorial.
+          Install the plugin, run the setup wizard, and open the browser PWA to
+          pair it in a few commands — then send your first prompt from the
+          browser. The full walkthrough is a tutorial.
         </p>
         <p>
           →{" "}
@@ -132,8 +132,8 @@ export default function DocsPage() {
           <strong className="text-fg">agent network</strong> lets agents
           discover and message each other — over a local socket on one machine,
           or through the relay across PCs. The{" "}
-          <strong className="text-fg">mobile control plane</strong> is your
-          phone: it authenticates new peers into the mesh and drives sessions.
+          <strong className="text-fg">browser control plane</strong> is the
+          Remote Pi PWA: it authenticates new peers into the mesh and drives sessions.
           Each is covered hands-on:
         </p>
         <ul className="ml-6 list-disc space-y-2">
@@ -153,7 +153,7 @@ export default function DocsPage() {
             <Link href="/tutorials/getting-started" className="text-accent underline">
               Getting started
             </Link>{" "}
-            — pairing your phone and driving an agent from it.
+            — opening the browser PWA, pairing it, and driving an agent.
           </li>
         </ul>
       </DocsSection>
@@ -201,10 +201,10 @@ export default function DocsPage() {
         </p>
       </DocsSection>
 
-      <DocsSection id="pairing" title="Pairing a mobile device">
+      <DocsSection id="pairing" title="Pairing the browser PWA">
         <p>
           <InlineCode>/remote-pi pair</InlineCode> prints a QR (and a copy-paste
-          URI); scan it with the Remote Pi app. Pairing is{" "}
+          URI); scan it with the Remote Pi browser PWA. Pairing is{" "}
           <strong className="text-fg">per machine</strong> — once a device is
           paired, every Pi process on that machine accepts it. Manage devices
           with <InlineCode>/remote-pi devices</InlineCode> and{" "}
@@ -223,10 +223,10 @@ export default function DocsPage() {
         </p>
       </DocsSection>
 
-      <DocsSection id="quick-actions" title="Quick actions from the phone">
+      <DocsSection id="quick-actions" title="Quick actions from the browser PWA">
         <p>
-          Beyond chatting, the app drives a session with a small set of typed
-          actions — <strong className="text-fg">compact context</strong>,{" "}
+          Beyond chatting, the browser PWA drives a session with a small set of
+          typed actions — <strong className="text-fg">compact context</strong>,{" "}
           <strong className="text-fg">new session</strong>,{" "}
           <strong className="text-fg">set model</strong>, and{" "}
           <strong className="text-fg">set thinking</strong> level. The model
@@ -414,7 +414,7 @@ export default function DocsPage() {
           </p>
           <p>
             Bind the container to your VPN interface, terminate TLS in a reverse
-            proxy, and point both your Pi and your phone at the resulting{" "}
+            proxy, and point both your Pi and your browser PWA at the resulting{" "}
             <InlineCode>https://…</InlineCode> URL.
           </p>
         </DocsSubsection>
@@ -455,7 +455,7 @@ export default function DocsPage() {
           <CodeBlock code="/remote-pi config" label="In Pi" language="text" />
           <p>
             To switch URLs while connected: <InlineCode>/remote-pi stop</InlineCode>{" "}
-            then <InlineCode>/remote-pi</InlineCode> again. The mobile app has
+            then <InlineCode>/remote-pi</InlineCode> again. The browser PWA has
             its own relay-URL setting in its preferences pane — keep both
             pointing at the same relay.
           </p>
@@ -477,7 +477,7 @@ export default function DocsPage() {
             PROTOCOL.md
           </a>{" "}
           on GitHub. It is the source of truth that the Pi extension, the
-          mobile apps, and the relay all implement against. Read it when you
+          browser PWA, and the relay all implement against. Read it when you
           need exact behavior or when writing a new harness adapter.
         </p>
         <p>
@@ -535,11 +535,11 @@ export default function DocsPage() {
               ],
               [
                 <InlineCode key="c">/remote-pi pair [--ttl &lt;seconds&gt;]</InlineCode>,
-                "Show QR + copy-paste pairing URI for a new mobile device (QR valid 60s by default; --ttl clamps to 10–600s)",
+                "Show QR + copy-paste pairing URI for a browser PWA profile (QR valid 60s by default; --ttl clamps to 10–600s)",
               ],
               [
                 <InlineCode key="c">/remote-pi devices</InlineCode>,
-                "List paired mobile devices (online/offline per device)",
+                "List paired browser PWA profiles (online/offline per profile)",
               ],
               [
                 <InlineCode key="c">/remote-pi revoke &lt;shortid&gt;</InlineCode>,
@@ -732,7 +732,7 @@ export default function DocsPage() {
             connected, no device paired yet
           </li>
           <li>
-            <InlineCode>📱 &lt;shortid&gt;</InlineCode> — a mobile device is
+            <InlineCode>📱 &lt;shortid&gt;</InlineCode> — a browser PWA profile is
             actively connected right now
           </li>
         </ul>
@@ -764,7 +764,7 @@ export default function DocsPage() {
             [
               <InlineCode key="p">~/.pi/remote/peers.json</InlineCode>,
               "Per-machine",
-              "Paired mobile devices",
+              "Paired browser PWA profiles",
             ],
             [
               <InlineCode key="p">~/.pi/remote/daemons.json</InlineCode>,
@@ -842,11 +842,11 @@ export default function DocsPage() {
             report a bug if it recurs).
           </p>
         </DocsSubsection>
-        <DocsSubsection id="timeout-mobile" title="Mobile app times out connecting">
+        <DocsSubsection id="timeout-pwa" title="Browser PWA times out connecting">
           <p>
             Verify the same relay URL is configured on both sides. If you
-            self-host behind a VPN, your phone must also be on the VPN
-            (Tailscale on iOS/Android works fine).
+            self-host behind a VPN, the browser device must also be on the VPN
+            (Tailscale works fine in the browser environment).
           </p>
         </DocsSubsection>
         <DocsSubsection id="timeout-request" title="Reply never arrives">

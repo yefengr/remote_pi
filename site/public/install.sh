@@ -15,7 +15,7 @@
 #   4. CLI link  — symlinks the `remote-pi` CLI into ~/.local/bin.
 #   5. Supervisor— installs the per-user service (launchd GUI agent on macOS,
 #                  `systemd --user` on Linux) via `remote-pi install`.
-#   6. Stops.    — does NOT pair. Prints the next step (pair your phone).
+#   6. Stops.    — does NOT pair. Prints the next step (open the browser PWA).
 #
 # OS support: macOS and native Linux. Windows is asked to use WSL and exits
 # cleanly. Re-running is a no-op once everything is in place.
@@ -372,17 +372,17 @@ print_next_steps() {
     printf '    %s\n' "$entry"
   done
   echo
-  printf '%s\n' "${BOLD}Next step — pair your phone:${RST}"
+  printf '%s\n' "${BOLD}Next step — open the Remote Pi PWA:${RST}"
   cat <<EOF
 
-    1. Install the ${BOLD}Remote Pi${RST} app on your phone.
+    1. Open ${BOLD}https://remote-pi.jacobmoura.work/app${RST} in a browser.
     2. In any terminal, open Pi and start Remote Pi:
 
          ${BOLD}pi${RST}
          ${BOLD}/remote-pi${RST}
 
        (the first run shows a short wizard, then prints a QR code)
-    3. Scan the QR with the app to pair.
+    3. Scan the QR with the browser PWA to pair.
 
     Manage the always-on daemon later with ${BOLD}remote-pi${RST} (now on your PATH).
     Docs: ${DIM}https://remote-pi.jacobmoura.work${RST}

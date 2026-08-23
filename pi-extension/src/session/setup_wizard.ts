@@ -30,7 +30,7 @@ const CANCEL_TOKEN = "__cancel__";
  * Prompts:
  *   1. Agent name (default: parent/folder of cwd)
  *   2. Use the relay on this terminal? (yes/no) — gates connection to the
- *      remote mesh (mobile devices + other PCs over the relay). "No" means
+ *      remote mesh (browser PWA + other PCs over the relay). "No" means
  *      local-only: this Pi joins the UDS mesh but doesn't open WSS.
  *   Final: review + confirm "Save and activate?" yes/no
  *
@@ -53,11 +53,11 @@ export async function runSetupWizard(
   if (agent_name === null) return null;
 
   ui.notify?.(
-    "The relay forwards encrypted messages to the Remote Pi mobile app and other PCs in your mesh. Skip this if you only want a local-only mesh on this machine.",
+    "The relay forwards encrypted messages to the Remote Pi browser PWA and other PCs in your mesh. Skip this if you only want a local-only mesh on this machine.",
     "info",
   );
   const useRelayChoice = await ui.select(
-    "Use the relay on this terminal to connect to the remote mesh (mobile + PCs)?",
+    "Use the relay on this terminal to connect to the remote mesh (PWA + PCs)?",
     defaults.use_relay ? [YES, NO] : [NO, YES],
   );
   if (!useRelayChoice) return null;

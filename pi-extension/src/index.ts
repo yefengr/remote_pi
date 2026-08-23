@@ -224,7 +224,7 @@ let _myRoomId: string | null = null;   // this Pi's room id (derived from cwd)
 // Quick Actions sheet hydrates the thinking segmented control on first
 // open instead of starting null. The SDK fires `thinking_level_select`
 // on every change (initial load + user toggle), mirrored to room_meta
-// the same way model is — apps subscribe to one channel for both.
+// the same way model is — connected clients subscribe to one channel for both.
 let _myRoomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel; working?: boolean } | null = null;
 let _currentModel: string | undefined = undefined;  // last-known model name
 let _currentThinking: ThinkingLevel | undefined = undefined;  // last-known thinking level
@@ -850,8 +850,8 @@ type PendingSteer = { id: string; text: string };
 let _pendingSteers: PendingSteer[] = [];
 let _lastConsumedSteerText: string | null = null;
 
-type AndroidQueuedItem = QueuedMessageItem & { editable: true };
-let _queuedItems: AndroidQueuedItem[] = [];
+type PwaQueuedItem = QueuedMessageItem & { editable: true };
+let _queuedItems: PwaQueuedItem[] = [];
 
 type MeshEnvelope = { id: string; from: string; re: string | null; body: unknown };
 let _pendingMeshMessages: MeshEnvelope[] = [];
@@ -881,7 +881,7 @@ function _resetQueuedItems({ broadcast = false }: { broadcast?: boolean } = {}):
   if (broadcast) _broadcastQueuedState();
 }
 
-function _upsertQueuedItem(item: AndroidQueuedItem): void {
+function _upsertQueuedItem(item: PwaQueuedItem): void {
   const index = _queuedItems.findIndex((existing) => existing.id === item.id);
   if (index === -1) {
     _queuedItems = [..._queuedItems, item];
@@ -945,7 +945,7 @@ function _maybeDrainQueuedItem(): void {
   const previousTurnId = _currentTurnId;
   _currentTurnId = item.id;
   const msg: ClientUserMessage = { type: "user_message", id: item.id, text: item.text };
-  const wake = _wakeAgent(item.text, `queued app user_message id=${item.id}`, "steer");
+  const wake = _wakeAgent(item.text, `queued PWA user_message id=${item.id}`, "steer");
   if (!wake.ok) {
     _currentTurnId = previousTurnId;
     _queuedItems = [item, ..._queuedItems];
@@ -1248,14 +1248,14 @@ function _detachPeerChannel(appPeerId: string): void {
 // ── Display-name helpers ──────────────────────────────────────────────────────
 
 /**
- * Resolves the name this Pi shows to the mobile app and the relay's
+ * Resolves the name this Pi shows to the browser PWA and the relay's
  * `room_meta.name`. Single source of truth for "what does this Pi call
  * itself when talking to others".
  *
  * Resolution order:
  *   1. Broker-assigned name (when this Pi is on the local UDS mesh) — may
  *      carry a `#N` suffix from a name collision. Matches what other
- *      agents see, so the mobile UI shows the exact same string.
+ *      agents see, so the browser PWA shows the exact same string.
  *   2. `agent_name` from `<cwd>/.pi/remote-pi/config.json` — set by the
  *      wizard on first run; this is "the name the user configured".
  *   3. `defaultAgentName(cwd)` (parent/folder) — fallback when no config
@@ -1350,7 +1350,7 @@ function _reportRevocationByFingerprint(canonicalOwnerPubkey: string): void {
     customType: "remote-pi:mesh-revoked",
     content:
       `🔒 Revoked by Owner ${fingerprint}…\n\n` +
-      `The mobile app for this Owner removed this PC from the mesh. ` +
+      `The browser PWA for this Owner removed this PC from the mesh. ` +
       `Re-pair via /remote-pi pair if this was unexpected.`,
     display: true,
   });
@@ -2104,7 +2104,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
 
   // Received-image preview entries are for local TUI display only. Pi's custom
   // messages normally become user-role LLM context, so strip this type before
-  // every provider request; the actual Android image still reaches the model via
+  // every provider request; the actual PWA image still reaches the model via
   // the paired sendUserMessage call.
   pi.on("context", (event) => ({
     messages: _filterInternalMessagesFromContext(event.messages),
@@ -2549,8 +2549,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   pi.registerCommand("remote-pi setup",    { description: "Run the setup wizard and update local config", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdSetup(ctx); } });
   pi.registerCommand("remote-pi status",   { description: "Show local mesh + relay status", handler: async (_, ctx) => { _lastCtx = ctx; _cmdStatus(ctx); } });
   pi.registerCommand("remote-pi stop",     { description: "Stop everything (leave local mesh + disconnect relay)", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdStop(ctx); } });
-  pi.registerCommand("remote-pi pair",     { description: "Show a QR code to pair a new mobile device (optional: --ttl <seconds>)", handler: async (args, ctx) => { _lastCtx = ctx; await _cmdPair(ctx, args.trim()); } });
-  pi.registerCommand("remote-pi devices",  { description: "List paired mobile devices", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdList(ctx); } });
+  pi.registerCommand("remote-pi pair",     { description: "Show a QR code to pair a browser PWA profile (optional: --ttl <seconds>)", handler: async (args, ctx) => { _lastCtx = ctx; await _cmdPair(ctx, args.trim()); } });
+  pi.registerCommand("remote-pi devices",  { description: "List paired browser PWA profiles", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdList(ctx); } });
   pi.registerCommand("remote-pi rename",  { description: "Rename this agent in the current session (updates mesh + relay room)", handler: async (args, ctx) => { _lastCtx = ctx; await _renameAgent(args.trim()); } });
   pi.registerCommand("remote-pi revoke", {
     description: "Revoke a paired device by its shortid",
@@ -2871,7 +2871,7 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
       // Issues #95/#69: this process can't reach the keyring that holds the
       // paired identity (classically a `systemd --user` daemon vs. the desktop
       // session that paired). Minting a fresh key here would make SelfRevoke
-      // wipe peers.json seconds later and take the phone offline, so storage
+      // wipe peers.json seconds later and take the paired PWA offline, so storage
       // refuses. Surface the actionable fix instead of failing silently.
       ctx.ui.notify(
         "[remote-pi] Could not read this machine's identity, but devices are " +
@@ -3118,7 +3118,7 @@ async function _cmdPair(ctx: Pick<ExtensionContext, "ui" | "cwd">, args = ""): P
   // on a fresh terminal forced the user to call `/remote-pi` first — every
   // session began with the same surprise warning + second command. Now we
   // do the join + relay-start inline so the common "I just opened a
-  // terminal and want to pair my phone" flow is a single command.
+  // terminal and want to pair the browser PWA" flow is a single command.
   //
   // We don't run the first-time wizard here: pair is a focused operation
   // and the wizard prompts are wrong UX in that flow. If there's no local
@@ -3136,7 +3136,7 @@ async function _cmdPair(ctx: Pick<ExtensionContext, "ui" | "cwd">, args = ""): P
     if (_state === "idle") await _cmdStart(ctx);
   }
 
-  // Relay must be up — the QR carries a token the app exchanges through
+  // Relay must be up — the QR carries a token the PWA exchanges through
   // the relay. Without a live WS there's nothing for the scan to land on.
   if (_state === "idle" || !_relay) {
     ctx.ui.notify(
@@ -3148,7 +3148,7 @@ async function _cmdPair(ctx: Pick<ExtensionContext, "ui" | "cwd">, args = ""): P
   }
 
   const edKp = _cachedEd25519!;
-  // Embed the user-configured name in the QR so the app shows it on the
+  // Embed the user-configured name in the QR so the PWA shows it on the
   // pairing screen before pair_ok lands (better UX than "remote" or a
   // raw path snippet).
   const sessionName = _displayName(cwd);
@@ -5208,7 +5208,7 @@ if (_isDirectRun()) {
     await _cmdCron(joined, stubCtx);
   } else if (subcmd === "peers") {
     // Read-only roster of the local + cross-PC mesh. Unlike `devices` (which
-    // reads paired phones from peers.json), the mesh roster lives only in the
+    // reads paired browser profiles from peers.json), the mesh roster lives only in the
     // running broker's memory, so we probe the UDS broker. The probe never
     // registers as a peer — it leaves no trace on the mesh (see
     // Broker._tryObserverProbe). Null = no broker reachable on this machine.
@@ -5265,7 +5265,7 @@ if (_isDirectRun()) {
       "  restart-supervisor              Restart the pi-supervisord process",
       "",
       "Devices:",
-      "  devices                         List paired phones (peers.json)",
+      "  devices                         List paired browser profiles (peers.json)",
       "  revoke <shortid>                Revoke a paired device",
       "",
       "Config:",

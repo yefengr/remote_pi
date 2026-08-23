@@ -66,7 +66,7 @@ function HeroMesh() {
   );
 }
 
-/* ---------- animated phone driving an agent ---------- */
+/* ---------- animated browser PWA driving an agent ---------- */
 type ChatItem =
   | { type: "user"; text: string }
   | { type: "tool"; kind: string; cmd: string }
@@ -146,7 +146,7 @@ function ToolCard({ kind, cmd }: { kind: string; cmd: string }) {
   );
 }
 
-function PhoneHero() {
+function PwaHero() {
   const [step, setStep] = useState(1);
   useEffect(() => {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
@@ -251,8 +251,8 @@ export function Hero() {
               in your <span className="pocket">pocket.</span>
             </h1>
             <p className="hero-sub">
-              Pair your phone once — then drive any agent, keep a fleet running
-              24/7, and link every machine into one mesh.
+              Open the browser PWA and pair it once — then drive any agent, keep
+              a fleet running 24/7, and link every machine into one mesh.
             </p>
             <div className="hero-cta">
               <a className="btn btn-primary" href="#install">
@@ -273,7 +273,7 @@ export function Hero() {
               <span>MIT licensed</span>
             </div>
           </div>
-          <PhoneHero />
+          <PwaHero />
         </div>
       </div>
     </section>

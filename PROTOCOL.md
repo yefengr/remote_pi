@@ -9,8 +9,8 @@ Atualizada em 2026-07-18.
 
 - **Mesh de agentes coding** rodando em múltiplos PCs do mesmo usuário
 - **Cada PC** roda o `pi-extension` (Node.js daemon) com **uma Pi-key** Ed25519 no Keychain do sistema (macOS/Linux/Windows)
-- **Celular** é o **autenticador inicial** (estilo WhatsApp Web QR) — depois do pareamento, PCs operam autonomamente entre si
-- **Owner-key** Ed25519 vive no Keychain do celular (iOS Keychain / Android Block Store), sincroniza entre devices do mesmo Apple ID / Google Account
+- **Browser PWA** é o **autenticador inicial** (estilo WhatsApp Web QR) — depois do pareamento, PCs operam autonomamente entre si
+- **Owner-key** Ed25519 vive no IndexedDB do perfil do navegador; cada perfil mantém sua própria identidade e pareamentos
 - **Relay** WebSocket roteia e armazena/verifica `mesh_versions` assinadas pelo Owner; autoriza co-membership direta
 - **Cross-PC routing** por Pi-key canônica no Relay; a Extension `0.6` mantém por uma release o prefixo wire legado para interoperar com Extensions antigas, sem substituir aliases receiver-local públicos
 
@@ -20,13 +20,12 @@ Atualizada em 2026-07-18.
 
 | Chave | Algoritmo | Onde mora | Quem cria | Quem usa |
 |---|---|---|---|---|
-| **Owner-key** | Ed25519 | iOS Keychain (sync iCloud) / Android Block Store (sync Google) | App mobile no 1º boot | Assina `mesh_versions`, prova autoridade pra parear/revogar PCs |
+| **Owner-key** | Ed25519 | IndexedDB do perfil do navegador | Browser PWA no 1º boot | Assina `mesh_versions`, prova autoridade pra parear/revogar PCs |
 | **Pi-key** | Ed25519 | `@napi-rs/keyring` no PC (Keychain macOS / libsecret Linux / Credential Manager Windows). Fallback `~/.pi/remote/identity.json` (`0600`) com warning em sistemas headless | pi-extension no 1º boot | Autentica a conexão WS no relay e fornece a identidade técnica canônica usada no `from_pc` autenticado e no roteamento por `to_pc`; não assina envelopes cross-PC individuais |
-| **App-key** | Ed25519 efêmera | RAM do app mobile | App por sessão de pareamento | Establishment de canal autenticado durante pair |
 
 **Identidade técnica** de cada Pi/PC é a chave pública Ed25519 bruta de 32 bytes. Nas fronteiras do protocolo, Pi-key e Owner-key usam Base64 RFC 4648 padrão **com padding** como representação canônica; entradas URL-safe ou sem padding podem ser aceitas apenas para normalização. Nicknames e aliases locais efetivos nunca substituem essa identidade técnica.
 
-**Constraint fixada**: "1 Pi-key por PC; troca de hardware = re-pareamento". Não há migração de Pi-key entre máquinas. Owner-key compensa (Owner sincroniza cross-device via Keychain do sistema).
+**Constraint fixada**: "1 Pi-key por PC; troca de hardware = re-pareamento". Não há migração de Pi-key entre máquinas. Cada perfil de navegador possui sua própria Owner-key e pode parear novamente outros PCs.
 
 ---
 
@@ -217,9 +216,9 @@ Detalhes em `plan/24-mesh-membership.md`.
 
 ---
 
-## App actions
+## PWA actions
 
-Vocabulário curado de ações tipadas que o app mobile invoca sobre a sessão do Pi pareado. **Não é** um picker genérico de slash commands — cada ação tem payload estruturado e mapeia pra uma API pública do SDK. Pi-extension lida; app não parseia nada.
+Vocabulário curado de ações tipadas que o browser PWA invoca sobre a sessão do Pi pareado. **Não é** um picker genérico de slash commands — cada ação tem payload estruturado e mapeia pra uma API pública do SDK. Pi-extension lida; PWA não parseia nada.
 
 | Action | ClientMessage | SDK call no pi-extension |
 |---|---|---|
@@ -274,7 +273,7 @@ Os replies (`action_ok` / `models_list`) só confirmam dispatch. Efeitos visíve
 
 ### Por que ações tipadas em vez de picker genérico
 
-O SDK `@mariozechner/pi-coding-agent` não expõe API genérica de invocação dos slash commands builtin (`/compact`, `/model`, `/fork`, `/copy`, etc.) — apenas alguns têm equivalente em `ExtensionContextActions`. Tentar espelhar o picker do TUI exigiria mirror manual da lista builtin + matriz de invocabilidade + UX de chip canonizado, com vários comandos sendo só hint informativo. Vocabulário tipado é mais simples, mais honesto, e cobre 100% das ações que fazem sentido em mobile. Padrão validado pelo adapter `pi-telegram` (mesmo abordagem: vocabulário curado, sem picker genérico).
+O SDK `@mariozechner/pi-coding-agent` não expõe API genérica de invocação dos slash commands builtin (`/compact`, `/model`, `/fork`, `/copy`, etc.) — apenas alguns têm equivalente em `ExtensionContextActions`. Tentar espelhar o picker do TUI exigiria mirror manual da lista builtin + matriz de invocabilidade + UX de chip canonizado, com vários comandos sendo só hint informativo. Vocabulário tipado é mais simples, mais honesto, e cobre 100% das ações que fazem sentido no browser. Padrão validado pelo adapter `pi-telegram` (mesmo abordagem: vocabulário curado, sem picker genérico).
 
 Detalhes em `plan/28-pi-commands.md`.
 
@@ -305,11 +304,11 @@ O Pi monta o content multimodal do SDK na ordem **imagem(ns) → texto**:
 
 ### Capacidade do modelo
 `WireModel` (em `models_list` / `current`) ganha `vision: boolean`, derivado de
-`Model.input.includes("image")`. O app desabilita o anexo quando o modelo ativo
+`Model.input.includes("image")`. O PWA desabilita o anexo quando o modelo ativo
 tem `vision:false`.
 
 ### Transporte
-A imagem vai **inline** na `user_message` (base64), dentro do `ct` atual: no caminho App↔Pi ele pode ser encaminhado sem parse, mas é Base64 de JSON em claro, não ciphertext/E2E, e o operador do relay pode lê-lo. Custo: double-base64 (~+77%),
+A imagem vai **inline** na `user_message` (base64), dentro do `ct` atual: no caminho PWA↔Pi ele pode ser encaminhado sem parse, mas é Base64 de JSON em claro, não ciphertext/E2E, e o operador do relay pode lê-lo. Custo: double-base64 (~+77%),
 aceito nesta fatia por usar imagem comprimida (~150–400 KB). Histórico/
 `session_sync` trafega os bytes (decisão #8). Canal binário fica pra Trilha 2.
 
@@ -317,20 +316,20 @@ aceito nesta fatia por usar imagem comprimida (~150–400 KB). Histórico/
 
 ## Mensagem enfileirada durante turn ativo
 
-Fila curta **Pi-side, em memória**, de propriedade do Android: enquanto há turn
-ativo, o app pode guardar próximos prompts textuais de follow-up. A
+Fila curta **Pi-side, em memória**, de propriedade do PWA: enquanto há turn
+ativo, o browser pode guardar próximos prompts textuais de follow-up. A
 Pi-extension drena um item quando o turn atual acaba. Não é fila offline do
 relay; restart perde o estado.
 
 ### Wire
 
 ```jsonc
-// app → Pi-extension
+// PWA → Pi-extension
 { "type": "queued_message_set", "id": "msg-2", "text": "próximo prompt" }
 { "type": "queued_message_clear", "id": "clear-1", "target_id": "msg-2" }
 { "type": "queued_message_clear", "id": "clear-all" }
 
-// Pi-extension → app(s)
+// Pi-extension → PWA(s)
 {
   "type": "queued_message_state",
   "id": "msg-2",
@@ -344,10 +343,10 @@ relay; restart perde o estado.
 
 ### Semântica
 
-- `queued_message_set`: cria/substitui uma pendência textual Android-owned. `id`
+- `queued_message_set`: cria/substitui uma pendência textual PWA-owned. `id`
   vira o id do `user_message` drenado.
 - `queued_message_clear.target_id`: cancela um item. Sem `target_id`, cancela
-  todos os itens Android-owned (compat com o antigo clear de slot único).
+  todos os itens PWA-owned (compat com o antigo clear de slot único).
 - Enquanto o Pi está ocupado, cada mudança broadcasta o estado completo para
   todos os owners conectados.
 - Se `queued_message_set` chega quando o Pi já está idle, a extensão drena
@@ -368,10 +367,10 @@ relay; restart perde o estado.
 
 QR code mostra Pi-pubkey + room hint + token de uso único.
 
-1. App escaneia QR, conecta no relay como peer efêmero
-2. App envia `pair_request` assinado com **Owner-sk** (prova autoridade)
-3. Pi-extension valida assinatura, adiciona App-key na sua `peers.json` local
-4. App adiciona Pi-pubkey no seu `mesh_versions` local + publica versão nova no relay
+1. PWA escaneia QR, conecta no relay como peer do perfil do navegador
+2. PWA envia `pair_request` autenticado com a **Owner-key** (prova autoridade)
+3. Pi-extension valida a sessão autenticada e adiciona o Owner na sua `peers.json` local
+4. PWA adiciona Pi-pubkey no seu `mesh_versions` local + publica versão nova no relay
 5. Pi-extension passa a aceitar mensagens daquele Owner
 
 Múltiplos Owners podem parear o mesmo PC (concomitância — `peers.json` aceita N entries).
@@ -390,12 +389,12 @@ Detalhes em `plan/04-pairing.md`.
 - **Anti-spoof entre Pis**: broker aceita somente `from_pc` canônico autenticado que exista entre irmãos diretos e renderiza seu alias local
 - **Anti-rollback de membership em processo**: versão monotônica + assinatura rejeita regressão durante a vida da instância. O floor da Extension reinicia com o processo; `issued_at` é informativo e memberships não expiram. Persistência anti-rollback entre reinícios não é implementada
 - **Pi-secret protegida**: Keychain do sistema (macOS Keychain / libsecret Linux desktop / Credential Manager Windows). Atacante precisa contexto do user logado E unlock do Keychain
-- **Owner-secret protegida**: iOS Keychain / Android Block Store, sincroniza via iCloud/Google account; recuperável trocando de device
+- **Owner-secret protegida**: seed permanece no IndexedDB do perfil do navegador; limpar os dados do site remove a identidade e exige novo pareamento
 
 ### O que NÃO está protegido (declarado honestamente)
 
-- **Relay vê plaintext do conteúdo atual**. TLS protege o trânsito, mas App↔Pi usa `ct` como Base64 de JSON em claro (pode ser encaminhado sem parse, não é ciphertext), e conteúdo Pi↔Pi, controle/routing/erros e membership assinada são parseados em memória pelo relay conforme necessário. Operador vê quem manda para quem e o conteúdo. Mitigação: **self-hosting** do relay (open source)
-- **Não há E2E** entre app e pi-extension nem entre Pis cross-PC. **Não afirmamos E2E em copy nenhuma do produto**
+- **Relay vê plaintext do conteúdo atual**. TLS protege o trânsito, mas PWA↔Pi usa `ct` como Base64 de JSON em claro (pode ser encaminhado sem parse, não é ciphertext), e conteúdo Pi↔Pi, controle/routing/erros e membership assinada são parseados em memória pelo relay conforme necessário. Operador vê quem manda para quem e o conteúdo. Mitigação: **self-hosting** do relay (open source)
+- **Não há E2E** entre PWA e pi-extension nem entre Pis cross-PC. **Não afirmamos E2E em copy nenhuma do produto**
 - **Headless Linux** (Docker, VPS sem D-Bus session): Pi-key cai pra arquivo `0600` em disco com warning loud. Atacante com acesso ao user pode ler. Recomenda-se GNOME Keyring / KWallet pra hardening real
 - **Backup encriptado completo** (Time Machine, iCloud Drive criptografado etc) pode carregar a Keychain. Atacante precisa do user passphrase do backup
 - **Clone detection ainda não implementado**: 2 PCs com mesma Pi-key (via cópia de arquivo headless ou comprometimento) podem coexistir no relay sem alerta. Em roadmap (plan/27 Wave E3)
@@ -435,7 +434,7 @@ Curto prazo:
 
 Médio prazo:
 - **Wrappers de harness** (`remote-pi claude`, `remote-pi opencode`): outros agentes coding plugam no broker UDS local via wrapper, ganham mesh sem reimplementar protocolo
-- E2E cifragem do payload (Curve25519 + ChaCha20-Poly1305 entre App ↔ Pi; opcional cross-PC)
+- E2E cifragem do payload (Curve25519 + ChaCha20-Poly1305 entre PWA ↔ Pi; opcional cross-PC)
 
 Longo prazo:
 - PC-to-PC direto via WebRTC/QUIC (relay vira fallback)
@@ -447,7 +446,7 @@ Longo prazo:
 
 - **Relay** (Rust, axum): [`relay/src/`](relay/src/)
 - **Pi-extension** (Node/TS): [`pi-extension/src/`](pi-extension/src/)
-- **App mobile** (Flutter): [`app/lib/`](app/lib/)
+- **Browser PWA** (Next/TS): [`site/src/app/app/`](site/src/app/app/)
 - **Planos arquiteturais**: [`plan/`](plan/) (especialmente `plan/03-protocol.md`, `plan/23-owner-key-sync.md`, `plan/24-mesh-membership.md`, `plan/25-pc-mesh-bootstrap.md`)
 
 ---

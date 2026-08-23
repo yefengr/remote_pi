@@ -19,7 +19,7 @@ export interface LocalConfig {
    * If true (default), `/remote-pi` with no args auto-joins the local UDS
    * mesh and starts the relay on a fresh terminal. The field name is
    * historical (plano 21); the UX wording was reworked to "use the relay
-   * on this terminal to connect to the remote mesh (mobile + PCs)". Legacy
+   * on this terminal to connect to the remote mesh (PWA + PCs)". Legacy
    * configs without this field are treated as `true` for backward compat.
    */
   auto_start_relay?: boolean;

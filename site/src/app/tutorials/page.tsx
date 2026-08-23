@@ -6,7 +6,7 @@ import { RevealController } from "@/components/landing/reveal-controller";
 export const metadata: Metadata = {
   title: "Tutorials",
   description:
-    "Hands-on guides for Remote Pi: get started with the app, run a local mesh, route across PCs, and keep an agent alive 24/7.",
+    "Hands-on guides for Remote Pi: get started with the browser PWA, run a local mesh, route across PCs, and keep an agent alive 24/7.",
 };
 
 type Step = {
@@ -24,7 +24,7 @@ const STEPS: Step[] = [
     tag: "01 / 04",
     title: "Getting started",
     href: "/tutorials/getting-started",
-    desc: "Install Remote Pi, pair your phone, and drive your first agent from the app.",
+    desc: "Install Remote Pi, open the browser PWA, pair it, and drive your first agent.",
   },
   {
     n: "2",
@@ -55,7 +55,7 @@ const EXTRAS: Step[] = [
     tag: "extra",
     title: "Claude in the mesh",
     href: "/tutorials/claude-mesh",
-    desc: "Put Claude Code on the agent mesh next to Pi — advanced, terminal-only (not in the app yet).",
+    desc: "Put Claude Code on the agent mesh next to Pi — advanced, terminal-only (not in the browser PWA yet).",
   },
 ];
 

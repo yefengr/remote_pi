@@ -11,7 +11,7 @@
 //
 // This module subscribes to those events and translates them into the SDK's
 // extension_ui_request/response wire shapes (mirrored from
-// `pi --mode rpc`'s RpcExtensionUIRequest/Response) so the mobile app renders
+// `pi --mode rpc`'s RpcExtensionUIRequest/Response) so the browser PWA renders
 // ask_user natively. pi-ask's richer schema rides in an optional `ask` envelope.
 //
 // Inert when pi-ask is absent: no events fire, nothing breaks. ask_user without
@@ -60,9 +60,9 @@ export interface ExtensionUiBridge {
    *
    * The `started` broadcast fires exactly once. A peer that connects *after*
    * a flow opened never saw it: history replayed, but the interactive frame
-   * did not, so the phone showed the ask_user tool call as plain text while
+   * did not, so the browser PWA showed the ask_user tool call as plain text while
    * the desktop sat blocked on the TUI dialog. Replaying on sync closes that
-   * hole — the common real-world case is the agent asking while the app is
+   * hole — the common real-world case is the agent asking while the PWA is
    * closed.
    */
   pendingRequests(): ServerMessage[];

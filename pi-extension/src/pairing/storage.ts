@@ -303,7 +303,7 @@ async function _writeKeypairToFile(kp: Ed25519Keypair): Promise<void> {
  *      the keyring. A file identity is only ever written by the headless/
  *      degraded fallback (step 4) or an explicit `REMOTE_PI_ALLOW_FILE_IDENTITY`
  *      opt-in, so its mere presence means this machine established its identity
- *      as a file and the mobile device paired against THAT pubkey. If the
+ *      as a file and the browser PWA paired against THAT pubkey. If the
  *      platform keyring later becomes readable (D-Bus/libsecret installed, a
  *      desktop session, or a stale/other entry from another install), reading
  *      it first would mask the file identity — returning a DIFFERENT key, or
@@ -409,7 +409,7 @@ export async function getOrCreateEd25519Keypair(): Promise<Ed25519Keypair> {
   // store than the desktop session that ran the pairing, so the keyring read
   // fails, this path mints a fresh Ed25519 key, and the SelfRevoke poller then
   // finds that key absent from the relay-side owner envelope, concludes it was
-  // revoked, and wipes `peers.json` — the phone silently goes offline a few
+  // revoked, and wipes `peers.json` — the browser PWA silently goes offline a few
   // seconds after every `daemon start`. `peers.json` being non-empty is proof
   // that a working identity existed, so "no key found" here is a broken
   // environment, not a first run. Fail loud and keep the pairing intact; the

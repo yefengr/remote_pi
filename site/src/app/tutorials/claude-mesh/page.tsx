@@ -9,7 +9,7 @@ import { RevealController } from "@/components/landing/reveal-controller";
 export const metadata: Metadata = {
   title: "Claude in the mesh",
   description:
-    "Advanced extra: remote-pi claude puts Claude Code on the agent mesh as a named peer next to Pi — agent-to-agent, driven from the terminal. Not in the app yet.",
+    "Advanced extra: remote-pi claude puts Claude Code on the agent mesh as a named peer next to Pi — agent-to-agent, driven from the terminal. Not surfaced in the browser PWA yet."
 };
 
 export default function ClaudeMeshTutorial() {
@@ -21,7 +21,7 @@ export default function ClaudeMeshTutorial() {
             <header className="page-head reveal" style={{ maxWidth: "none" }}>
               <div className="flex flex-wrap items-center gap-3">
                 <span className="inline-flex items-center rounded-full border border-accent/40 bg-accent/15 px-3 py-1 text-xs font-semibold uppercase tracking-[0.15em] text-accent">
-                  Extra · terminal only — no app yet
+                  Extra · terminal only — not in the browser PWA yet
                 </span>
               </div>
               <span className="eyebrow" style={{ marginTop: 14 }}>
@@ -35,7 +35,7 @@ export default function ClaudeMeshTutorial() {
                 through the relay, across PCs. This is an advanced,
                 agent-to-agent setup driven entirely from the terminal. It is{" "}
                 <strong className="text-fg">
-                  not surfaced in the mobile app yet
+                  not surfaced in the browser PWA yet
                 </strong>{" "}
                 — see <a href="#no-app">why</a> at the end.
               </p>
@@ -233,14 +233,14 @@ Agent name [api]: reviewer`}
           </p>
         </DocsSection>
 
-        <DocsSection id="no-app" title="Why this isn't in the app yet">
+        <DocsSection id="no-app" title="Why this isn't in the browser PWA yet">
           <p>
-            The mobile app talks to the{" "}
+            The browser PWA talks to the{" "}
             <strong className="text-fg">relay</strong>, and it sees only the Pi
             agent that paired it. It does not see local UDS peers — like a Claude
             joined with <InlineCode>remote-pi claude</InlineCode> — so a
-            mesh-mate Claude won&apos;t show up in your phone. Surfacing the full
-            mesh in the app is future work; for now this is a terminal-driven,
+            mesh-mate Claude won&apos;t show up in the browser PWA. Surfacing the
+            full mesh in the PWA is future work; for now this is a terminal-driven,
             agent-to-agent feature. Relay traffic, where it&apos;s used, is
             encrypted in transit.
           </p>

@@ -148,14 +148,6 @@ export function IconGithub() {
   );
 }
 
-export function IconApple() {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <path d="M16.37 12.78c-.02-2.13 1.74-3.15 1.82-3.2-.99-1.45-2.54-1.65-3.09-1.67-1.32-.13-2.57.77-3.24.77-.66 0-1.69-.75-2.78-.73-1.43.02-2.75.83-3.48 2.11-1.48 2.57-.38 6.38 1.06 8.47.7 1.02 1.54 2.17 2.64 2.13 1.06-.04 1.46-.69 2.74-.69 1.28 0 1.64.69 2.76.66 1.14-.02 1.86-1.04 2.56-2.07.81-1.19 1.14-2.34 1.16-2.4-.03-.01-2.22-.85-2.24-3.38ZM14.3 6.25c.58-.71.98-1.69.87-2.67-.84.03-1.86.56-2.47 1.26-.54.62-1.01 1.62-.89 2.57.94.08 1.9-.47 2.49-1.16Z" />
-    </svg>
-  );
-}
-
 /* Windows — classic four-pane flag */
 export function IconWindows() {
   return (
@@ -170,38 +162,6 @@ export function IconLinux() {
   return (
     <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
       <path d="M12 2.4c-2.1 0-3.5 1.7-3.5 4 0 .9.1 1.7.1 2.5 0 1-.7 1.7-1.6 3C6.1 13.2 5.2 14.4 5.2 15.8c0 .7.4 1.2 1.1 1.4-.1.3-.2.6-.2.9 0 1.4 2.6 2 5.9 2s5.9-.6 5.9-2c0-.3-.1-.6-.2-.9.7-.2 1.1-.7 1.1-1.4 0-1.4-.9-2.6-1.8-3.9-.9-1.3-1.6-2-1.6-3 0-.8.1-1.6.1-2.5 0-2.3-1.4-4-3.5-4Zm-1.6 3.2c.5 0 .9.5.9 1.1s-.4 1.1-.9 1.1-.9-.5-.9-1.1.4-1.1.9-1.1Zm3.2 0c.5 0 .9.5.9 1.1s-.4 1.1-.9 1.1-.9-.5-.9-1.1.4-1.1.9-1.1Z" />
-    </svg>
-  );
-}
-
-/* Android — robot front, line style */
-export function IconAndroid() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={S}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M7 4.5 5.5 2.8M17 4.5l1.5-1.7" opacity=".7" />
-      <path d="M5.5 11a6.5 6.5 0 0 1 13 0" />
-      <path d="M5.5 11h13v6a1.5 1.5 0 0 1-1.5 1.5H7A1.5 1.5 0 0 1 5.5 17v-6Z" />
-      <path d="M9 8h.01M15 8h.01" />
-      <path d="M8.7 18.5V21M15.3 18.5V21" opacity=".7" />
-    </svg>
-  );
-}
-
-export function IconPlay() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M3.6 2.3 13.5 12 3.6 21.7c-.36-.18-.6-.55-.6-1V3.3c0-.45.24-.82.6-1Z" fill="#4fc3f7" />
-      <path d="m16.8 8.7 3.1 1.7c.8.45.8 1.35 0 1.8l-3.1 1.7L13.5 12l3.3-3.3Z" fill="#4fc3f7" opacity=".8" />
-      <path d="M3.6 2.3 13.5 12l-3.3 3.3L3.6 2.3Z" fill="#4fc3f7" opacity=".5" />
-      <path d="M3.6 21.7 13.5 12l-3.3-3.3L3.6 21.7Z" fill="#4fc3f7" opacity=".65" />
     </svg>
   );
 }

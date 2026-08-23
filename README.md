@@ -5,8 +5,8 @@
 <h1 align="center">Remote Pi</h1>
 
 <p align="center">
-  Control your <a href="https://github.com/earendil-works/pi">Pi coding agent</a> from your phone.
-  Pair with a one-time QR code and chat with your local agent — even when you're away from your computer.
+  Control your <a href="https://github.com/earendil-works/pi">Pi coding agent</a> from a browser.
+  Open the Remote Pi PWA, pair with a one-time QR code, and chat with your local agent — even when you're away from your computer.
 </p>
 
 ---
@@ -17,37 +17,32 @@
 - **Package documentation** — <https://pi.dev/packages/remote-pi?name=remote-pi>
 - **GitHub** — <https://github.com/jacobaraujo7/remote_pi>
 
-### Downloads
+### Browser app
 
-| Platform | Status |
-|---|---|
-| Google Play (Android) | [Get it on Google Play](https://play.google.com/store/apps/details?id=work.jacobmoura.remotepi) |
-| App Store (iOS) | [Download on the App Store](https://apps.apple.com/app/remote-pi-coding-agent/id6773499691) |
-| APK (sideload, Android) | [GitHub Releases](https://github.com/jacobaraujo7/remote_pi/releases) |
+Open the [Remote Pi PWA](https://remote-pi.jacobmoura.work/app) in a modern browser. It can be installed as a standalone app and keeps pairing records in the browser profile.
 
 ## What's in this repo
 
 | Package | Stack | Role |
 |---|---|---|
-| [`app/`](./app) | Flutter (iOS / Android) | Mobile client |
-| [`pi-extension/`](./pi-extension) | Node + TypeScript | Pi extension exposing `/remote-pi` |
-| [`relay/`](./relay) | Rust + Tokio | WebSocket routing + signed mesh membership storage |
-| [`site/`](./site) | NextJS | Landing page + legal pages |
+| [`pi-extension/`](./pi-extension) | Node + TypeScript | Pi extension exposing `/remote-pi`, Daemon, and Agent Mesh |
+| [`relay/`](./relay) | Rust + Tokio | WebSocket routing, Rooms, and signed mesh membership storage |
+| [`site/`](./site) | NextJS | Landing page, docs, legal pages, and PWA |
 
 ## Architecture
 
 ```
-Flutter app ──wss──► Relay (Rust) ◄──wss── Pi extension (Node)
-                                                  │
-                                           Local Pi process
-                                                  │
-                                           UDS broker (local mesh)
-                                                  │
-                                           Other agents on the same machine
+Browser PWA ──wss──► Relay (Rust) ◄──wss── Pi extension (Node)
+                                              │                 │
+                                   Rooms + cross-PC mesh   Pi process
+                                                                │
+                                                         UDS broker
+                                                                │
+                                                        Other agents
 ```
 
-- **Pairing** via short-lived QR code; peers persisted in Keychain (mobile) and `~/.pi/remote/` (desktop)
-- **Ed25519 authentication** — the Relay handshake proves possession of the connection key; App↔Pi pairing is enforced by the endpoints. For Pi↔Pi routing, the current Relay permits a route when a correctly signed Owner blob lists both Pi keys; that check does not prove the Owner paired with or controls either Pi
+- **Pairing** via short-lived QR code; the PWA stores its Owner identity and pairing records in the browser profile, while the extension persists host state in `~/.pi/remote/`
+- **Ed25519 authentication** — the Relay handshake proves possession of the connection key; PWA↔Pi pairing is enforced by the endpoints. For Pi↔Pi routing, the current Relay permits a route when a correctly signed Owner blob lists both Pi keys; that check does not prove the Owner paired with or controls either Pi
 - **TLS protects traffic in transit**, but current payloads are not E2E; see [`relay/README.md`](./relay/README.md) for the exact trust boundary
 
 ## Local agent mesh
@@ -65,8 +60,8 @@ Three LLM-facing tools are exposed in the Pi chat:
 - `agent_request` — request/response with timeout, available only as deprecated legacy behavior
 
 This lets you set up local multi-agent workflows (e.g. a `backend` agent asks a
-`frontend` agent for help) entirely on your machine, in parallel with the remote
-mobile pairing.
+`frontend` agent for help) entirely on your machine, in parallel with PWA remote
+control.
 
 ## Relay
 
@@ -99,7 +94,8 @@ Then in the Pi chat, run:
 ```
 
 The setup wizard walks you through agent name, session name, and relay choice,
-then prints a QR code. Scan it with the Remote Pi mobile app and you're paired.
+then prints a QR code. Open the [Remote Pi PWA](https://remote-pi.jacobmoura.work/app),
+scan it, and you're paired.
 
 ### Recommended companion: `@eko24ive/pi-ask`
 
@@ -108,10 +104,10 @@ pi install npm:@eko24ive/pi-ask
 ```
 
 With pi-ask installed, the agent's `ask_user` clarification prompts (structured
-questions with options, multi-select, and previews) render natively in the
-mobile app — answer from your phone and the flow resolves on the desktop.
-Without it, the agent simply asks in plain chat text (also answerable from the
-phone, just unstructured). Remote Pi works either way; pi-ask is optional.
+questions with options, multi-select, and previews) render in the PWA — answer
+from your browser and the flow resolves on the desktop. Without it, the agent
+simply asks in plain chat text (also answerable from the browser, just
+unstructured). Remote Pi works either way; pi-ask is optional.
 
 ## Status
 

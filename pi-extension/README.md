@@ -5,8 +5,8 @@
 <h1 align="center">Remote Pi</h1>
 
 > Extend the [Pi coding agent](https://github.com/earendil-works/pi) with two
-> superpowers: agents that talk to each other on the same machine, and a mobile
-> app that drives Pi from your phone.
+> superpowers: agents that talk to each other on the same machine, and a browser
+> PWA that drives Pi remotely.
 
 **Homepage:** <https://remote-pi.jacobmoura.work>
 
@@ -102,12 +102,12 @@ The first agent to enter a session becomes the *leader* (hosts the broker);
 the rest are *followers*. If the leader exits, a follower automatically takes
 over — the failover is invisible to the LLMs.
 
-### 2) Mobile app (over the relay)
+### 2) Browser PWA (over the relay)
 
-The companion mobile app lets you send prompts to Pi and read its responses
-from your phone. The phone and the Pi process find each other through a
-**relay**: a small WebSocket server that ferries messages between them.
-Pairing is one-time and per device, via QR code.
+The companion browser PWA lets you send prompts to Pi and read its responses
+from any modern browser. The browser and the Pi process find each other through
+a **relay**: a small WebSocket server that ferries messages between them.
+Pairing is one-time per browser profile, via QR code.
 
 Communication uses WebSocket over TLS to the relay. Fields such as `ct` are
 wire containers, not a systemwide end-to-end confidentiality guarantee: current
@@ -116,18 +116,17 @@ fully opaque or E2E encrypted. A relay operator can see routed plaintext
 protocol content and metadata; see [`PROTOCOL.md`](../PROTOCOL.md) for the exact
 trust boundaries.
 
-**Get the app** — all current download options (Google Play, App Store, and
-direct builds while public releases roll out):
+**Open the PWA** — use the browser workspace at:
 
-<https://remote-pi.jacobmoura.work/#get-the-app>
+<https://remote-pi.jacobmoura.work/app>
 
 ---
 
-## Mobile app actions
+## PWA actions
 
-Beyond the chat, the app surfaces a small set of typed actions you can run
-on the paired Pi session. Tap the ⚙ button next to the message input (visible
-when the input is empty) to open the Quick Actions sheet:
+Beyond the chat, the PWA surfaces a small set of typed actions you can run
+on the paired Pi session. Open the actions control next to the message input
+when the input is empty to open the Quick Actions sheet:
 
 | Action | What it does |
 |---|---|
@@ -136,30 +135,30 @@ when the input is empty) to open the Quick Actions sheet:
 | **Model** | Opens a model picker fed by your authenticated providers (same source the TUI uses) and switches via `pi.setModel(model)`. |
 | **Thinking** | Segmented control with the 6 SDK levels (`off` · `minimal` · `low` · `medium` · `high` · `xhigh`). Changes via `pi.setThinkingLevel(level)`. |
 
-Each action gets a structured `action_ok` / `action_error` reply so the app
-can show a SnackBar on failure. Visible side-effects (chat output, model
+Each action gets a structured `action_ok` / `action_error` reply so the PWA
+can show an inline error on failure. Visible side-effects (chat output, model
 change broadcasts, compaction notice) still flow through the normal chat
 channels. The wire schema is documented in [`PROTOCOL.md`](../PROTOCOL.md)
 under "App actions".
 
 It is **not** a generic slash-command picker. The Pi SDK does not expose
 programmatic invocation for most builtins (those live in the TUI's
-interactive loop), so the app exposes only the actions that have a clean
+interactive loop), so the PWA exposes only the actions that have a clean
 SDK call. The [`pi-telegram`](https://github.com/llblab/pi-telegram) adapter
 follows the same pattern.
 
 ### Images
 
-The app can attach **one image** (camera or gallery) to a message. It's
-compressed on the device and rides **inline** in the `user_message` — the
+The PWA can attach **one image** from the browser to a message. It's
+compressed client-side and rides **inline** in the `user_message` — the
 optional `images` field carries `{ data: <base64>, mime }`. The pi-extension
 turns it into the SDK's multimodal content (an `ImageContent` followed by the
 caption `TextContent`) and calls `sendUserMessage(content)`, so the model sees
 the picture plus your text.
 
 Whether a model accepts images is surfaced as a `vision` flag on each
-`WireModel` (derived from the SDK's `Model.input` including `"image"`); the app
-greys out the attach button when the active model is text-only.
+`WireModel` (derived from the SDK's `Model.input` including `"image"`); the PWA
+disables the attach button when the active model is text-only.
 
 The **relay is unchanged** — the image travels inside the same application
 message container as the text, so there's no binary channel (large files are a
@@ -215,15 +214,15 @@ The wizard asks three questions:
    an address from this name. Defaults to the directory name.
 2. **Default session** — the name of the agent-network room for this
    directory. Multiple terminals in the same directory join the same session.
-3. **Auto-start relay (for mobile app access)?** — `Yes` if you want
-   `/remote-pi` to also connect to the relay so the mobile app can reach this
-   Pi. `No` for local-only use (agent network without mobile access).
+3. **Auto-start relay (for PWA access)?** — `Yes` if you want
+   `/remote-pi` to also connect to the relay so the browser PWA can reach this
+   Pi. `No` for local-only use (agent network without remote access).
 
 Re-run the wizard later with `/remote-pi setup`.
 
 ---
 
-## Pairing a mobile device
+## Pairing the browser PWA
 
 Once the relay is up (`/remote-pi relay status` shows `started` or `paired`):
 
@@ -231,9 +230,9 @@ Once the relay is up (`/remote-pi relay status` shows `started` or `paired`):
 /remote-pi pair
 ```
 
-A QR code is printed in the terminal. Scan it with the Remote Pi mobile app.
-Pairing is **per machine** — once a device is paired, every Pi process on
-this machine accepts it (it lives in `~/.pi/remote/peers.json`).
+A QR code is printed in the terminal. Open the Remote Pi PWA and scan it.
+Pairing is **per machine** — once a browser profile is paired, every Pi process
+on this machine accepts it (the host record lives in `~/.pi/remote/peers.json`).
 
 To list paired devices:
 
@@ -311,7 +310,7 @@ docker run -d \
 ```
 
 Bind the container to your VPN interface, terminate TLS in a reverse proxy,
-and point both your Pi and your phone at the resulting `https://…` URL.
+and point both your Pi and the browser PWA at the resulting `https://…` URL.
 
 ### Pointing Pi at your own relay
 
@@ -323,7 +322,7 @@ Once your relay is reachable, tell the extension:
 
 The URL **must** be `http://` or `https://` — `ws://` / `wss://` are
 rejected at validation. The extension converts to WebSocket internally when
-it opens the connection. Same canonical form for the mobile app and any
+it opens the connection. Use the same canonical URL in the PWA and any
 self-hosting docs: paste the URL your reverse proxy exposes.
 
 This writes `~/.pi/remote/config.json` with `{ "relay": "..." }`. Resolution
@@ -342,7 +341,7 @@ Verify the active URL and its source with:
 If you change the URL while connected, run `/remote-pi relay stop` then
 `/remote-pi relay start` (or `/remote-pi relay` to toggle).
 
-The mobile app has its own relay-URL setting in its preferences pane — keep
+The PWA has its own relay-URL setting in the workspace preferences — keep
 both pointing at the same relay.
 
 ---
@@ -416,8 +415,8 @@ real name to the peer.
 | `/remote-pi setup` | Run the setup wizard and update local config |
 | `/remote-pi status` | Show local mesh + relay status |
 | `/remote-pi stop` | Stop everything for **this** terminal (mesh + relay) |
-| `/remote-pi pair` | Show QR code + copy-paste pairing URI for a new mobile device |
-| `/remote-pi devices` | List paired mobile devices (online/offline per device) |
+| `/remote-pi pair` | Show QR code + copy-paste pairing URI for a browser PWA profile |
+| `/remote-pi devices` | List paired browser PWA profiles (online/offline per profile) |
 | `/remote-pi revoke <shortid>` | Revoke a paired device by its shortid |
 | `/remote-pi set-relay <url>` | Persist a new relay URL (http:// or https://) |
 | `/remote-pi relay [start\|stop\|status]` | Relay-only control — leaves local mesh membership untouched (no verb = toggle) |
@@ -453,7 +452,7 @@ globally (`npm install -g remote-pi`).
 
 `remote-pi cron` schedules **recurring prompts** to daemons through the
 supervisor — e.g. a daily "summarise new PRs". Output flows fire-and-forget to
-the mesh/app like any prompt; the cron layer only audits the dispatch.
+the mesh/PWA like any prompt; the cron layer only audits the dispatch.
 
 - **Schedule** is a cron expression (croner syntax; an optional 6th *seconds*
   field is supported), with an optional IANA timezone via `--tz`:
@@ -481,7 +480,7 @@ Step-by-step walkthrough: the [daemon tutorial](https://remote-pi.jacobmoura.wor
 - `📡 local (N)` — current agent session and peer count (local mesh)
 - `🟢 relay` — relay connected, at least one device paired (globally)
 - `🟡 relay waiting for pairing` — relay connected, no device paired yet
-- `📱 <shortid>` — a mobile device is actively connected right now
+- `📱 <shortid>` — a browser PWA profile is actively connected right now
 
 Window title: `<agent-name> · On` when relay is up, `<agent-name> · Off`
 otherwise. Tells your terminals apart at a glance in `cmux`/`tmux`/iTerm
@@ -492,7 +491,7 @@ tabs.
 ## Daemon mode
 
 When you want a Pi to keep running in the background (responding to
-mobile prompts at 3am, processing cron jobs, monitoring a folder while
+PWA prompts at 3am, processing cron jobs, monitoring a folder while
 you're not at the keyboard), promote it to a **daemon** managed by a
 single OS-level supervisor.
 
@@ -549,8 +548,8 @@ remote-pi daemon restart           # restart all
 
 The agent receives the prompt as if a user typed it; its response flows
 back through the relay/mesh you configured during interactive setup —
-mobile app sees it live, other agents on the same machine can see it
-via the local UDS mesh.
+PWA sees it live, other agents on the same machine can see it via the local
+UDS mesh.
 
 ### Removing or uninstalling
 
@@ -596,7 +595,7 @@ with a `[<cwd>]` prefix, so a single log stream shows every agent.
 |---|---|---|
 | `<cwd>/.pi/remote-pi/config.json` | Per-directory | `agent_name`, `session_name`, `auto_start_relay` |
 | `~/.pi/remote/config.json` | Per-user | `relay` URL |
-| `~/.pi/remote/peers.json` | Per-machine | Paired mobile devices |
+| `~/.pi/remote/peers.json` | Per-machine | Paired PWA browser profiles |
 | `~/.pi/remote/sessions/<name>/` | Per-session | Broker socket + `audit.jsonl` |
 | `~/.pi/remote/skills/agent-network/SKILL.md` | Per-user | Agent skill the LLM reads |
 
@@ -616,9 +615,9 @@ whether one is connected right now. If you really have a paired device in
 `/remote-pi devices`, restart Pi — the cache may be stale (fixed in current
 release; report a bug if it recurs).
 
-**Mobile app times out connecting.** Verify the same relay URL is configured
-on both sides. If you self-host behind a VPN, your phone must also be on the
-VPN (Tailscale on iOS/Android works fine).
+**PWA times out connecting.** Verify the same relay URL is configured
+on both sides. If you self-host behind a VPN, the browser must also be on the
+VPN.
 
 **`agent_request` keeps timing out.** It is deprecated because it blocks the
 turn while waiting for another agent's content reply. Migrate to `agent_send`;

@@ -1,16 +1,18 @@
-# Remote Pi — Site
+# Remote Pi Site
 
-Landing page for [Remote Pi](https://github.com/jacobaraujo7/remote_pi) — the
-project that lets you control a Pi coding agent from your phone over an
-end-to-end encrypted channel.
-
-This package ships three static routes:
-
-- `/` — landing (hero, features, quick start, GitHub CTA)
-- `/terms` — Terms of Service
-- `/privacy` — Privacy Policy (LGPD)
+Next.js site for Remote Pi: landing page, documentation, legal pages, and the
+browser PWA used to control Pi coding agents remotely.
 
 Target domain: <https://remote-pi.jacobmoura.work>.
+
+## Routes
+
+- `/` - landing page and installation instructions
+- `/app` - browser PWA workspace
+- `/docs` - protocol, Relay, Agent Mesh, and Daemon reference
+- `/tutorials/*` - PWA, local mesh, cross-PC mesh, and Daemon guides
+- `/terms` - Terms of Service
+- `/privacy` - Privacy Policy
 
 ## Stack
 
@@ -20,14 +22,16 @@ Target domain: <https://remote-pi.jacobmoura.work>.
 - ESLint 9
 - Package manager: **pnpm**
 
-Dark-only theme; visual identity lives in `../branding/`.
+The PWA uses IndexedDB for browser-local identity, pairings, session history,
+and offline-readable messages. Its live connection goes through the existing
+Relay and Pi Extension protocol.
 
 ## Commands
 
 ```bash
-pnpm install   # install deps
+pnpm install   # install dependencies
 pnpm dev       # dev server at http://localhost:3000
-pnpm build     # production build (SSG)
+pnpm build     # production build
 pnpm start     # serve the production build
 pnpm lint      # ESLint
 ```
@@ -37,30 +41,33 @@ pnpm lint      # ESLint
 ```
 src/
 ├── app/
-│   ├── layout.tsx              # Root layout: header + main + footer, global metadata
-│   ├── page.tsx                # Landing
-│   ├── icon.svg                # Favicon (served as /icon.svg)
-│   ├── opengraph-image.tsx     # Generated OG image (next/og)
-│   ├── globals.css             # Tailwind + design tokens
-│   ├── terms/page.tsx
-│   └── privacy/page.tsx
-└── components/
-    ├── header.tsx              # Logo + nav
-    ├── footer.tsx              # Terms/Privacy/GitHub + copyright
-    ├── hero.tsx                # Landing hero
-    ├── feature-card.tsx        # Reusable card
-    ├── code-block.tsx          # Snippet block
-    └── legal-shell.tsx         # Shared shell for legal pages
+│   ├── app/                    # PWA route
+│   ├── docs/                   # reference documentation
+│   ├── tutorials/              # PWA, mesh, and Daemon guides
+│   ├── privacy/                # privacy policy
+│   ├── terms/                  # terms of service
+│   ├── layout.tsx              # root layout and metadata
+│   └── globals.css             # design tokens and page/PWA styles
+├── components/
+│   ├── pwa/                    # PWA workspace UI
+│   ├── landing/                # public landing page
+│   └── site-chrome.tsx         # website shell and PWA route split
+└── lib/
+    ├── pwa/                    # IndexedDB and browser persistence
+    └── remote-pi/               # pairing, Relay, and wire protocol clients
 ```
 
 ## Conventions
 
-- **Server components by default** — only opt into `"use client"` when state, events, or hooks are needed.
-- **No backend / API routes** in the MVP. The site is purely presentational.
-- **No analytics, no tracking cookies.** Aligned with the project's privacy posture.
-- **English only** in the MVP. PT-BR is a separate plan if demand appears.
+- Server components by default; use client components only for state, events,
+  browser APIs, or hooks.
+- Keep PWA logic under `src/app/app/`, `src/components/pwa/`, and
+  `src/lib/pwa/`; keep the public site and docs separate from the workspace.
+- Do not add backend or API routes without explicit authorization.
+- No analytics, tracking cookies, or native mobile client is shipped here.
 
 ## Deploy
 
-Vercel is the expected target (zero-config for Next.js). Domain wiring is
-handled outside this repo.
+The site is deployed as a Docker image. Follow the repository deployment
+instructions in `site/CLAUDE.md`, `docker-compose.yml`, and
+`scripts/deploy-self-hosted.sh`.

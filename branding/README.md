@@ -15,10 +15,10 @@ PNGs derivados gerados via ferramenta externa quando necessário.
 
 | Arquivo | Conteúdo | Uso recomendado |
 |---|---|---|
-| `logo-full.svg` | Background preto + π branco + bolinha azul | Logo single-piece (favicon, README header, site, app store screenshots) |
-| `logo-foreground.svg` | π + bolinha em fundo transparente | iOS app icon (com background separado), Android adaptive icon foreground layer |
-| `logo-background.svg` | Preto sólido 1024×1024 | Android adaptive icon background layer |
-| `logo-monochrome.svg` | Silhueta branca completa | Android 13+ themed icon (sistema colore conforme wallpaper) |
+| `logo-full.svg` | Background preto + π branco + bolinha azul | Logo single-piece (favicon, README header, site, PWA) |
+| `logo-foreground.svg` | π + bolinha em fundo transparente | Transparent logo mark for compositing |
+| `logo-background.svg` | Preto sólido 1024×1024 | Solid background layer for branded surfaces |
+| `logo-monochrome.svg` | Silhueta branca completa | Monochrome logo mark |
 | `banner.svg` / `banner.png` | Banner 1280×640 horizontal — π à esquerda + título + tagline + comando install + URL | Card de pacote pi.dev (`pi.image` no package.json), README hero do GitHub, social preview |
 
 Todos os arquivos: **1024×1024** viewBox, safe zone Android-compatível (~66% central).
@@ -58,26 +58,23 @@ inkscape --export-type=png --export-width=1024 logo-foreground.svg
 
 ## Tamanhos padrão exportar
 
-Antes de upload em store/site, gere variantes:
+Antes de usar no site ou na PWA, gere as variantes necessárias:
 
 | Plataforma | Tamanho | Arquivo fonte |
 |---|---|---|
-| iOS App Icon | 1024×1024 PNG (sem alpha) | `logo-full.svg` |
-| Android Adaptive (foreground) | 432×432 PNG transparente | `logo-foreground.svg` |
-| Android Adaptive (background) | 432×432 PNG (cor sólida basta) | `logo-background.svg` |
-| Android Themed (monochrome) | 432×432 PNG transparente | `logo-monochrome.svg` |
+| PWA/site icon | 512×512 PNG | `logo-full.svg` |
+| Transparent mark | 432×432 PNG transparente | `logo-foreground.svg` |
+| Monochrome mark | 432×432 PNG transparente | `logo-monochrome.svg` |
 | Favicon | 32×32, 16×16 PNG | `logo-full.svg` |
-| App Store screenshot header | 1200×630 PNG | `logo-full.svg` (compor) |
 | npm registry README | 512×512 PNG | `logo-full.svg` |
 
-> Android adaptive icons: tanto foreground quanto background ocupam 108dp
-> canvas total, mas conteúdo importante deve ficar dentro de 66dp central
-> (safe zone). Os SVGs já respeitam essa proporção (~66% do 1024).
+> Logo exports keep the important mark centered inside a conservative safe zone,
+> so the same assets remain legible in browser icons and compact UI surfaces.
 
 ## Atualização
 
 Mudanças visuais: editar SVG (Figma → export SVG é OK). Regenerar PNGs
-derivados nos pontos de uso (site, app, store).
+derivados nos pontos de uso (site, PWA, package README).
 
 Antes de mudar paleta ou silhueta, atualizar este README com a nova
 versão da identidade visual + razão da mudança.
