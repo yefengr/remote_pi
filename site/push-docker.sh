@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-IMAGE="jacobmoura7/remote-pi-site"
+IMAGE="${IMAGE:-${REGISTRY_NAMESPACE:-remote-pi-local}/remote-pi-site}"
 VERSION="${1:-}"
 PLATFORMS="linux/amd64,linux/arm64"
 BUILDER="multiarch"

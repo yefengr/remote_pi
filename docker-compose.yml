@@ -1,0 +1,72 @@
+services:
+  relay:
+    image: ${RELAY_IMAGE:?RELAY_IMAGE must be set}
+    container_name: remote-pi-relay
+    restart: unless-stopped
+
+    # Keep Relay private on the host; let Caddy/Nginx terminate TLS.
+    ports:
+      - "127.0.0.1:3000:3000"
+
+    environment:
+      REMOTEPI_RELAY_PORT: "3000"
+      REMOTEPI_MESH_DB_PATH: /data/mesh.db
+      RUST_LOG: info
+
+    volumes:
+      - remote-pi-data:/data
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  site-test:
+    image: ${SITE_IMAGE:?SITE_IMAGE must be set}
+    container_name: remote-pi-site-test
+    restart: unless-stopped
+    profiles: ["test"]
+
+    # Test PWA is exposed through remote-pi-test.* Caddy routing.
+    ports:
+      - "127.0.0.1:3002:3000"
+
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  site:
+    image: ${SITE_IMAGE:?SITE_IMAGE must be set}
+    container_name: remote-pi-site
+    restart: unless-stopped
+
+    # Production PWA is exposed through the production Caddy route.
+    ports:
+      - "127.0.0.1:3001:3000"
+
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  remote-pi-data:
