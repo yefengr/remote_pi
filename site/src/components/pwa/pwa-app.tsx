@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownToLine, Activity, MessageSquare, RefreshCw, Settings, WifiOff, X } from "lucide-react";
+import { ArrowDownToLine, Activity, MessageSquare, RefreshCw, Settings, X } from "lucide-react";
 import { MessageList } from "@/components/pwa/message-list";
 import { describeStartupFailure, PairingDialog, StartupErrorView, StartupLoading, type StartupError } from "@/components/pwa/pwa-startup";
 import { SessionSheet } from "@/components/pwa/session-sheet";
@@ -32,6 +32,8 @@ const ACTIVE_PEER_SETTING = "active_peer";
 const RELAY_SETTING = "relay_url";
 const ACTIVE_ROOM_SETTING = "active_room:";
 const BOTTOM_DISTANCE_PX = 72;
+const RETRY_DELAYS_MS = [1000, 2000, 5000, 10000, 30000] as const;
+const MAX_RETRY_ATTEMPTS = RETRY_DELAYS_MS.length;
 type PairState = "idle" | "scanning" | "pairing";
 type StartupState = "loading" | "ready" | "error";
 function id(): string {
@@ -45,6 +47,7 @@ export function PwaApp() {
   const [roomId, setRoomId] = useState("main");
   const [messages, setMessages] = useState<PwaMessageRecord[]>([]);
   const [connection, setConnection] = useState<ConnectionViewState>("offline");
+  const [retryAttempt, setRetryAttempt] = useState(0);
   const [relayUrl, setRelayUrl] = useState(DEFAULT_RELAY);
   const [draft, setDraft] = useState("");
   const [pairState, setPairState] = useState<PairState>("idle");
@@ -61,6 +64,7 @@ export function PwaApp() {
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectionDisposeRef = useRef<(() => void) | null>(null);
   const retryAttemptRef = useRef(0);
+  const scheduleReconnectRef = useRef<(() => void) | null>(null);
   const selectionGenerationRef = useRef(0);
   const messageRevisionRef = useRef(0);
   const roomRevisionRef = useRef(0);
@@ -242,7 +246,7 @@ export function PwaApp() {
   const connectActivePeer = useCallback(async (peer: PwaPeerRecord, generation: number, selectedRoom: string) => {
     if (!identity || !isCurrentSelection(generation, peer.id, peer.remoteEpk, selectedRoom)) return;
     if (typeof navigator !== "undefined" && !navigator.onLine) {
-      setConnection("offline");
+      setConnection("no_network");
       return;
     }
     const relay = new RelayClient({ relayUrl: peer.relayUrl || relayUrl, identity });
@@ -260,11 +264,22 @@ export function PwaApp() {
     setConnection("connecting");
     const removeState = relay.on("state", (state) => {
       if (!channel || !isCurrentSelection(generation, peer.id, peer.remoteEpk, selectedRoom, channel, relay)) return;
-      if (state === "open") setConnection("online");
+      if (state === "open") {
+        retryAttemptRef.current = 0;
+        setRetryAttempt(0);
+        setConnection("online");
+      }
       if (state === "connecting" || state === "authenticating") setConnection("connecting");
-      if (state === "closed") setConnection("offline");
+      if (state === "closed") {
+        setConnection("offline");
+        scheduleReconnectRef.current?.();
+      }
     });
-    const removeError = relay.on("error", (eventError) => { if (channel && isCurrentSelection(generation, peer.id, peer.remoteEpk, selectedRoom, channel, relay)) setError(eventError.message); });
+    const removeError = relay.on("error", (eventError) => {
+      if (!channel || !isCurrentSelection(generation, peer.id, peer.remoteEpk, selectedRoom, channel, relay)) return;
+      setError(eventError.message);
+      scheduleReconnectRef.current?.();
+    });
     const removeControl = relay.on("control", (frame) => handleControlFrame(frame, generation, peer, relay));
     const dispose = () => {
       removeState();
@@ -282,21 +297,24 @@ export function PwaApp() {
       channel.send({ type: "session_sync", id: id(), limit: 200 });
     } catch (connectError) {
       if (channel && isCurrentSelection(generation, peer.id, peer.remoteEpk, selectedRoom, channel, relay)) {
-        setConnection("retrying");
         setError(connectError instanceof Error ? connectError.message : "Relay connection failed");
+        scheduleReconnectRef.current?.();
       }
     }
     return dispose;
   }, [handleControlFrame, handleServerMessage, identity, isCurrentSelection, relayUrl]);
 
-  const invalidateConnection = useCallback(() => {
+  const invalidateConnection = useCallback((resetRetries = true) => {
     const generation = selectionGenerationRef.current + 1;
     selectionGenerationRef.current = generation;
     if (reconnectRef.current) {
       clearTimeout(reconnectRef.current);
       reconnectRef.current = null;
     }
-    retryAttemptRef.current = 0;
+    if (resetRetries) {
+      retryAttemptRef.current = 0;
+      setRetryAttempt(0);
+    }
     connectionDisposeRef.current?.();
     connectionDisposeRef.current = null;
     channelRef.current?.close();
@@ -306,14 +324,22 @@ export function PwaApp() {
     return generation;
   }, []);
 
-  const restartActiveConnection = useCallback(() => {
+  const restartActiveConnection = useCallback((resetRetries = true) => {
     const peer = activePeerRef.current;
-    if (!selectionReady || !peer || typeof navigator !== "undefined" && !navigator.onLine) {
+    if (!selectionReady || !peer) {
       setConnection("offline");
       return;
     }
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      setConnection("no_network");
+      return;
+    }
     const selectedRoom = roomIdRef.current;
-    const generation = invalidateConnection();
+    const generation = invalidateConnection(resetRetries);
+    if (resetRetries) {
+      retryAttemptRef.current = 1;
+      setRetryAttempt(1);
+    }
     setConnection("connecting");
     void connectActivePeer(peer, generation, selectedRoom).then((dispose) => {
       if (!dispose) return;
@@ -324,6 +350,36 @@ export function PwaApp() {
       connectionDisposeRef.current = dispose;
     });
   }, [connectActivePeer, invalidateConnection, isCurrentSelection, selectionReady]);
+
+  const scheduleReconnect = useCallback(() => {
+    const peer = activePeerRef.current;
+    if (!selectionReady || !peer || !activePeerIdRef.current) return;
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      setConnection("no_network");
+      return;
+    }
+    if (reconnectRef.current || retryAttemptRef.current >= MAX_RETRY_ATTEMPTS) {
+      if (retryAttemptRef.current >= MAX_RETRY_ATTEMPTS) setConnection("offline");
+      return;
+    }
+    const generation = selectionGenerationRef.current;
+    const attempt = retryAttemptRef.current + 1;
+    retryAttemptRef.current = attempt;
+    setRetryAttempt(attempt);
+    setConnection("retrying");
+    reconnectRef.current = setTimeout(() => {
+      reconnectRef.current = null;
+      if (selectionGenerationRef.current !== generation) return;
+      restartActiveConnection(false);
+    }, RETRY_DELAYS_MS[attempt - 1]);
+  }, [restartActiveConnection, selectionReady]);
+
+  useEffect(() => {
+    scheduleReconnectRef.current = scheduleReconnect;
+    return () => {
+      if (scheduleReconnectRef.current === scheduleReconnect) scheduleReconnectRef.current = null;
+    };
+  }, [scheduleReconnect]);
 
   const selectPeer = useCallback((peerId: string | null) => {
     if (peerId === activePeerIdRef.current) return;
@@ -346,7 +402,7 @@ export function PwaApp() {
     setDraft("");
     setUnreadOutput(0);
     scheduleScrollToLatest();
-    setConnection(peerId && typeof navigator !== "undefined" && navigator.onLine ? "connecting" : "offline");
+    setConnection(peerId ? (typeof navigator !== "undefined" && navigator.onLine ? "connecting" : "no_network") : "offline");
     setError(null);
   }, [invalidateConnection, peers, scheduleScrollToLatest]);
 
@@ -363,7 +419,7 @@ export function PwaApp() {
     setDraft("");
     setUnreadOutput(0);
     scheduleScrollToLatest();
-    setConnection(typeof navigator !== "undefined" && navigator.onLine ? "connecting" : "offline");
+    setConnection(typeof navigator !== "undefined" && navigator.onLine ? "connecting" : "no_network");
     void getPwaDatabase().settings.put({ key: `${ACTIVE_ROOM_SETTING}${peer.id}`, value: nextRoom });
   }, [invalidateConnection, scheduleScrollToLatest]);
 
@@ -509,23 +565,26 @@ export function PwaApp() {
   }, [activePeerId, connectActivePeer, identity, isCurrentSelection, roomId, selectionReady, startupState]);
 
   useEffect(() => {
-    const reconnect = () => {
-      const peer = activePeerRef.current;
-      if (!navigator.onLine || !peer || !activePeerIdRef.current) return;
+    const reconnect = () => scheduleReconnectRef.current?.();
+    const goOffline = () => {
       if (reconnectRef.current) clearTimeout(reconnectRef.current);
-      const generation = selectionGenerationRef.current;
-      const delay = [1000, 2000, 5000, 10000, 30000][Math.min(retryAttemptRef.current, 4)];
-      retryAttemptRef.current += 1;
-      setConnection("retrying");
-      reconnectRef.current = setTimeout(() => {
-        if (selectionGenerationRef.current !== generation) return;
-        restartActiveConnection();
-      }, delay);
+      reconnectRef.current = null;
+      retryAttemptRef.current = 0;
+      setRetryAttempt(0);
+      invalidateConnection();
+      setConnection("no_network");
     };
     window.addEventListener("online", reconnect);
     window.addEventListener("pageshow", reconnect);
-    return () => { window.removeEventListener("online", reconnect); window.removeEventListener("pageshow", reconnect); if (reconnectRef.current) clearTimeout(reconnectRef.current); };
-  }, [restartActiveConnection]);
+    window.addEventListener("offline", goOffline);
+    return () => {
+      window.removeEventListener("online", reconnect);
+      window.removeEventListener("pageshow", reconnect);
+      window.removeEventListener("offline", goOffline);
+      if (reconnectRef.current) clearTimeout(reconnectRef.current);
+      reconnectRef.current = null;
+    };
+  }, [invalidateConnection]);
 
   const sendMessage = useCallback(() => {
     const text = draft.trim();
@@ -611,18 +670,20 @@ export function PwaApp() {
         <div className="pwa-brand"><span className="pwa-brand-mark">π</span><span>Remote Pi</span><span className="pwa-brand-tag">BROWSER APP</span></div>
         <div className="pwa-topbar-actions">
           {activePeer ? <button className="pwa-session-trigger" type="button" onClick={() => setSessionSheetOpen(true)} aria-haspopup="dialog" aria-expanded={sessionSheetOpen}><MessageSquare size={16} /><span>{displayPeer(activePeer)} / {roomId}</span></button> : null}
-          <ConnectionStatus state={connection} />
+          <ConnectionStatus state={connection} retryAttempt={retryAttempt} />
           <button className="pwa-icon-button" type="button" onClick={() => setSettingsOpen((open) => !open)} aria-label="Open settings" title="Settings"><Settings size={18} /></button>
         </div>
       </header>
       <div className="pwa-layout">
         <DesktopSidebar peers={peers} activePeerId={activePeerId} connection={connection} onPair={() => setPairState("scanning")} onSelect={selectPeer} onRename={(peer) => void renamePeer(peer)} onRemove={(peer) => void removePeer(peer)} onClearData={clearLocalData} />
         <main className="pwa-main">
-          {connection === "offline" || connection === "retrying" ? <div className="pwa-offline-banner"><WifiOff size={16} /><span>{connection === "retrying" ? "Reconnecting to Relay..." : "Offline. Local history is read-only."}</span>{connection === "retrying" ? <button className="pwa-text-button" type="button" onClick={restartActiveConnection}><RefreshCw size={14} /> Retry</button> : null}</div> : null}
           {activePeer ? <>
             <div className="pwa-chat-head"><div><span className="pwa-kicker">Active session</span><h2>{displayPeer(activePeer)}</h2><span className="pwa-chat-meta"><span className={connection === "online" ? "pwa-status-dot online" : "pwa-status-dot"} />{connection === "online" ? "Live" : "Local history"} <span className="pwa-separator">/</span> room <code>{roomId}</code></span></div><div className="pwa-room-control"><label htmlFor="room-id">Room</label><select id="room-id" value={roomId} disabled={connection !== "online"} onChange={(event) => selectRoom(event.target.value)}><option value={roomId}>{roomId}</option>{activeRooms.filter((room) => room.roomId !== roomId).map((room) => <option key={room.roomId} value={room.roomId}>{room.name || room.cwd || room.roomId}</option>)}</select></div></div>
             <MessageList messages={messages} listRef={messageListRef} bottomSentinelRef={bottomSentinelRef} onScroll={handleMessageListScroll} />
-            {!followingOutput || unreadOutput > 0 ? <button className="pwa-latest-button" type="button" onClick={() => { scrollToLatest(true); resumeFollowingOutput(); }}><ArrowDownToLine size={16} />{unreadOutput > 0 ? `${unreadOutput} new output` : "Latest"}</button> : null}
+            {((connection !== "no_network" && (connection === "retrying" || connection === "offline")) || !followingOutput || unreadOutput > 0) ? <div className="pwa-message-actions">
+              {connection !== "no_network" && (connection === "retrying" || connection === "offline") ? <button className="pwa-latest-button" type="button" onClick={() => restartActiveConnection(true)}><RefreshCw size={16} />Try again</button> : null}
+              {!followingOutput || unreadOutput > 0 ? <button className="pwa-latest-button" type="button" onClick={() => { scrollToLatest(true); resumeFollowingOutput(); }}><ArrowDownToLine size={16} />{unreadOutput > 0 ? `${unreadOutput} new output` : "Latest"}</button> : null}
+            </div> : null}
             <form className="pwa-composer" onSubmit={(event) => { event.preventDefault(); sendMessage(); }}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={connection === "online" ? "Send a message to your agent..." : "Reconnect to send a message"} disabled={connection !== "online"} rows={2} /><button className="pwa-primary-button" type="submit" disabled={connection !== "online" || !draft.trim()}>Send <span>↗</span></button></form>
           </> : <EmptyWorkspace onPair={() => setPairState("scanning")} />}
         </main>

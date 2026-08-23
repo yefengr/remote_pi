@@ -1,7 +1,7 @@
 # Remote Pi — Site (NextJS)
 
-Landing page institucional do Remote Pi. Apresenta projeto, links pro GitHub,
-documentação do MVP. **Apenas apresentação — não tem lógica de produto.**
+Subprojeto web do Remote Pi. Contém a landing page, documentação do MVP e o
+PWA browser em `src/app/app/`, `src/components/pwa/` e `src/lib/pwa/`.
 
 ## Stack
 
@@ -28,12 +28,14 @@ documentação do MVP. **Apenas apresentação — não tem lógica de produto.*
 - **Imagens**: `next/image` com fallback estático onde possível
 - **Tipagem**: props de componentes sempre tipadas, sem `any`
 
-## NÃO fazer
+## Escopo e restrições
 
-- Não adicionar features de produto (chat, pareamento, etc) — isso vai no `app/`
-- Não comitar `.next/`, `out/`, `node_modules/` (já no .gitignore raiz)
-- Não desabilitar lint pra fazer passar — corrigir o erro
-- Não introduzir backend (API routes) sem registrar plano
+- Features do PWA browser ficam neste subprojeto e devem permanecer em
+  `src/app/app/`, `src/components/pwa/` e `src/lib/pwa/`.
+- Landing page e documentação devem continuar separadas da lógica do PWA.
+- Não adicionar backend ou API routes sem autorização explícita.
+- Não comitar `.next/`, `out/`, `node_modules/` (já no .gitignore raiz).
+- Não desabilitar lint pra fazer passar — corrigir o erro.
 
 ## Publicação (deploy)
 
@@ -59,9 +61,17 @@ Fluxo típico de publicação: commit + push no git → `pnpm lint && pnpm build
 verdes → `./push-docker.sh` → o host redeploya da `:latest`. Passe uma versão
 (`vX.Y.Z`) quando quiser uma tag fixada além da `:latest`.
 
-## Modo orquestrado
+O teste isolado do PWA usa o script da raiz:
 
-Se receber um prompt começando com `[ORCH:<task-id>]`, leia
-`../.orchestration/INSTRUCTIONS.md` antes de qualquer outra ação. Esse marker
-indica que outro agente está coordenando o trabalho e tem regras específicas
-(onde escrever resultado, não comitar, etc).
+```bash
+scripts/deploy-self-hosted.sh test
+```
+
+Ele constrói e transfere as imagens, inicia apenas o PWA de teste e mantém a
+instância de produção inalterada.
+
+## Desenvolvimento direto
+
+O subprojeto pode ser ajustado diretamente no branch atual. Antes de entregar,
+execute `pnpm lint`, as verificações específicas da mudança e `pnpm build` quando
+a alteração afetar o bundle de produção.

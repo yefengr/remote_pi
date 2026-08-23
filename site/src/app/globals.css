@@ -2306,6 +2306,7 @@ a {
 .pwa-connection { display: inline-flex; align-items: center; gap: 8px; color: var(--pwa-dim); font: 12px var(--ff-mono); }
 .pwa-connection.online { color: var(--pwa-green); }
 .pwa-connection.retrying { color: #f5c66a; }
+.pwa-connection.no_network { color: #a5b1b5; }
 .pwa-status-dot, .pwa-local-dot { width: 7px; height: 7px; border-radius: 50%; background: #536268; display: inline-block; }
 .pwa-connection.online .pwa-status-dot, .pwa-status-dot.online, .pwa-local-dot { background: var(--pwa-green); box-shadow: 0 0 12px rgba(115,226,164,.65); }
 .pwa-icon-button, .pwa-round-button { border: 1px solid var(--pwa-line); color: var(--pwa-dim); background: transparent; cursor: pointer; transition: border-color .2s, color .2s, background .2s, transform .2s; }
@@ -2343,8 +2344,6 @@ a {
 .pwa-text-button { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; color: var(--pwa-accent); background: transparent; font: 11px var(--ff-mono); cursor: pointer; }
 .pwa-text-button:hover { text-decoration: underline; text-underline-offset: 3px; }
 .pwa-main { min-width: 0; max-width: 100%; min-height: 0; display: flex; flex-direction: column; background: rgba(4,6,7,.42); }
-.pwa-offline-banner { min-height: 40px; padding: 0 28px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid rgba(245,198,106,.22); background: rgba(245,198,106,.08); color: #f5c66a; font-size: 12px; }
-.pwa-offline-banner .pwa-text-button { margin-left: auto; color: #f5c66a; }
 .pwa-chat-head { min-width: 0; max-width: 100%; display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; padding: 37px clamp(22px, 5vw, 70px) 25px; border-bottom: 1px solid var(--pwa-line); }
 .pwa-chat-head > div:first-child { min-width: 0; }
 .pwa-chat-head h2 { min-width: 0; overflow-wrap: anywhere; font-size: clamp(25px, 3vw, 38px); }
@@ -2427,7 +2426,8 @@ a {
 .pwa-pairing-card p { color: var(--pwa-dim); font-size: 13px; }
 .pwa-spin { color: var(--pwa-accent); animation: pwa-rotate 1.3s linear infinite; }
 @keyframes pwa-rotate { to { transform: rotate(360deg); } }
-.pwa-latest-button { flex: 0 0 auto; align-self: center; min-height: 44px; margin: 0 auto 2px; padding: 0 14px; display: inline-flex; align-items: center; gap: 8px; border: 1px solid rgba(79,195,247,.4); border-radius: 9px; color: var(--pwa-accent); background: rgba(5,13,17,.96); font: 600 11px var(--ff-mono); cursor: pointer; box-shadow: 0 8px 24px rgba(0,0,0,.24); }
+.pwa-message-actions { flex: 0 0 auto; min-height: 44px; display: flex; justify-content: center; align-items: center; gap: 8px; padding: 0 clamp(16px, 5vw, 70px) 2px; }
+.pwa-latest-button { min-height: 44px; padding: 0 14px; display: inline-flex; align-items: center; gap: 8px; border: 1px solid rgba(79,195,247,.4); border-radius: 9px; color: var(--pwa-accent); background: rgba(5,13,17,.96); font: 600 11px var(--ff-mono); cursor: pointer; box-shadow: 0 8px 24px rgba(0,0,0,.24); }
 .pwa-latest-button:hover { background: rgba(79,195,247,.1); }
 .pwa-danger-button { min-height: 44px; margin-top: 12px; padding: 0 14px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid rgba(255,142,142,.35); border-radius: 9px; color: #ffb3b3; background: rgba(255,142,142,.07); font: 600 11px var(--ff-mono); cursor: pointer; }
 .pwa-danger-button:hover { border-color: #ff8e8e; background: rgba(255,142,142,.12); }
@@ -2468,11 +2468,11 @@ a {
   .pwa-layout { display: block; }
   .pwa-sidebar { display: none; }
   .pwa-main { height: 100%; }
-  .pwa-offline-banner { min-height: 40px; padding: 0 16px; }
   .pwa-chat-head { display: none; }
   .pwa-room-control { display: none; }
   .pwa-message-list { width: 100%; padding: 18px 16px 14px; }
   .pwa-message.user { width: 88%; }
+  .pwa-message-actions { width: 100%; padding: 0 16px 2px; }
   .pwa-composer { width: 100%; padding: 8px 16px calc(12px + var(--pwa-safe-bottom)); }
   .pwa-composer textarea { min-height: 44px; }
   .pwa-field input, .pwa-manual-pairing textarea { font-size: 16px; }
