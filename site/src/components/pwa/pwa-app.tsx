@@ -699,6 +699,7 @@ export function PwaApp() {
         <div className="pwa-topbar-actions">
           {activePeer ? <button className="pwa-session-trigger" type="button" onClick={() => setSessionSheetOpen(true)} aria-haspopup="dialog" aria-expanded={sessionSheetOpen}><MessageSquare size={16} /><span>{displayPeer(activePeer)} / {roomId}</span></button> : null}
           <ConnectionStatus state={connection} retryAttempt={retryAttempt} />
+          <button className="pwa-icon-button" type="button" onClick={() => window.location.reload()} aria-label="Refresh app" title="Refresh app"><RefreshCw size={18} /></button>
           <button className="pwa-icon-button" type="button" onClick={() => setSettingsOpen((open) => !open)} aria-label="Open settings" title="Settings"><Settings size={18} /></button>
         </div>
       </header>
