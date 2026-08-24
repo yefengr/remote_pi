@@ -1,14 +1,13 @@
 "use client";
 
 import { Download, RefreshCw, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { refreshPwaApp } from "@/lib/pwa/service-worker-update";
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 };
-
-type ServiceWorkerMessage = { type: "SKIP_WAITING" };
 
 const DEV_SW_CLEANUP_KEY = "remote-pi-dev-sw-cleanup-v1";
 
@@ -19,7 +18,6 @@ export function ServiceWorkerRegister() {
   const [unsupported, setUnsupported] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const [updateRequested, setUpdateRequested] = useState(false);
-  const updateRequestedRef = useRef(false);
 
   useEffect(() => {
     if (process.env.NODE_ENV !== "production") {
@@ -50,9 +48,6 @@ export function ServiceWorkerRegister() {
 
     let disposed = false;
     let currentRegistration: ServiceWorkerRegistration | null = null;
-    const onControllerChange = () => {
-      if (updateRequestedRef.current) window.location.reload();
-    };
     const inspectWaitingWorker = () => {
       if (!disposed && currentRegistration?.waiting && navigator.serviceWorker.controller) setUpdateReady(true);
     };
@@ -70,7 +65,6 @@ export function ServiceWorkerRegister() {
       setRegistration(nextRegistration);
       inspectWaitingWorker();
       nextRegistration.addEventListener("updatefound", onUpdateFound);
-      navigator.serviceWorker.addEventListener("controllerchange", onControllerChange);
     }).catch(() => {
       if (!disposed) setUnsupported(true);
     });
@@ -80,7 +74,6 @@ export function ServiceWorkerRegister() {
       window.removeEventListener("beforeinstallprompt", onBeforeInstallPrompt);
       window.removeEventListener("appinstalled", onAppInstalled);
       currentRegistration?.removeEventListener("updatefound", onUpdateFound);
-      navigator.serviceWorker.removeEventListener("controllerchange", onControllerChange);
     };
   }, []);
 
@@ -95,11 +88,8 @@ export function ServiceWorkerRegister() {
     setInstallPrompt(null);
   };
   const applyUpdate = () => {
-    const waiting = registration?.waiting;
-    if (!waiting) return;
-    updateRequestedRef.current = true;
     setUpdateRequested(true);
-    waiting.postMessage({ type: "SKIP_WAITING" } satisfies ServiceWorkerMessage);
+    void refreshPwaApp(registration);
   };
 
   return (
