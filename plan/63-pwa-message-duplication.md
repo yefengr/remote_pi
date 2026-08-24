@@ -2,9 +2,29 @@
 
 ## 状态
 
-方案已完成压力测试并冻结产品与架构边界；尚未实现。
+- 阶段 0（Pi SDK 生命周期与 SessionManager 契约验证）：**已完成（2026-08-24）**
+- Protocol v2 生产实现：尚未开始
+- Site/PWA 时间线迁移：尚未开始
 
 本计划替代原先“PWA 客户端 ID 直接成为永久消息 ID”的方案。最终采用 Protocol v2：PWA 只持有临时发送请求 ID，Pi 在真实消息进入 SDK 生命周期时生成永久消息 ID；Pi SessionManager 当前 branch 是历史真源，PWA IndexedDB 只是最近 5 个回合的可重建缓存。
+
+### 阶段 0 验证结果
+
+阶段 0 只新增 `pi-extension/src/timeline/sdk_contract.test.ts`，未修改生产协议、PWA、Relay、Pi SDK、依赖或真实用户 session。测试使用真实 `Agent`、`AgentSession`、`ExtensionRunner`、`SessionManager`、`pi.appendEntry()` 和 `ctx.sessionManager.getBranch()`，模型 provider 仅替换为本地可控 fake stream，不联网、不消耗模型额度。
+
+已验证：
+
+1. **生命周期与落盘时序**：user、assistant、toolResult 的 `message_start` handler 可以追加 Remote Pi marker；`message_end` handler 内 marker 可见但目标 `SessionMessageEntry` 尚不可见；handler 返回后的下一 macrotask 可以从当前 branch 读到目标消息。
+2. **父子拓扑**：目标消息紧随其 marker 持久化，且目标 `parentId` 指向 marker；临时 JSONL 中同样成立。
+3. **真实工具回合**：扩展工具实际执行恰好一次，toolResult 的 `toolName`、成功状态和确定性结果均可恢复。
+4. **第三方交错**：两个独立 ExtensionFactory 在同一真实 `message_start` 生命周期内可形成 `marker → custom → target`。
+5. **`custom_message` 能力边界**：message_start 期间 session 已处于 streaming，第三方 `pi.sendMessage()` 会走 steer 队列，当前 SDK 实际形成 `marker → target → custom_message`，无法形成 `marker → custom_message → target`。测试将该顺序作为已知契约锁定，而不是弱化为未验证的旧假设。
+6. **孤儿与分支**：遇到下一个 Remote Pi marker 或角色不兼容的消息时停止扫描；`getBranch()` 只返回当前 leaf 路径，`getEntries()` 仍包含废弃 branch。
+7. **磁盘隔离**：持久化测试使用临时 session directory，测试结束后无条件清理；未残留测试目录。
+
+验证命令与结果：定向契约测试 6/6 通过；测试文件严格单文件 TypeScript 检查通过；`pi-extension` typecheck 通过、全量测试 804 通过（3 skipped）、build 通过；`git diff --check` 通过。
+
+阶段 0 的结论是：后续恢复逻辑可以依赖 `message_end → 下一 macrotask → 当前 branch/JSONL` 的提交确认窗口；不能把 `custom_message` 插入当前 message 的 marker 与 target 之间作为当前公开 SDK 的正常运行时前提。
 
 ## 背景
 
@@ -404,13 +424,13 @@ Pi SDK 当前先向扩展发出 `message_start`，在 `message_end` 扩展处理
 3. `message_end` 后安排 macrotask，重新读取 branch 并确认目标 SessionMessageEntry 已落盘；
 4. 只有落盘确认成功后才广播正式 `timeline_event`；
 5. 恢复时只扫描 `ctx.sessionManager.getBranch()`；
-6. 从 marker 向后扫描时，可以跳过 `custom`、`custom_message`、model/thinking/label/session_info 等非目标 entry；第三方 `display:true` custom message 自己独立进入时间线；
+6. 从 marker 向后扫描时，可以跳过 `custom`、`custom_message`、model/thinking/label/session_info 等非目标 entry；第三方 `display:true` custom message 自己独立进入时间线。阶段 0 已证明：`custom` 可以位于当前 marker 与 target 之间；当前公开 SDK 的 `custom_message` 通常在 target 之后，但恢复 scanner 仍保留跳过能力以兼容旧数据或异常拓扑；
 7. 遇到下一个 `remote-pi:timeline-v2` marker 前，必须找到角色匹配的目标 SessionMessageEntry；下一个 Remote Pi marker 是硬边界，会使前一个未配对 marker 失效；
 8. 扫描到任意不兼容的 SessionMessageEntry、branch 结束或 session 边界时，当前 marker 立即成为孤儿，不能继续顺延；
 9. marker 后没有对应 message 时视为进程中断产生的孤儿，必须忽略；
 10. marker 或角色顺序异常时停止该 marker 的关联，不能污染下一条消息。
 
-实现前必须用当前 SDK 集成测试证明第三方扩展同时 append entry 时该拓扑仍然稳定。测试至少覆盖 `marker → custom → target`、`marker → custom_message → target`、`orphan marker → next Remote Pi marker` 和 `orphan marker → incompatible message`。若无法证明，不能退回文本、时间或宽松 FIFO 猜测，应重新评估 SDK 能力或调整确认时机。
+阶段 0 已用当前 SDK 集成测试证明 `marker → custom → target`、`orphan marker → next Remote Pi marker` 和 `orphan marker → incompatible message`。同时确认公开 SDK 无法在同一 streaming `message_start` 中证明 `marker → custom_message → target`，因此后续实现不得依赖该拓扑；`custom_message` 只作为 scanner 的防御性可跳过 entry。若未来 SDK 行为变化，再增加对应正向测试，不以文本、时间或宽松 FIFO 猜测替代。
 
 ### 4. 旧 Pi session 数据
 
@@ -557,6 +577,8 @@ PWA 没收到 `user_message_started` 或正式 `timeline_event` 时，无法区�
 
 ### pi-extension 自动化测试
 
+阶段 0 已完成并由 `pi-extension/src/timeline/sdk_contract.test.ts` 覆盖 SDK 前提。后续测试不重复证明已关闭的基础契约，重点验证生产实现如何消费这些契约。
+
 - 首次配对和已配对重连都必须完成 v2 hello，业务帧不能绕过；
 - 普通 PWA 消息：pending request → `message_start` accepted → Pi entry 落盘 → 正式事件/history 一致；
 - marker 后进程退出时不发布正式事件，恢复时忽略孤儿；
@@ -569,7 +591,7 @@ PWA 没收到 `user_message_started` 或正式 `timeline_event` 时，无法区�
 - `user_message_observed` 清理映射，同进程重连可重放未 observed 映射；
 - assistant 多 text/thinking block 保持顺序且不会被同 ID 覆盖；
 - tool partial 不进入历史，最终结果可恢复并保留 error/truncated；
-- marker 与第三方 `custom/custom_message` 交错时仍正确绑定；
+- marker 与第三方 `custom` 交错时仍正确绑定；`custom_message` 仅验证恢复 scanner 的防御性跳过，不把 `marker → custom_message → target` 作为当前运行时正向拓扑；
 - 下一个 Remote Pi marker 或不兼容 message 会使前一孤儿 marker 失效；
 - 只恢复当前 branch，不混入废弃 branch；
 - 无 marker 的旧 SessionMessageEntry 使用稳定 legacy ID；
@@ -636,11 +658,45 @@ git diff --check
 
 ## 实施顺序
 
-1. 先用独立集成测试验证 SDK 生命周期顺序、post-persistence 确认、marker 拓扑和孤儿恢复；
-2. 定义强制 channel hello、统一 `TimelineEvent`、`history_generation`、回合窗口和 chunk 协议；
-3. 实现 pi-extension provenance、永久 ID、marker、正式提交确认和 branch 恢复；
-4. 实现 request observed/replay、工具/thinking 时间线及最终历史 mapper；
-5. 实现 5 回合逻辑窗口、transport chunk、内容分片、cursor reset 和响应字节预算；
-6. 改造 PWA pending/accepted、分组时间线、折叠 UI 和来源标签；
-7. 改造 IndexedDB 为最近 5 回合完整窗口的权威缓存；
-8. 完成自动化验证后执行多来源、断线、重启和分页手工验收。
+### 阶段 0：SDK 契约验证（已完成）
+
+1. 验证真实 AgentSession/ExtensionRunner 的 `message_start → message_end → 持久化` 时序；
+2. 验证 marker 与目标消息的父子拓扑、下一 macrotask 可见性和临时 JSONL 落盘；
+3. 验证 `custom` 交错、`custom_message` 的实际 deferred 顺序、孤儿 marker 边界和当前 branch 隔离；
+4. 将结果固定在 `pi-extension/src/timeline/sdk_contract.test.ts`，作为后续实现的回归前提。
+
+### 阶段 1：契约冻结与只读模型（下一步）
+
+1. 根据阶段 0 结果修订内部拓扑契约：正式目标确认依赖 `message_end` 后 macrotask；`custom_message` 不作为当前 message 的 marker-target 插入点；
+2. 在不改变现有运行行为的前提下，定义 `TimelineEvent`、`history_generation`、`group_id`、provenance、marker payload 和 session hello 的类型/fixture；
+3. 盘点所有 user message 入口（PWA、terminal、RPC、queued、steer）及 assistant/tool 关联根，明确每种入口的消费顺序和清理边界；
+4. 先完成纯类型、fixture 和只读 mapper 设计，再进入生产写入逻辑。
+
+### 阶段 2：pi-extension 最小提交链路
+
+1. 实现 provenance 账本与 `WeakMap<AgentMessage, Correlation>` 绑定；
+2. 在 `message_start` 追加最小 marker，在 `message_end` 后 macrotask 验证当前 branch 中的目标 entry；
+3. 仅在验证成功后发布正式 `timeline_event`，保留孤儿 marker 忽略和 branch 硬边界；
+4. 覆盖普通 PWA、terminal、RPC、queued、steer、连续相同文本和进程中断恢复测试；
+5. 暂不同时改造 Site，先在 Extension 内验证永久 ID 与历史 mapper 一致。
+
+### 阶段 3：Protocol v2 channel 与历史读取
+
+1. 定义并实现 `session_hello/session_ready` 版本门禁；
+2. 统一实时正式事件与历史分页的 `TimelineEvent` union；
+3. 实现当前 branch 恢复、legacy entry ID、5 回合逻辑窗口、chunk budget、cursor reset；
+4. 验证实时与历史使用同一 event ID，且 generation/branch 变化可触发 reset。
+
+### 阶段 4：Site pending 与时间线 UI
+
+1. 将 PWA 发送改为内存 pending/accepted，正式事件到达后才进入历史；
+2. 改造分组时间线、thinking/tool 折叠、来源/delivery 标签和 partial 内存状态；
+3. 改造 IndexedDB 为最近 5 个完整回合的有界权威缓存，清除旧重复和孤儿；
+4. 完成断线、送达状态未知、重连同步和手动重发提示。
+
+### 阶段 5：跨项目联调与验收
+
+1. Extension、Site 按同一 Protocol v2 升级窗口切换，不提供 v1 静默兼容；
+2. 执行多来源、steer、queued、工具/thinking、进程重启、branch 切换、分页和大 payload 验收；
+3. Relay 保持无代码改动，仅验证其 envelope 上限和透明转发行为；
+4. 完成全量自动化测试、构建和手工回归后再更新本计划状态。
