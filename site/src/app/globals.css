@@ -1975,7 +1975,7 @@ a {
 .pwa-connection { display: inline-flex; align-items: center; gap: 8px; color: var(--pwa-dim); font: 12px var(--ff-mono); }
 .pwa-connection.online { color: var(--pwa-green); }
 .pwa-connection.retrying { color: #f5c66a; }
-.pwa-connection.no_network { color: #a5b1b5; }
+.pwa-connection.no_network, .pwa-connection.tab_in_use { color: #a5b1b5; }
 .pwa-status-dot, .pwa-local-dot { width: 7px; height: 7px; border-radius: 50%; background: #536268; display: inline-block; }
 .pwa-connection.online .pwa-status-dot, .pwa-status-dot.online, .pwa-local-dot { background: var(--pwa-green); box-shadow: 0 0 12px rgba(115,226,164,.65); }
 .pwa-icon-button, .pwa-round-button { border: 1px solid var(--pwa-line); color: var(--pwa-dim); background: transparent; cursor: pointer; transition: border-color .2s, color .2s, background .2s, transform .2s; }
@@ -2043,6 +2043,7 @@ a {
 .pwa-markdown a { color: var(--pwa-accent); text-decoration: underline; text-underline-offset: 3px; }
 .pwa-streaming { display: inline-flex; align-items: center; gap: 5px; margin-left: 8px; color: var(--pwa-dim); font-size: 9px; letter-spacing: .05em; }
 .pwa-streaming span { width: 5px; height: 5px; border-radius: 50%; background: var(--pwa-accent); animation: pwa-pulse 1s ease-in-out infinite; }
+.pwa-interrupted { margin-left: 8px; color: #f5c66a; font-size: 9px; letter-spacing: .05em; }
 @keyframes pwa-pulse { 50% { opacity: .25; transform: scale(.75); } }
 .pwa-chat-empty, .pwa-zero { min-width: 0; width: min(430px, 100%); max-width: 100%; margin: auto; text-align: center; padding: 32px; }
 .pwa-chat-empty-icon { width: 45px; height: 45px; display: grid; place-items: center; margin: 0 auto 15px; border: 1px solid var(--pwa-line-strong); border-radius: 14px; color: var(--pwa-accent); background: rgba(79,195,247,.08); }
@@ -2123,6 +2124,12 @@ a {
 .pwa-sheet-room span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pwa-sheet-room small { color: var(--pwa-dim); }
 .pwa-sheet-room.active { border-color: rgba(79,195,247,.25); background: rgba(79,195,247,.08); }
+.pwa-runtime-notice { position: fixed; left: 50%; bottom: calc(18px + var(--pwa-safe-bottom)); z-index: 19; width: min(680px, calc(100vw - 36px)); box-sizing: border-box; transform: translateX(-50%); display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px 12px 16px; border: 1px solid rgba(79,195,247,.32); border-radius: 10px; color: var(--pwa-ink); background: rgba(7,13,16,.97); box-shadow: 0 18px 50px rgba(0,0,0,.4); }
+.pwa-runtime-notice-copy { min-width: 0; display: grid; gap: 4px; }
+.pwa-runtime-notice-copy strong { font: 600 12px var(--ff-display); }
+.pwa-runtime-notice-copy span { color: var(--pwa-dim); font-size: 11px; line-height: 1.45; }
+.pwa-runtime-notice-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 7px; }
+.pwa-runtime-notice-actions .pwa-icon-button { width: 36px; height: 36px; }
 .pwa-toast { position: fixed; right: 22px; bottom: calc(22px + var(--pwa-safe-bottom)); z-index: 20; max-width: min(420px, calc(100vw - 44px)); display: flex; align-items: center; gap: 14px; padding: 12px 14px; border: 1px solid rgba(255,142,142,.3); border-radius: 10px; color: #ffc4c4; background: rgba(43,17,19,.96); box-shadow: 0 18px 50px rgba(0,0,0,.35); font-size: 12px; }
 .pwa-toast button { display: grid; place-items: center; padding: 0; border: 0; color: inherit; background: transparent; cursor: pointer; }
 .pwa-loading { min-height: 100dvh; box-sizing: border-box; display: grid; place-items: center; padding: var(--pwa-safe-top) 0 var(--pwa-safe-bottom); color: var(--pwa-dim); background: #050708; font: 12px var(--ff-mono); text-align: center; }
@@ -2155,4 +2162,7 @@ a {
   .pwa-scanner-frame { max-height: min(52dvh, 360px); }
   .pwa-manual-pairing { padding: 0 18px 16px; }
   .pwa-startup-card { padding: 25px 20px; }
+  .pwa-runtime-notice { width: calc(100vw - 24px); align-items: flex-start; padding: 11px 10px 11px 12px; }
+  .pwa-runtime-notice-actions { flex-wrap: wrap; justify-content: flex-end; }
+  .pwa-runtime-notice-actions .pwa-secondary-button, .pwa-runtime-notice-actions .pwa-primary-button { min-height: 38px; padding: 0 10px; }
 }

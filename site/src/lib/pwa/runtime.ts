@@ -50,3 +50,9 @@ export function mergeRooms(base: PwaRoomRecord[], preferred: PwaRoomRecord[]): P
   return Array.from(new Map([...base, ...preferred].map((room) => [room.id, room])).values())
     .sort((a, b) => a.updatedAt - b.updatedAt);
 }
+
+export function markStreamingMessagesInterrupted(messages: PwaMessageRecord[], peerEpk: string, roomId: string): PwaMessageRecord[] {
+  return messages.map((message) => message.peerEpk === peerEpk && message.roomId === roomId && message.status === "streaming"
+    ? { ...message, status: "interrupted" as const }
+    : message);
+}

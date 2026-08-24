@@ -26,7 +26,7 @@ export function MessageList({ messages, listRef, bottomSentinelRef, onScroll }: 
         <article className={`pwa-message ${message.kind}`} key={message.id}>
           <div className="pwa-message-label">
             {message.kind === "user" ? "You" : message.kind === "assistant" ? "Agent" : "System"}
-            {message.status === "streaming" ? <span className="pwa-streaming"><span /> streaming</span> : null}
+            {message.status === "streaming" ? <span className="pwa-streaming"><span /> streaming</span> : message.status === "interrupted" ? <span className="pwa-interrupted">interrupted</span> : null}
           </div>
           {message.kind === "assistant" ? (
             <div className="pwa-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown></div>

@@ -3,14 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --webpack",
     "sync:install": "node scripts/sync-install-sh.mjs",
-    "build": "node scripts/sync-install-sh.mjs && next build",
+    "build": "node scripts/sync-install-sh.mjs && next build --webpack",
     "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {
     "@noble/ed25519": "^3.1.0",
+    "@serwist/next": "9.5.12",
     "@zxing/browser": "^0.2.1",
     "dexie": "^4.4.5",
     "lucide-react": "^1.33.0",
@@ -27,6 +28,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
+    "serwist": "9.5.12",
     "tailwindcss": "^4",
     "typescript": "^5"
   },
