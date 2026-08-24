@@ -1925,7 +1925,8 @@ a {
 .pwa-root *::after {
   box-sizing: border-box;
 }
-.pwa-root {
+.pwa-root,
+.pwa-runtime-notice {
   --pwa-bg: #050708;
   --pwa-panel: rgba(11, 15, 17, 0.88);
   --pwa-panel-strong: #0d1215;
@@ -1937,6 +1938,8 @@ a {
   --pwa-green: #73e2a4;
   --pwa-safe-top: env(safe-area-inset-top, 0px);
   --pwa-safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+.pwa-root {
   width: 100%;
   max-width: 100%;
   height: 100dvh;
@@ -2162,7 +2165,7 @@ a {
   .pwa-scanner-frame { max-height: min(52dvh, 360px); }
   .pwa-manual-pairing { padding: 0 18px 16px; }
   .pwa-startup-card { padding: 25px 20px; }
-  .pwa-runtime-notice { width: calc(100vw - 24px); align-items: flex-start; padding: 11px 10px 11px 12px; }
-  .pwa-runtime-notice-actions { flex-wrap: wrap; justify-content: flex-end; }
+  .pwa-runtime-notice { width: calc(100vw - 24px); flex-direction: column; align-items: stretch; gap: 10px; padding: 11px 10px 11px 12px; }
+  .pwa-runtime-notice-actions { width: 100%; flex-wrap: wrap; justify-content: flex-end; }
   .pwa-runtime-notice-actions .pwa-secondary-button, .pwa-runtime-notice-actions .pwa-primary-button { min-height: 38px; padding: 0 10px; }
 }
