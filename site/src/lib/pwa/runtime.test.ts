@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { markStreamingMessagesInterrupted, mergeMessages, mergeRooms, migrateLegacyDefaultRelay } from "./runtime";
+import { markStreamingMessagesInterrupted, mergeMessages, mergeRooms, migrateLegacyDefaultRelay, upsertMessage } from "./runtime";
 
 const LEGACY_RELAY = "https://relay-rp1.jacobmoura.work";
 const CURRENT_RELAY = "https://relay-pi.yefengr.cn";
@@ -9,6 +9,34 @@ test("keeps preferred realtime messages over an older history snapshot", () => {
   const base = [{ id: "agent-1", peerEpk: "peer", roomId: "room", kind: "assistant" as const, text: "old", createdAt: 1, status: "complete" as const }];
   const realtime = [{ ...base[0], text: "new", status: "streaming" as const }];
   assert.deepEqual(mergeMessages(base, realtime), realtime);
+});
+
+test("accumulates a burst of streamed Markdown deltas without losing text", () => {
+  const deltas = Array.from({ length: 2000 }, (_, index) => {
+    if (index % 4 === 0) return "正文";
+    if (index % 4 === 1) return "\n";
+    if (index % 4 === 2) return "```json\n";
+    return `{"index":${index}}\n\`\`\`\n`;
+  });
+  let messages = [] as Parameters<typeof upsertMessage>[0];
+  let expected = "";
+
+  for (const delta of deltas) {
+    expected += delta;
+    messages = upsertMessage(messages, {
+      id: "assistant-request",
+      peerEpk: "peer",
+      roomId: "room",
+      kind: "assistant",
+      text: expected,
+      createdAt: 1,
+      replyTo: "request",
+      status: "streaming",
+    });
+  }
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].text, expected);
 });
 
 test("keeps preferred room metadata over an older local cache record", () => {

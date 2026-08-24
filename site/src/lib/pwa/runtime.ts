@@ -46,6 +46,13 @@ export function mergeMessages(base: PwaMessageRecord[], preferred: PwaMessageRec
     .sort((a, b) => a.createdAt - b.createdAt);
 }
 
+export function upsertMessage(messages: PwaMessageRecord[], next: PwaMessageRecord): PwaMessageRecord[] {
+  const index = messages.findIndex((message) => message.id === next.id);
+  return index < 0
+    ? [...messages, next].sort((a, b) => a.createdAt - b.createdAt)
+    : messages.map((message, messageIndex) => messageIndex === index ? { ...message, ...next } : message);
+}
+
 export function mergeRooms(base: PwaRoomRecord[], preferred: PwaRoomRecord[]): PwaRoomRecord[] {
   return Array.from(new Map([...base, ...preferred].map((room) => [room.id, room])).values())
     .sort((a, b) => a.updatedAt - b.updatedAt);

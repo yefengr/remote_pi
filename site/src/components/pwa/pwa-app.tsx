@@ -12,7 +12,8 @@ import { RelayClient } from "@/lib/remote-pi/relay-client";
 import { RelayConnectionLock } from "@/lib/pwa/connection-lock";
 import { normalizePeerId } from "@/lib/remote-pi/encoding";
 import { generateOwnerKeyPair } from "@/lib/remote-pi/crypto";
-import { assertBrowserCapabilities, browserName, fromStoredKey, markStreamingMessagesInterrupted, mergeMessages, mergeRooms, migrateLegacyDefaultRelay, toStoredKey, type ConnectionContext } from "@/lib/pwa/runtime";
+import { assertBrowserCapabilities, browserName, fromStoredKey, markStreamingMessagesInterrupted, mergeMessages, mergeRooms, migrateLegacyDefaultRelay, toStoredKey, upsertMessage, type ConnectionContext } from "@/lib/pwa/runtime";
+import { refreshPwaApp } from "@/lib/pwa/service-worker-update";
 import type { ControlFrame, OwnerKeyPair, ServerMessage, SessionHistoryEvent } from "@/lib/remote-pi/types";
 import {
   clearPwaData,
@@ -85,6 +86,7 @@ export function PwaApp() {
   const activePeerIdRef = useRef<string | null>(null);
   const activePeerRef = useRef<PwaPeerRecord | null>(null);
   const connectionRef = useRef(connection);
+  // Stream handlers update this synchronously; React state only mirrors it for rendering.
   const messagesRef = useRef(messages);
   const roomsRef = useRef(rooms);
   const pendingWritesRef = useRef(new Set<Promise<unknown>>());
@@ -94,7 +96,6 @@ export function PwaApp() {
   const followOutputRef = useRef(true);
   const scrollOnNextMessagesRef = useRef(false);
 
-  useEffect(() => { messagesRef.current = messages; }, [messages]);
   useEffect(() => { roomsRef.current = rooms; }, [rooms]);
   useEffect(() => { roomIdRef.current = roomId; }, [roomId]);
   useEffect(() => { connectionRef.current = connection; }, [connection]);
@@ -156,9 +157,7 @@ export function PwaApp() {
   const addOrUpdateMessage = useCallback((next: PwaMessageRecord) => {
     const current = messagesRef.current;
     const index = current.findIndex((message) => message.id === next.id);
-    const updated = index < 0
-      ? [...current, next].sort((a, b) => a.createdAt - b.createdAt)
-      : current.map((message, messageIndex) => messageIndex === index ? { ...message, ...next } : message);
+    const updated = upsertMessage(current, next);
     messagesRef.current = updated;
     messageRevisionRef.current += 1;
     setMessages(updated);
@@ -835,7 +834,7 @@ export function PwaApp() {
         <div className="pwa-topbar-actions">
           {activePeer ? <button className="pwa-session-trigger" type="button" onClick={() => setSessionSheetOpen(true)} aria-haspopup="dialog" aria-expanded={sessionSheetOpen}><MessageSquare size={16} /><span>{displayPeer(activePeer)} / {roomId}</span></button> : null}
           <ConnectionStatus state={connection} retryAttempt={retryAttempt} />
-          <button className="pwa-icon-button" type="button" onClick={() => window.location.reload()} aria-label="Refresh app" title="Refresh app"><RefreshCw size={18} /></button>
+          <button className="pwa-icon-button" type="button" onClick={() => void refreshPwaApp()} aria-label="Refresh app" title="Refresh app"><RefreshCw size={18} /></button>
           <button className="pwa-icon-button" type="button" onClick={() => setSettingsOpen((open) => !open)} aria-label="Open settings" title="Settings"><Settings size={18} /></button>
         </div>
       </header>
