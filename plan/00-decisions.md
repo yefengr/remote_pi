@@ -110,7 +110,7 @@ Para ser honesto desde o início:
 | Princípio | Aplicação |
 |---|---|
 | **Não criar subagent antes de existir conteúdo** | Reviewers locais foram negados pra agora — só stubs nos subprojetos |
-| **Não criar abstração antes de precisar** | YAGNI agressivo. Aplicado em: sem versionamento de protocolo, sem `--persist` flag no `/remote-pi`, sem recovery de pareamento |
+| **Não criar abstração antes de precisar** | YAGNI agressivo. Aplicado em: sem `--persist` flag no `/remote-pi`, sem recovery de pareamento |
 | **Subagent só vale com 3 critérios** | Prompt rico + saída estruturada + contexto isolado. Senão é overhead |
 | **CLAUDE.md silencioso sobre irmãos** | Persona vive no projeto. Único acoplamento aceitável: gatilho `[ORCH:<id>]` → lê `.orchestration/INSTRUCTIONS.md` |
 | **Plan/ é o espaço do orquestrador** | Subagentes não navegam planos altos. Recebem tasks decompostas |
@@ -126,7 +126,8 @@ Estas decisões foram **propositalmente adiadas**. Quando alguém quiser fechar,
 | ~~State management Flutter (Riverpod / bloc / signals_flutter)~~ | ~~Quando 1ª feature do app exigir state compartilhado~~ — fechado 2026-05-18: `ViewModel<T>` custom (single-field emit) + `provider` + `auto_injector`. Infra já existe em `app/lib/ui/core/viewmodel/viewmodel.dart` e `app/lib/config/dependencies.dart`. Convenção: sealed states em `ui/<feature>/states/`, `_injector.addViewModel<T>(T.new)` no setup, `ViewmodelProvider<T>()` no router. |
 | ~~Pacote libsodium pra Dart (`sodium_libs`, `cryptography`, outro)~~ | ~~Plano 04 (pareamento)~~ — fechado 2026-05-18: `cryptography` (dint.dev) |
 | Onde hospedar o relay | Plano 06 |
-| Versionamento de protocolo (`v` field) | Quando v2 do protocolo surgir e exigir migração |
+| ~~Versionamento de protocolo (`v` field)~~ | ~~Quando v2 do protocolo surgir e exigir migração~~ — condição atendida pelo plano 63; substituído por `protocol_version: 2` obrigatório no inner Protocol v2, sem v1 fallback, dual-read/write ou downgrade (2026-08-25) |
+| **Protocol v2 inner schema** | `protocol_version: 2` é obrigatório em todo App↔Extension inner frame；strict runtime schema、direct/broadcast routing、临时 `channel_id`、`history_generation` 和正式 TimelineEvent 由 v2 schema 冻结；Relay 不解析 inner payload。生产入口待阶段 2-4 一次性切换。 (2026-08-25) |
 | Conta de usuário opcional | Quando aparecer dor multi-device |
 | Push notifications | v2, após MVP validado |
 | Multi-relay / federação | Provavelmente nunca. Só se relay público virar gargalo |

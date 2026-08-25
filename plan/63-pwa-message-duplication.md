@@ -4,8 +4,9 @@
 
 - 阶段 0A（Pi SDK 生命周期与 marker 基础拓扑验证）：**已完成（2026-08-24）**
 - 阶段 0B（SDK 输入关联与 run epoch 契约验证）：**已完成（2026-08-25）**
-- 阶段 1（协议、类型与入口边界）：下一步
-- Protocol v2、Extension、Site 生产实现：尚未开始
+- 阶段 1（协议、类型与入口边界）：**已完成（2026-08-25）**
+- 阶段 2（Extension 最小永久提交链路）：下一步
+- Protocol v2 schema、codec、fixture：已冻结；生产入口尚未切换
 - Relay：无代码改动
 
 本计划以 Protocol v2 消除 PWA 实时消息与 SessionManager 历史消息的重复。当前 Pi SessionManager branch 是正式历史真源；PWA IndexedDB 仅缓存最近 5 个回合组；PWA pending 和实时 partial 仅存在于内存。
@@ -44,6 +45,35 @@ Protocol v2 是强制升级，不能与 v1 互通。不得实现字段 fallback�
 8. SessionManager 的 metadata `custom` entry 不记录扩展来源，因此生产 scanner 可实现的规则是：Remote Pi marker 为硬边界，其他非 marker metadata `custom` 可跳过；所有 non-custom、未知 entry 和角色不兼容 message 均为硬边界。
 
 验证结果：定向契约测试 13/13 通过；同一测试循环 20 次稳定通过；`pi-extension` typecheck 与 `git diff --check` 通过；独立只读终审无 P0/P1 finding。
+
+## 阶段 1 当前冻结契约（实现中）
+
+阶段 1 先建立隔离的 v2 schema、strict runtime codec、正反例 fixture 与两端契约测试；不接入旧 v1 生产入口，不实现 ALS、marker 写入、分页、幂等、Dexie 或 UI，不修改 Relay。生产入口将在阶段 2-4 的同一切换窗口接入 v2，期间不存在 v1/v2 fallback。
+
+已冻结：
+
+1. Extension 与 Site 使用同一字段形状；所有 inner frame 必须为 `protocol_version: 2`，所有对象拒绝未知字段。
+2. 单个 JSON UTF-8 frame 与 history chunk 最大 512 KiB；逻辑窗口最大 32 MiB；单 fragment 解码后最大 50 KiB；ID 最大 256 字符；普通字符串最大 1 MiB；数组最大 4096 项。
+3. `TimelineEvent` 由 user、assistant、tool、compaction/branch_summary/custom、provider_error 的封闭联合组成；实时 `timeline_event` 与历史 `session_history_chunk.events` 复用同一 schema。
+4. `timeline_partial` 只使用扁平帧：`partial_id`、`kind`、`status: running|delta`、可选 blocks/delta；拒绝 nested partial 和 `event_id`。
+5. direct response 必须携带 `target_channel_id`；Owner broadcast 必须携带 `session_id/history_generation` 且禁止 target。`ping` 必须带 channel 与 generation；无法安全解析 channel 的协议错误可以不带 target。
+6. reliable PWA user 在 `origin: pwa` 时携带服务端派生的 `sender_ref`；`session_ready` 返回对应 `self_sender_ref`。客户端不能自报或持久化该身份。非 PWA 来源不得伪造 sender 字段。
+7. `user_message_started` 使用精简 message payload；status 使用 received、accepted、committed、unknown_delivery 四个严格分支。`committed` 才要求永久 `message_id`。
+8. history chunk 的 `final_chunk/eos/next_before` 为严格判别式；同一 chunk 内 event 与 fragment 不得重复或交叉；fragment 使用 canonical padded Base64。
+9. pairing、queue、cancel、actions、model/thinking、extension UI、ping/pong、bye 均纳入封闭 v2 frame 目录；`approve_tool` 仅保留严格输入形状，不重新启用 approval gate。
+
+阶段 1 的 machine-readable fixture 使用 `.orchestration/contracts/fixtures/v2/`，按 `valid`/`invalid` 与 direction manifest 管理，不与旧 v1 fixture 混用。其 decoder API 只作为后续生产入口的唯一接入边界，当前不产生生产副作用。
+
+## 阶段 1 已完成的事实
+
+1. Extension 与 Site 各自新增隔离的 Protocol v2 Zod schema、严格 codec 和导出入口；旧 `types.ts`、旧 `codec.ts`、旧 transport/router、PWA UI/DB/runtime 与 Relay 均未接入或修改。
+2. 两端统一拒绝缺失/非 `2` 的 `protocol_version`、未知 frame、错误方向、未知顶层字段、非法 TimelineEvent 判别式和超限 UTF-8 payload。
+3. 两端统一冻结 512 KiB 单 frame/history chunk、32 MiB 逻辑 window、50 KiB decoded fragment、256 字符 ID、1 MiB 普通字符串、4096 数组项，以及非负有限 timestamp、严格 JSON 值、图片 data/omitted 互斥规则。
+4. 两端统一 flat `timeline_partial`、精简 `user_message_started.message`、四分支 `user_message_status`、`self_sender_ref/sender_ref` 约束、direct/Owner broadcast 路由字段、strict history chunk cursor 判别式。
+5. 建立共享 `.orchestration/contracts/fixtures/v2/manifest.json`：32 个 case（18 valid、14 invalid）；Extension 与 Site 测试均读取同一 manifest，覆盖主 frame、TimelineEvent、marker、partial、fragment、history、版本/方向/字段/尺寸反例。
+6. 根 `PROTOCOL.md` 已将 v2 标记为当前唯一 inner 协议，旧 v1 章节保留为迁移审计历史基线；`plan/00-decisions.md` 已关闭旧的“无版本字段”决策。
+
+验证结果：Extension v2 定向 19/19、共享 fixture 4/4，Extension 全量 834 passed/3 skipped（41 files），typecheck、build 通过；Site v2 主测试 6/6、共享 fixture 3/3，定向 lint、typecheck、build 通过；共享 manifest 32 case 全部通过；`git diff --check` 通过。Site 全量 `pnpm lint` 仍会扫描构建生成且未被 Git 跟踪的 `public/sw.js`，该既有生成产物触发 1 个 `no-this-alias` error 与若干 warning；本阶段 v2 源文件定向 lint 已通过。
 
 ## 背景与目标
 
@@ -501,11 +531,11 @@ git diff --check
 
 真实 SDK 测试已锁定 handled/FIFO 反例、异步反序、空闲 ALS、可靠 queued 排出、steer/同步 queued 上下文边界、run epoch 顺序和严格 scanner。
 
-### 阶段 1：协议、类型与入口边界（下一步）
+### 阶段 1：协议、类型与入口边界（已完成）
 
-以阶段 0A/0B 契约为前提，冻结严格 v2 schema、错误、fixture、marker、TimelineEvent 和入口边界；盘点直接消费者；不实现生产兼容层或宽松 schema。
+已冻结严格 v2 schema、错误、fixture、marker、TimelineEvent、partial、fragment、history chunk 和入口边界；已盘点直接消费者；未实现生产兼容层或宽松 schema，也未接入旧 v1 生产路由。
 
-### 阶段 2：Extension 最小永久提交链路
+### 阶段 2：Extension 最小永久提交链路（下一步）
 
 实现最小 marker、ALS、WeakMap、post-`message_end` 落盘验证、严格恢复和正式事件；先验证永久 ID、group 与历史 mapper 一致。
 

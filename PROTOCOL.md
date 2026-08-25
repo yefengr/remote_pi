@@ -1,9 +1,50 @@
 # Remote Pi — Protocol & Security
 
 Documentação canônica do protocolo Remote Pi e do modelo de proteção.
-Atualizada em 2026-07-18.
+Atualizada em 2026-08-25.
+
+> **Protocol v2 是当前唯一 App↔Extension inner 协议。** 所有 inner frame 必须携带 `protocol_version: 2`；缺失、v1、未知版本、未完成 `session_hello` 的业务帧均拒绝。禁止 v1 fallback、双读双写和自动降级。Relay 继续只解析 outer envelope，保持 inner payload 透明。
+>
+> 阶段 1 的隔离 schema 与严格 codec 位于：
+> - Extension：`pi-extension/src/protocol/v2/`
+> - Site：`site/src/lib/remote-pi/protocol-v2/`
+>
+> 当前生产路由仍处于 v1 代码基线；阶段 2-4 会在同一协议切换窗口接入 v2，期间不得把旧生产类型当作 v2 兼容层。
 
 ---
+
+## Protocol v2 — 当前真源
+
+### Inner frame 规则
+
+- JSON UTF-8 inner frame 最大 `512 KiB`；未完成逻辑窗口最大 `32 MiB`；单 fragment 解码后最大 `50 KiB`。
+- ID 最大 256 字符；普通字符串最大 1 MiB；数组最大 4096 项；时间戳必须是非负有限数。
+- 所有对象 strict，拒绝未知字段；`JsonValue` 只允许可递归 JSON 值。
+- `TimelineEvent` 同时用于实时正式事件与历史 `session_history_chunk.events`，不允许 `unknown` payload 或半成品事件。
+- `timeline_partial` 只用于实时可变状态，采用扁平形状，绝不进入 marker、SessionManager 或 Dexie。
+- 正式 user event 满足 `event_id === message_id`；tool 的 `complete/error/interrupted` 字段互斥；image 的 `data` 与 `omitted` 字段互斥。
+
+### 路由类别
+
+- PWA request：`protocol_version`、`channel_id`、`history_generation`。
+- Extension direct response：`protocol_version`、`target_channel_id`；ready 后业务响应另带 `session_id`、`history_generation`。
+- Owner broadcast：`protocol_version`、`session_id`、`history_generation`，禁止 `target_channel_id`。
+- 每次 Relay 连接生成临时 `channel_id`；`channel_id`、`client_request_id`、`sender_ref` 不进入 marker 或正式历史。
+- pairing 阶段使用 `pair_request/pair_ok/pair_error`；ready 前的唯一业务握手是 `session_hello`，成功后才允许 ready 业务帧。
+
+### 当前 v2 帧目录
+
+PWA → Extension：`pair_request`、`session_hello`、`user_message`、`user_message_observed`、`session_sync`、`queued_message_set`、`queued_message_clear`、`approve_tool`、`cancel`、`ping`、`session_new`、`session_compact`、`model_set`、`thinking_set`、`list_models`、`extension_ui_response`。
+
+Extension → PWA：`pair_ok`、`pair_error`、`session_ready`、`user_message_started`、`user_message_status`、`timeline_event`、`timeline_partial`、`timeline_event_fragment`、`session_history_chunk`、`protocol_error`、`reset`、`pong`、`cancelled`、`action_ok`、`action_error`、`models_list`、`extension_ui_request`、`bye`。
+
+`approve_tool` 暂保留为严格 v2 输入帧，以便现有入口在正式切换时明确拒绝/忽略策略；它不重新启用生产 approval gate。
+
+---
+
+## v1 历史基线（不再是当前生产协议）
+
+以下章节记录旧版 Relay、配对和 inner frame 形状，供迁移审计使用；不得据此实现新的 v2 consumer。所有涉及“无版本字段”、旧 `session_history`、旧 `id` 复用、旧 queue 语义或 v1 inner frame 的描述均是历史基线。
 
 ## Visão de 30 segundos
 
