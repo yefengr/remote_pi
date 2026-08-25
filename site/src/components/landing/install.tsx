@@ -29,11 +29,11 @@ const INSTALL_TABS: Record<string, InstallTab> = {
   "Already have Pi": {
     label: "bash + Pi",
     lines: [
-      { p: "$", c: "pi install npm:remote-pi" },
+      { p: "$", c: "pi install npm:@yefengr/remote-pi" },
       { p: "›", c: "/remote-pi" },
       { p: "›", c: "/remote-pi pair" },
     ],
-    copy: "pi install npm:remote-pi",
+    copy: "pi install npm:@yefengr/remote-pi",
     note: (
       <>
         Run the first line in your shell; the <code>/remote-pi</code> lines run

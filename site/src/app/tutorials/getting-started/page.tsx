@@ -59,7 +59,7 @@ export default function GettingStartedTutorial() {
           </p>
           <InstallTabs />
           <p>Walking through the three commands:</p>
-          <DocsSubsection title="pi install npm:remote-pi">
+          <DocsSubsection title="pi install npm:@yefengr/remote-pi">
             <p>
               Installs the plugin into Pi. This registers the{" "}
               <InlineCode>/remote-pi</InlineCode> slash command and deploys the

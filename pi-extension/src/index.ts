@@ -4354,10 +4354,10 @@ async function _cronLog(rest: string, ctx: Pick<ExtensionContext, "ui">): Promis
 /**
  * `linkCli` controls whether we symlink `remote-pi` + `pi-supervisord`
  * into `~/.local/bin/`. The slash-command path passes `true` (user is
- * inside Pi's TUI — they installed via `pi install npm:remote-pi` and
+ * inside Pi's TUI — they installed via `pi install npm:@yefengr/remote-pi` and
  * need us to expose the CLI for them). The standalone-CLI path passes
  * `false` because the user is already running our binary from PATH (they
- * did `npm install -g remote-pi`), so re-linking would point their
+ * did `npm install -g @yefengr/remote-pi`), so re-linking would point their
  * `remote-pi` at the Pi-extension copy and diverge on upgrades.
  */
 /** Returns true on success, false when install failed (so the standalone CLI
@@ -5678,7 +5678,7 @@ if (_isDirectRun()) {
   } else if (subcmd === "claude") {
     await _cmdClaudeCli(cliArgs);
   } else if (subcmd === "install") {
-    // CLI mode = user installed via `npm install -g remote-pi`, so the
+    // CLI mode = user installed via `npm install -g @yefengr/remote-pi`, so the
     // `remote-pi` / `pi-supervisord` bins are already on $PATH via npm's
     // global prefix. Explicit `linkCli: false` so we never stomp those
     // with symlinks pointing at a parallel Pi-extension install.

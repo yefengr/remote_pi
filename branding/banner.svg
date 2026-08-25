@@ -39,7 +39,7 @@
         font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace"
         font-size="22"
         font-weight="500"
-        fill="#4FC3F7">pi install npm:remote-pi</text>
+        fill="#4FC3F7">pi install npm:@yefengr/remote-pi</text>
 
   <rect x="560" y="430" width="72" height="3" rx="1.5" fill="#4FC3F7"/>
 

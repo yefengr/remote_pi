@@ -27,7 +27,7 @@ document — this README only covers user-facing setup.
 Install the extension (one-time):
 
 ```bash
-pi install npm:remote-pi
+pi install npm:@yefengr/remote-pi
 ```
 
 Then in any Pi terminal:
@@ -173,7 +173,7 @@ messages are unaffected.
 Requirements: Node 20+, Pi (the host coding agent).
 
 ```bash
-pi install npm:remote-pi
+pi install npm:@yefengr/remote-pi
 ```
 
 The extension self-registers the `/remote-pi` slash command and deploys an
@@ -446,7 +446,7 @@ real name to the peer.
 
 All commands above work both as Pi slash commands (interactive) and as
 shell-level `remote-pi <subcommand>` when the package is installed
-globally (`npm install -g remote-pi`).
+globally (`npm install -g @yefengr/remote-pi`).
 
 ### Scheduled prompts (`cron`)
 
@@ -501,10 +501,10 @@ See [`docs/daemon.md`](./docs/daemon.md) for troubleshooting.
 
 ```bash
 # Install the package globally so `remote-pi` and `pi-supervisord`
-# are on your PATH (`pi install npm:remote-pi` alone makes the Pi
+# are on your PATH (`pi install npm:@yefengr/remote-pi` alone makes the Pi
 # extension available but does NOT expose the CLI binaries — see
 # https://docs.npmjs.com/cli/v10/configuring-npm/package-json#bin).
-npm install -g remote-pi
+npm install -g @yefengr/remote-pi
 
 # Install the supervisor as a user-level system service. Linux uses
 # systemd --user; macOS uses launchd LaunchAgent. Both auto-start at

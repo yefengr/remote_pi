@@ -4,7 +4,7 @@ import { useState } from "react";
 import { CodeBlock } from "./code-block";
 
 const CURL = "curl -fsSL https://remote-pi.jacobmoura.work/install.sh | bash";
-const HAVE_PI = `pi install npm:remote-pi
+const HAVE_PI = `pi install npm:@yefengr/remote-pi
 /remote-pi
 /remote-pi pair`;
 

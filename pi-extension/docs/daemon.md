@@ -13,7 +13,7 @@ likely causes and how to fix.
 ```
 [remote-pi] install failed: Error: supervisor script not found at
 /Users/x/dist/bin/supervisord.js. Run `pnpm build` (dev) or
-`npm install -g remote-pi` (prod) first.
+`npm install -g @yefengr/remote-pi` (prod) first.
 ```
 
 You're running `remote-pi install` from a dev clone where `dist/` doesn't
@@ -24,7 +24,7 @@ exist yet, or from a partial install.
 cd pi-extension && pnpm build
 
 # Production install:
-npm install -g remote-pi      # or pnpm install -g remote-pi
+npm install -g @yefengr/remote-pi      # or pnpm install -g @yefengr/remote-pi
 which pi-supervisord          # confirm bin is on PATH
 remote-pi install
 ```
@@ -248,7 +248,7 @@ When you suspect everything is misconfigured:
 remote-pi uninstall              # removes service, keeps registry
 rm -rf ~/.pi/remote               # nukes registry + paired devices + keys
 npm uninstall -g remote-pi
-npm install -g remote-pi
+npm install -g @yefengr/remote-pi
 remote-pi install
 # Then re-pair + re-create daemons from scratch.
 ```

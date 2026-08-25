@@ -11,7 +11,7 @@
 #   2. Pi        — installs the Pi coding agent (npm package
 #                  @earendil-works/pi-coding-agent) into a user-space prefix
 #                  (~/.local) so `pi` lands on ~/.local/bin without root.
-#   3. remote-pi — installs this plugin into Pi (`pi install npm:remote-pi`).
+#   3. remote-pi — installs this plugin into Pi (`pi install npm:@yefengr/remote-pi`).
 #   4. CLI link  — symlinks the `remote-pi` CLI into ~/.local/bin.
 #   5. Supervisor— installs the per-user service (launchd GUI agent on macOS,
 #                  `systemd --user` on Linux) via `remote-pi install`.
@@ -30,12 +30,12 @@ set -euo pipefail
 MIN_NODE="20.6.0"               # Pi requires Node >= 20.6.0
 NODE_LTS="22"                   # what we install via nvm when Node is missing
 PI_PKG="@earendil-works/pi-coding-agent"
-PLUGIN_SPEC="npm:remote-pi"
+PLUGIN_SPEC="npm:@yefengr/remote-pi"
 PLUGIN_NAME="remote-pi"
 USER_PREFIX="$HOME/.local"      # user-space npm global prefix (sudo-free)
 LOCAL_BIN="$USER_PREFIX/bin"
 
-# Resolved at runtime by ensure_plugin() — `pi install npm:remote-pi` runs
+# Resolved at runtime by ensure_plugin() — `pi install npm:@yefengr/remote-pi` runs
 # `npm install -g`, so the plugin lands under `npm root -g`, NOT in
 # ~/.pi/agent/npm. We can't hardcode it: it depends on the effective npm
 # prefix (nvm dir, ~/.local, a user .npmrc, …). Always ask `npm root -g`.
@@ -320,7 +320,7 @@ ensure_plugin() {
 
 # ── 4. Link the remote-pi CLI into ~/.local/bin ──────────────────────────────
 #
-# `pi install npm:remote-pi` makes the slash command available inside Pi, but it
+# `pi install npm:@yefengr/remote-pi` makes the slash command available inside Pi, but it
 # does NOT put the `remote-pi` CLI on $PATH. We symlink it ourselves (the same
 # thing `/remote-pi install` does from inside Pi's TUI, which we can't run from a
 # headless installer).

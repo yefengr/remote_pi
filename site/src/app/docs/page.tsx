@@ -162,7 +162,7 @@ export default function DocsPage() {
         <p>
           Requirements: Node 20+ and Pi (the host coding agent). Remote Pi
           installs as a Pi plugin with{" "}
-          <InlineCode>pi install npm:remote-pi</InlineCode>, which self-registers
+          <InlineCode>pi install npm:@yefengr/remote-pi</InlineCode>, which self-registers
           the <InlineCode>/remote-pi</InlineCode> slash command and deploys the
           agent-network skill. The complete setup — wizard, pairing, first
           command — is in the tutorial.
@@ -503,7 +503,7 @@ export default function DocsPage() {
           Every command works as a Pi slash command (interactive) and as a
           shell-level <InlineCode>remote-pi &lt;subcommand&gt;</InlineCode>{" "}
           when the package is installed globally (
-          <InlineCode>npm install -g remote-pi</InlineCode>).
+          <InlineCode>npm install -g @yefengr/remote-pi</InlineCode>).
         </p>
 
         <DocsSubsection

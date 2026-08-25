@@ -84,7 +84,7 @@ Full security trade-offs and the self-hosting guide live in
 Install the Pi extension in any project where Pi runs:
 
 ```bash
-pi install npm:remote-pi
+pi install npm:@yefengr/remote-pi
 ```
 
 Then in the Pi chat, run:
