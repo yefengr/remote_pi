@@ -5980,6 +5980,94 @@ describe("model meta", () => {
     }
   });
 
+  test("branch change resets every v2 logical channel and requires the new generation", async () => {
+    await initializeV2SessionForTest();
+    await _connectForTest(makeMockCtx());
+    const peers = [
+      { peer: "v2-branch-owner-a", channelId: "v2-branch-channel-a" },
+      { peer: "v2-branch-owner-b", channelId: "v2-branch-channel-b" },
+    ];
+
+    for (const { peer, channelId } of peers) {
+      relayRef.current!.emit("message", makeV2Line(peer, {
+        protocol_version: 2,
+        type: "pair_request",
+        id: `pair-${peer}`,
+        token: "test-token",
+        device_name: peer,
+      }));
+      await vi.waitFor(() => expect(_hasActivePeerForTest(peer)).toBe(true));
+      relayRef.current!.emit("message", makeV2Line(peer, {
+        protocol_version: 2,
+        type: "session_hello",
+        id: `hello-${peer}`,
+        channel_id: channelId,
+      }));
+    }
+
+    const readyFrames = relayRef.current!.send.mock.calls
+      .map((call) => decodeV2Sent(call[0] as string).frame)
+      .filter((frame): frame is Extract<ReturnType<typeof decodeServerFrameV2>, { type: "session_ready" }> =>
+        frame.type === "session_ready");
+    expect(readyFrames).toHaveLength(2);
+    expect(new Set(readyFrames.map((frame) => frame.history_generation)).size).toBe(1);
+    const oldGeneration = readyFrames[0]!.history_generation;
+    const sendsBeforeReset = relayRef.current!.send.mock.calls.length;
+
+    const sessionTree = captureEventHandler("session_tree");
+    sessionTree({ type: "session_tree" });
+
+    const resetFrames = relayRef.current!.send.mock.calls
+      .slice(sendsBeforeReset)
+      .map((call) => decodeV2Sent(call[0] as string).frame)
+      .filter((frame): frame is Extract<ReturnType<typeof decodeServerFrameV2>, { type: "reset" }> =>
+        frame.type === "reset");
+    expect(resetFrames).toHaveLength(2);
+    expect(new Set(resetFrames.map((frame) => frame.target_channel_id))).toEqual(
+      new Set(peers.map((item) => item.channelId)),
+    );
+    expect(new Set(resetFrames.map((frame) => frame.history_generation)).size).toBe(1);
+    const newGeneration = resetFrames[0]!.history_generation;
+    expect(newGeneration).not.toBe(oldGeneration);
+
+    const sendsBeforeOldFrame = relayRef.current!.send.mock.calls.length;
+    relayRef.current!.emit("message", makeV2Line(peers[0]!.peer, {
+      protocol_version: 2,
+      type: "ping",
+      id: "old-generation-ping",
+      channel_id: peers[0]!.channelId,
+      history_generation: oldGeneration,
+    }));
+    await vi.waitFor(() => {
+      const frames = relayRef.current!.send.mock.calls
+        .slice(sendsBeforeOldFrame)
+        .map((call) => decodeV2Sent(call[0] as string).frame);
+      expect(frames).toContainEqual(expect.objectContaining({
+        type: "reset",
+        target_channel_id: peers[0]!.channelId,
+        history_generation: newGeneration,
+        reason: "generation_changed",
+      }));
+    });
+
+    const sendsBeforeHello = relayRef.current!.send.mock.calls.length;
+    for (const { peer, channelId } of peers) {
+      relayRef.current!.emit("message", makeV2Line(peer, {
+        protocol_version: 2,
+        type: "session_hello",
+        id: `hello-new-${peer}`,
+        channel_id: channelId,
+      }));
+    }
+    const renewedReady = relayRef.current!.send.mock.calls
+      .slice(sendsBeforeHello)
+      .map((call) => decodeV2Sent(call[0] as string).frame)
+      .filter((frame): frame is Extract<ReturnType<typeof decodeServerFrameV2>, { type: "session_ready" }> =>
+        frame.type === "session_ready");
+    expect(renewedReady).toHaveLength(2);
+    expect(renewedReady.every((frame) => frame.history_generation === newGeneration)).toBe(true);
+  });
+
   test("busy v2 user message drains after agent_end with reliable queued correlation", async () => {
     _knownPeers.length = 0;
     _addedPeers.length = 0;

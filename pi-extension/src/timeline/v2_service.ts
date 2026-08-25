@@ -89,7 +89,7 @@ export class TimelineV2Service {
       case "session_sync":
         return this.handleHistory(frame);
       case "ping":
-        return this.direct(frame.channel_id, { type: "pong", in_reply_to: frame.id });
+        return this.handlePing(frame);
       case "cancel":
         return this.handleCancel(frame);
       case "user_message":
@@ -240,6 +240,12 @@ export class TimelineV2Service {
       before: frame.before,
       limit: frame.limit,
     });
+  }
+
+  private handlePing(frame: Extract<ClientFrame, { type: "ping" }>): ServerFrame[] {
+    const error = this.ensureReady(frame);
+    if (error) return [error];
+    return this.direct(frame.channel_id, { type: "pong", in_reply_to: frame.id });
   }
 
   private handleCancel(frame: Extract<ClientFrame, { type: "cancel" }>): ServerFrame[] {

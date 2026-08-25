@@ -60,6 +60,18 @@ describe("TimelineV2Service", () => {
 
     expect(service.refreshGeneration("generation-2")).toBe(true);
     expect(service.generation).toBe("generation-2");
+    expect(service.handle({
+      protocol_version: 2,
+      type: "ping",
+      id: "ping-old",
+      channel_id: "channel-1",
+      history_generation: "generation-1",
+    })[0]).toMatchObject({
+      type: "reset",
+      reason: "generation_changed",
+      history_generation: "generation-2",
+      target_channel_id: "channel-1",
+    });
     expect(service.handle(user("generation-1"))[0]).toMatchObject({
       type: "reset",
       reason: "generation_changed",
