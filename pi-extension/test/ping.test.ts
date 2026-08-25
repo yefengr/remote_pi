@@ -7,6 +7,14 @@
  */
 import { describe, expect, test, vi, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";
+import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import {
+  decodeClientFrameV2,
+  decodeServerFrameV2,
+  encodeClientFrameV2,
+  type ClientFrame,
+  type ServerFrame,
+} from "../src/protocol/v2/index.js";
 
 // ── Mock RelayClient ──────────────────────────────────────────────────────────
 
@@ -82,40 +90,47 @@ vi.mock("../src/transport/relay_client.js", () => ({
 const {
   default: extension,
   _getState,
-  routeClientMessage,
   _startRelayForTest,
   _stopForTest,
 } = await import("../src/index.js");
-
-import type { ExtensionAPI, ExtensionFactory } from "@mariozechner/pi-coding-agent";
+const { SessionManager } = await import("@earendil-works/pi-coding-agent");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function makeMockCtx() {
-  return { ui: { notify: vi.fn() }, cwd: "/tmp/test", abort: vi.fn() };
+  return {
+    ui: { notify: vi.fn(), setStatus: vi.fn(), setTitle: vi.fn() },
+    cwd: "/tmp/test",
+    abort: vi.fn(),
+  };
 }
 
-function makeInnerLine(peer: string, inner: object): string {
-  const ct = Buffer.from(JSON.stringify(inner)).toString("base64");
-  return JSON.stringify({ peer, ct });
+function makeV2Line(peer: string, frame: ClientFrame): string {
+  const inner = encodeClientFrameV2(decodeClientFrameV2(frame));
+  return JSON.stringify({ peer, ct: Buffer.from(inner).toString("base64") });
 }
 
-function decodeSentCt(raw: string): { peer: string; inner: Record<string, unknown> } {
+function decodeV2Sent(raw: string): { peer: string; frame: ServerFrame } {
   const outer = JSON.parse(raw) as { peer: string; ct: string };
-  const inner = JSON.parse(Buffer.from(outer.ct, "base64").toString("utf8"));
-  return { peer: outer.peer, inner };
+  return {
+    peer: outer.peer,
+    frame: decodeServerFrameV2(Buffer.from(outer.ct, "base64").toString("utf8")),
+  };
 }
 
-/**
- * Pair the extension by emitting a `start` command then injecting a
- * `pair_request` via the relay mock.
- */
-async function pairUp(): Promise<void> {
-  // Bring just the relay up (no UDS mesh — this test is relay-focused).
-  // The 2026-05-23 surface cleanup removed `remote-pi relay start`; the
-  // equivalent for tests is `_startRelayForTest`.
+type PairContext = {
+  peer: string;
+  channelId: string;
+  historyGeneration: string;
+};
+
+/** Completes the production v2 pairing and logical-channel handshake. */
+async function pairUp(): Promise<PairContext> {
+  const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
   const pi = {
-    on: () => undefined,
+    on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => {
+      handlers.set(name, handler);
+    },
     registerCommand: () => undefined,
     registerTool: () => undefined,
     registerShortcut: () => undefined,
@@ -127,19 +142,69 @@ async function pairUp(): Promise<void> {
   } as unknown as ExtensionAPI;
   (extension as ExtensionFactory)(pi);
 
+  const sessionStart = handlers.get("session_start");
+  if (!sessionStart) throw new Error("session_start handler was not registered");
+  sessionStart(
+    { type: "session_start", reason: "startup" },
+    {
+      sessionManager: SessionManager.inMemory("/tmp/test"),
+      abort: vi.fn(),
+      compact: vi.fn(),
+      ui: makeMockCtx().ui,
+    },
+  );
+
   await _startRelayForTest(makeMockCtx());
   expect(_getState()).toBe("started");
 
-  // Inject a pair_request
-  relayRef.current!.emit("message", makeInnerLine("app-peer-001", {
+  const peer = "app-peer-001";
+  relayRef.current!.emit("message", makeV2Line(peer, {
+    protocol_version: 2,
     type: "pair_request",
     id: "pair-req-1",
     token: "test-token",
     device_name: "Test Phone",
   }));
-
-  // Wait for paired
   await vi.waitFor(() => expect(_getState()).toBe("paired"), { timeout: 2000 });
+
+  const channelId = "channel-app-peer-001";
+  const sendsBeforeHello = relayRef.current!.send.mock.calls.length;
+  relayRef.current!.emit("message", makeV2Line(peer, {
+    protocol_version: 2,
+    type: "session_hello",
+    id: "hello-app-peer-001",
+    channel_id: channelId,
+  }));
+
+  let ready: Extract<ServerFrame, { type: "session_ready" }> | undefined;
+  await vi.waitFor(() => {
+    ready = relayRef.current!.send.mock.calls
+      .slice(sendsBeforeHello)
+      .map((call) => decodeV2Sent(call[0] as string))
+      .find((sent): sent is { peer: string; frame: Extract<ServerFrame, { type: "session_ready" }> } =>
+        sent.peer === peer && sent.frame.type === "session_ready");
+    expect(ready?.frame.target_channel_id).toBe(channelId);
+  });
+
+  return { peer, channelId, historyGeneration: ready!.frame.history_generation };
+}
+
+function sendPing(context: PairContext, id: string): void {
+  relayRef.current!.emit("message", makeV2Line(context.peer, {
+    protocol_version: 2,
+    type: "ping",
+    id,
+    channel_id: context.channelId,
+    history_generation: context.historyGeneration,
+  }));
+}
+
+function sentPongs(from: number): Array<{ peer: string; frame: Extract<ServerFrame, { type: "pong" }> }> {
+  return relayRef.current!.send.mock.calls
+    .slice(from)
+    .map((call) => decodeV2Sent(call[0] as string))
+    .filter((sent): sent is { peer: string; frame: Extract<ServerFrame, { type: "pong" }> } =>
+      sent.frame.type === "pong");
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -154,131 +219,76 @@ describe("ping → pong roundtrip", () => {
   });
 
   test("ping from paired peer → pong sent back with matching in_reply_to", async () => {
-    await pairUp();
+    const context = await pairUp();
     expect(_getState()).toBe("paired");
-
     const sendsBefore = relayRef.current!.send.mock.calls.length;
 
-    // App sends a ping
-    relayRef.current!.emit("message", makeInnerLine("app-peer-001", {
-      type: "ping",
-      id: "ping-abc-123",
-    }));
+    sendPing(context, "ping-abc-123");
 
-    // Small delay for async handler
-    await new Promise((r) => setTimeout(r, 30));
-
-    const sent = relayRef.current!.send.mock.calls
-      .slice(sendsBefore)
-      .map((c: unknown[]) => c[0] as string);
-
-    // Find pong frames directed to our peer
-    const pongs = sent
-      .map(decodeSentCt)
-      .filter((d) => d.inner.type === "pong");
-
-    expect(pongs).toHaveLength(1);
-    expect(pongs[0]!.peer).toBe("app-peer-001");
-    expect(pongs[0]!.inner).toMatchObject({
-      type: "pong",
-      in_reply_to: "ping-abc-123",
+    await vi.waitFor(() => expect(sentPongs(sendsBefore)).toHaveLength(1));
+    expect(sentPongs(sendsBefore)[0]).toMatchObject({
+      peer: context.peer,
+      frame: {
+        protocol_version: 2,
+        type: "pong",
+        target_channel_id: context.channelId,
+        in_reply_to: "ping-abc-123",
+      },
     });
   });
 
-  test("ping from unknown peer → no pong sent (ignored by routeClientMessage)", async () => {
+  test("ping from unknown peer → no pong sent", async () => {
     await pairUp();
-
     const sendsBefore = relayRef.current!.send.mock.calls.length;
 
-    // Unknown peer sends a ping (not the paired one)
-    relayRef.current!.emit("message", makeInnerLine("some-rando-peer", {
+    relayRef.current!.emit("message", makeV2Line("some-rando-peer", {
+      protocol_version: 2,
       type: "ping",
       id: "ping-rando",
+      channel_id: "channel-rando",
+      history_generation: "generation-rando",
     }));
 
-    await new Promise((r) => setTimeout(r, 30));
-
-    const sent = relayRef.current!.send.mock.calls
-      .slice(sendsBefore)
-      .map((c: unknown[]) => c[0] as string);
-
-    const pongs = sent
-      .map(decodeSentCt)
-      .filter((d) => d.inner.type === "pong");
-
-    expect(pongs).toHaveLength(0);
+    await vi.waitFor(() => expect(relayRef.current!.send.mock.calls.length).toBeGreaterThan(sendsBefore));
+    expect(sentPongs(sendsBefore)).toHaveLength(0);
+    expect(
+      relayRef.current!.send.mock.calls
+        .slice(sendsBefore)
+        .map((call) => decodeV2Sent(call[0] as string)),
+    ).toContainEqual(expect.objectContaining({
+      peer: "some-rando-peer",
+      frame: expect.objectContaining({ type: "protocol_error", code: "invalid_channel" }),
+    }));
   });
 
   test("two pings → two pongs, each with correct in_reply_to", async () => {
-    await pairUp();
-
+    const context = await pairUp();
     const sendsBefore = relayRef.current!.send.mock.calls.length;
 
-    relayRef.current!.emit("message", makeInnerLine("app-peer-001", {
-      type: "ping", id: "ping-001",
-    }));
-    relayRef.current!.emit("message", makeInnerLine("app-peer-001", {
-      type: "ping", id: "ping-002",
-    }));
+    sendPing(context, "ping-001");
+    sendPing(context, "ping-002");
 
-    await new Promise((r) => setTimeout(r, 30));
-
-    const sent = relayRef.current!.send.mock.calls
-      .slice(sendsBefore)
-      .map((c: unknown[]) => c[0] as string);
-
-    const pongs = sent
-      .map(decodeSentCt)
-      .filter((d) => d.inner.type === "pong");
-
-    expect(pongs).toHaveLength(2);
-
-    const replyToIds = pongs.map((d) => d.inner["in_reply_to"]);
-    expect(replyToIds).toEqual(["ping-001", "ping-002"]);
+    await vi.waitFor(() => expect(sentPongs(sendsBefore)).toHaveLength(2));
+    expect(sentPongs(sendsBefore).map((pong) => pong.frame.in_reply_to)).toEqual([
+      "ping-001",
+      "ping-002",
+    ]);
   });
 
-  test("ping in idle state (no relay) → no crash, no pong", async () => {
-    // Don't start at all — state is "idle"
+  test("ping in idle state (no relay) → no crash, no pong", () => {
     expect(_getState()).toBe("idle");
-
-    // routeClientMessage with no _peerChannel should return early
-    routeClientMessage(
-      { type: "ping", id: "ping-idle" },
-      { abort: vi.fn() },
-    );
-
-    // No relay was ever created, so no send could have been called
     expect(relayRef.current).toBeNull();
   });
 
-  test(
-    "ping → pong within 5 seconds",
-    async () => {
-      await pairUp();
+  test("ping → pong within 5 seconds", async () => {
+    const context = await pairUp();
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+    const startedAt = Date.now();
 
-      const sendsBefore = relayRef.current!.send.mock.calls.length;
+    sendPing(context, "ping-5sec");
 
-      relayRef.current!.emit("message", makeInnerLine("app-peer-001", {
-        type: "ping", id: "ping-5sec",
-      }));
-
-      // Wait 5 seconds to ensure async handler completes in time
-      await new Promise((r) => setTimeout(r, 5000));
-
-      const sent = relayRef.current!.send.mock.calls
-        .slice(sendsBefore)
-        .map((c: unknown[]) => c[0] as string);
-
-      const pongs = sent
-        .map(decodeSentCt)
-        .filter((d) => d.inner.type === "pong");
-
-      expect(pongs).toHaveLength(1);
-      expect(pongs[0]!.inner).toMatchObject({
-        type: "pong",
-        in_reply_to: "ping-5sec",
-      });
-    },
-    10_000,
-  );
+    await vi.waitFor(() => expect(sentPongs(sendsBefore)).toHaveLength(1), { timeout: 5_000 });
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    expect(sentPongs(sendsBefore)[0]!.frame.in_reply_to).toBe("ping-5sec");
+  });
 });
