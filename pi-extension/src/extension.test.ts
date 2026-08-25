@@ -2380,81 +2380,132 @@ describe("user_input mirroring", () => {
     relayRef.current = null;
     const qr = await import("./pairing/qr.js");
     (qr.qrSession.consumeToken as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-      (token: string) => {
-        _consumeCalls.push(token);
-        return _tokenStatus;
-      },
+      (token: string) => { _consumeCalls.push(token); return _tokenStatus; },
     );
     const stop = captureHandler("remote-pi stop");
     await stop("", makeMockCtx());
   });
 
-  test("interactive input → user_input emitted + _currentTurnId set", async () => {
-    await _pairForTest("peer-A");
+  async function setupV2(peer: string) {
+    const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+    const sessionManager = SessionManager.inMemory(process.cwd());
+    const harness = captureEventHarness();
+    harness.handler("session_start")(
+      { type: "session_start", reason: "startup" },
+      { sessionManager, ui: { notify: vi.fn() }, abort: vi.fn(), compact: vi.fn() } as never,
+    );
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
+      type: "pair_request",
+      id: `pair-${peer}`,
+      token: "test-token",
+      device_name: peer,
+    }));
+    await vi.waitFor(() => expect(_hasActivePeerForTest(peer)).toBe(true));
+    const channelId = `channel-${peer}`;
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
+      type: "session_hello",
+      id: `hello-${peer}`,
+      channel_id: channelId,
+    }));
+    let ready: Extract<ReturnType<typeof decodeServerFrameV2>, { type: "session_ready" }> | undefined;
+    await vi.waitFor(() => {
+      ready = relayRef.current!.send.mock.calls
+        .map((call) => decodeV2Sent(call[0] as string).frame)
+        .find((frame): frame is Extract<ReturnType<typeof decodeServerFrameV2>, { type: "session_ready" }> =>
+          frame.type === "session_ready" && frame.target_channel_id === channelId);
+      expect(ready).toBeDefined();
+    });
+    return { sessionManager, harness, channelId, historyGeneration: ready!.history_generation };
+  }
+
+  async function persistUser(
+    harness: ReturnType<typeof captureEventHarness>,
+    sessionManager: Awaited<ReturnType<typeof setupV2>>["sessionManager"],
+    text: string,
+  ): Promise<void> {
+    const message = { role: "user", content: text, timestamp: Date.now() };
+    harness.handler("agent_start")({ type: "agent_start" });
+    harness.handler("message_start")({ type: "message_start", message }, { sessionManager } as never);
+    harness.handler("message_end")({ type: "message_end", message }, { sessionManager } as never);
+    sessionManager.appendMessage(message as never);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+
+  test("interactive input persists as an unknown-origin formal user event", async () => {
+    const { sessionManager, harness } = await setupV2("peer-A");
     const sendsBefore = relayRef.current!.send.mock.calls.length;
 
-    const onInput = captureEventHandler("input");
-    onInput({ type: "input", text: "listar arquivos", source: "interactive" });
+    harness.handler("input")({ type: "input", text: "listar arquivos", source: "interactive" });
+    expect(_getCurrentTurnIdForTest()).toMatch(/^local_/);
+    await persistUser(harness, sessionManager, "listar arquivos");
 
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore).map((c) => c[0] as string);
-    const userInputs = sent.map(decodeSentCt).filter((d) => d.inner.type === "user_input");
-    expect(userInputs).toHaveLength(1);
-    expect(userInputs[0]!.peer).toBe("peer-A");
-    expect(userInputs[0]!.inner).toMatchObject({ type: "user_input", text: "listar arquivos" });
-    expect(typeof userInputs[0]!.inner["id"]).toBe("string");
-    expect((userInputs[0]!.inner["id"] as string).startsWith("local_")).toBe(true);
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore).map((call) => decodeV2Sent(call[0] as string));
+    const event = sent.find((item) => item.frame.type === "timeline_event");
+    expect(event?.peer).toBe("peer-A");
+    expect(event?.frame).toMatchObject({
+      type: "timeline_event",
+      event: { kind: "user", origin: "unknown", delivery: "unknown", blocks: [{ type: "text", text: "listar arquivos" }] },
+    });
   });
 
-  test("extension input → NO user_input emitted (routeClientMessage already handles app turns)", async () => {
-    await _pairForTest("peer-B");
+  test("extension input has no immediate mirror and still becomes formal history after persistence", async () => {
+    const { sessionManager, harness } = await setupV2("peer-B");
     const sendsBefore = relayRef.current!.send.mock.calls.length;
 
-    const onInput = captureEventHandler("input");
-    onInput({ type: "input", text: "via app", source: "extension" });
+    harness.handler("input")({ type: "input", text: "via extension", source: "extension" });
+    expect(relayRef.current!.send.mock.calls).toHaveLength(sendsBefore);
+    await persistUser(harness, sessionManager, "via extension");
 
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore).map((c) => c[0] as string);
-    const userInputs = sent.map(decodeSentCt).filter((d) => d.inner.type === "user_input");
-    expect(userInputs).toHaveLength(0);
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore).map((call) => decodeV2Sent(call[0] as string).frame);
+    expect(sent).toContainEqual(expect.objectContaining({
+      type: "timeline_event",
+      event: expect.objectContaining({ kind: "user", origin: "unknown", delivery: "unknown" }),
+    }));
+    expect(sent.some((frame) => frame.type === "user_message_status")).toBe(false);
   });
 
-  test("rpc input → user_input emitted (same as interactive)", async () => {
-    await _pairForTest("peer-C");
+  test("rpc input persists as an unknown-origin formal user event", async () => {
+    const { sessionManager, harness } = await setupV2("peer-C");
+    harness.handler("input")({ type: "input", text: "remoto via RPC", source: "rpc" });
+    await persistUser(harness, sessionManager, "remoto via RPC");
+
+    const frames = relayRef.current!.send.mock.calls.map((call) => decodeV2Sent(call[0] as string).frame);
+    expect(frames).toContainEqual(expect.objectContaining({
+      type: "timeline_event",
+      event: expect.objectContaining({ kind: "user", origin: "unknown", delivery: "unknown", blocks: [{ type: "text", text: "remoto via RPC" }] }),
+    }));
+  });
+
+  test("local input scopes a v2 assistant partial to the persisted formal user group", async () => {
+    const { sessionManager, harness, historyGeneration } = await setupV2("peer-D");
+    harness.handler("input")({ type: "input", text: "ola", source: "interactive" });
+    const message = { role: "user", content: "ola", timestamp: Date.now() };
+    harness.handler("agent_start")({ type: "agent_start" });
+    harness.handler("message_start")({ type: "message_start", message }, { sessionManager } as never);
     const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    const onInput = captureEventHandler("input");
-    onInput({ type: "input", text: "remoto via RPC", source: "rpc" });
-
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore).map((c) => c[0] as string);
-    const userInputs = sent.map(decodeSentCt).filter((d) => d.inner.type === "user_input");
-    expect(userInputs).toHaveLength(1);
-    expect(userInputs[0]!.inner).toMatchObject({ type: "user_input", text: "remoto via RPC" });
-  });
-
-  test("subsequent agent_chunk reuses turnId set by local input", async () => {
-    await _pairForTest("peer-D");
-
-    const onInput = captureEventHandler("input");
-    onInput({ type: "input", text: "ola", source: "interactive" });
-
-    const sentInputs = relayRef.current!.send.mock.calls.map((c) => c[0] as string);
-    const userInputs = sentInputs.map(decodeSentCt).filter((d) => d.inner.type === "user_input");
-    const turnId = userInputs[0]!.inner["id"] as string;
-
-    const onMsgUpdate = captureEventHandler("message_update");
-    onMsgUpdate({
+    harness.handler("message_update")({
       type: "message_update",
-      message: {},
       assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "hi", partial: {} },
     });
+    harness.handler("message_end")({ type: "message_end", message }, { sessionManager } as never);
+    sessionManager.appendMessage(message as never);
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
-    const allSent = relayRef.current!.send.mock.calls.map((c) => c[0] as string);
-    const chunks = allSent.map(decodeSentCt).filter((d) => d.inner.type === "agent_chunk");
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0]!.inner).toMatchObject({
-      type: "agent_chunk",
-      in_reply_to: turnId,
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore).map((call) => decodeV2Sent(call[0] as string).frame);
+    expect(sent).toContainEqual(expect.objectContaining({
+      type: "timeline_partial",
+      history_generation: historyGeneration,
+      kind: "assistant",
       delta: "hi",
-    });
+    }));
+    expect(sent).toContainEqual(expect.objectContaining({
+      type: "timeline_event",
+      event: expect.objectContaining({ kind: "user", blocks: [{ type: "text", text: "ola" }] }),
+    }));
   });
 });
 
@@ -2473,271 +2524,231 @@ describe("tool visibility", () => {
     relayRef.current = null;
     const qr = await import("./pairing/qr.js");
     (qr.qrSession.consumeToken as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-      (token: string) => {
-        _consumeCalls.push(token);
-        return _tokenStatus;
-      },
+      (token: string) => { _consumeCalls.push(token); return _tokenStatus; },
     );
     const stop = captureHandler("remote-pi stop");
     await stop("", makeMockCtx());
   });
 
-  test("tool_execution_start → tool_request emitted via channel", async () => {
-    await _pairForTest("peer-tool");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
+  async function setupV2(peer: string) {
+    const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+    const sessionManager = SessionManager.inMemory(process.cwd());
+    const harness = captureEventHarness();
+    harness.handler("session_start")(
+      { type: "session_start", reason: "startup" },
+      { sessionManager, ui: { notify: vi.fn() }, abort: vi.fn(), compact: vi.fn() } as never,
+    );
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
+      type: "pair_request",
+      id: `pair-${peer}`,
+      token: "test-token",
+      device_name: peer,
+    }));
+    await vi.waitFor(() => expect(_hasActivePeerForTest(peer)).toBe(true));
+    const channelId = `channel-${peer}`;
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
+      type: "session_hello",
+      id: `hello-${peer}`,
+      channel_id: channelId,
+    }));
+    let ready: Extract<ReturnType<typeof decodeServerFrameV2>, { type: "session_ready" }> | undefined;
+    await vi.waitFor(() => {
+      ready = relayRef.current!.send.mock.calls
+        .map((call) => decodeV2Sent(call[0] as string).frame)
+        .find((frame): frame is Extract<ReturnType<typeof decodeServerFrameV2>, { type: "session_ready" }> =>
+          frame.type === "session_ready" && frame.target_channel_id === channelId);
+      expect(ready).toBeDefined();
+    });
+    return { sessionManager, harness, channelId, historyGeneration: ready!.history_generation };
+  }
 
-    const onToolStart = captureEventHandler("tool_execution_start");
-    onToolStart({
+  function sentFrames(start = 0) {
+    return relayRef.current!.send.mock.calls.slice(start).map((call) => decodeV2Sent(call[0] as string));
+  }
+
+  test("tool_execution_start broadcasts a running v2 tool partial", async () => {
+    const { harness, historyGeneration } = await setupV2("peer-tool");
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+    harness.handler("tool_execution_start")({
       type: "tool_execution_start",
       toolCallId: "tc_1",
       toolName: "bash",
       args: { command: "ls" },
     });
 
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore).map((c) => c[0] as string);
-    const requests = sent.map(decodeSentCt).filter((d) => d.inner.type === "tool_request");
-    expect(requests).toHaveLength(1);
-    expect(requests[0]!.peer).toBe("peer-tool");
-    expect(requests[0]!.inner).toMatchObject({
-      type: "tool_request",
-      tool_call_id: "tc_1",
-      tool: "bash",
-      args: { command: "ls" },
-    });
+    expect(sentFrames(sendsBefore)).toContainEqual(expect.objectContaining({
+      peer: "peer-tool",
+      frame: expect.objectContaining({
+        type: "timeline_partial",
+        history_generation: historyGeneration,
+        kind: "tool",
+        partial_id: "tc_1",
+        status: "running",
+        tool_call_id: "tc_1",
+        tool: "bash",
+        args: { command: "ls" },
+      }),
+    }));
   });
 
-  test("tool_execution_start enriches edit args with numbered context hunks", async () => {
-    await _pairForTest("peer-edit");
+  test("tool_execution_start enriches edit partial args with numbered context hunks", async () => {
+    const { harness } = await setupV2("peer-edit");
     const cwd = mkdtempSync(join(tmpdir(), "remote-pi-edit-"));
     const file = join(cwd, "sample.dart");
-    writeFileSync(
-      file,
-      [
-        "line 1",
-        "line 2",
-        "line 3",
-        "line 4",
-        "line 5",
-        "  tool: 'Edit',",
-        "  args: {",
-        "    'file_path': 'x',",
-        "  },",
-        "line 10",
-      ].join("\n"),
-    );
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
+    writeFileSync(file, [
+      "line 1", "line 2", "line 3", "line 4", "line 5", "  tool: 'Edit',",
+      "  args: {", "    'file_path': 'x',", "  },", "line 10",
+    ].join("\n"));
     try {
-      const onToolStart = captureEventHandler("tool_execution_start");
-      onToolStart({
+      const sendsBefore = relayRef.current!.send.mock.calls.length;
+      harness.handler("tool_execution_start")({
         type: "tool_execution_start",
         toolCallId: "tc_edit",
         toolName: "edit",
-        args: {
-          path: file,
-          edits: [
-            {
-              oldText: "  tool: 'Edit',\n  args: {\n    'file_path': 'x',",
-              newText: "  tool: 'edit',\n  args: {\n    'path': 'x',",
-            },
-          ],
-        },
+        args: { path: file, edits: [{
+          oldText: "  tool: 'Edit',\n  args: {\n    'file_path': 'x',",
+          newText: "  tool: 'edit',\n  args: {\n    'path': 'x',",
+        }] },
       });
-
-      const requests = relayRef.current!.send.mock.calls
-        .slice(sendsBefore)
-        .map((c) => c[0] as string)
-        .map(decodeSentCt)
-        .filter((d) => d.inner.type === "tool_request");
-      const args = requests[0]!.inner.args as {
+      const partial = sentFrames(sendsBefore).find((item) => item.frame.type === "timeline_partial");
+      const args = (partial?.frame as Extract<ReturnType<typeof decodeServerFrameV2>, { type: "timeline_partial" }> | undefined)?.args as {
         hunks: Array<{ lines: Array<{ kind: string; oldLine?: number; newLine?: number; text?: string }> }>;
       };
-      expect(args.hunks[0]!.lines).toEqual(
-        expect.arrayContaining([
-          { kind: "context", oldLine: 5, newLine: 5, text: "line 5" },
-          { kind: "remove", oldLine: 6, text: "  tool: 'Edit'," },
-          { kind: "add", newLine: 6, text: "  tool: 'edit'," },
-          { kind: "context", oldLine: 9, newLine: 9, text: "  }," },
-        ]),
-      );
+      expect(args.hunks[0]!.lines).toEqual(expect.arrayContaining([
+        { kind: "context", oldLine: 5, newLine: 5, text: "line 5" },
+        { kind: "remove", oldLine: 6, text: "  tool: 'Edit'," },
+        { kind: "add", newLine: 6, text: "  tool: 'edit'," },
+        { kind: "context", oldLine: 9, newLine: 9, text: "  }," },
+      ]));
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
   });
 
-
-  test("tool_execution_start keeps unchanged edit lines as context", async () => {
-    await _pairForTest("peer-edit-context");
+  test("tool_execution_start keeps unchanged edit lines as v2 partial context", async () => {
+    const { harness } = await setupV2("peer-edit-context");
     const cwd = mkdtempSync(join(tmpdir(), "remote-pi-edit-context-"));
     const file = join(cwd, "README.md");
-    writeFileSync(
-      file,
-      [
-        "<p align=\"center\">",
-        "  Control your Pi from your phone.",
-        "  Pair with a one-time QR code.",
-        "</p>",
-      ].join("\n"),
-    );
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
+    writeFileSync(file, [
+      "<p align=\"center\">", "  Control your Pi from your phone.",
+      "  Pair with a one-time QR code.", "</p>",
+    ].join("\n"));
     try {
-      const onToolStart = captureEventHandler("tool_execution_start");
-      onToolStart({
+      const sendsBefore = relayRef.current!.send.mock.calls.length;
+      harness.handler("tool_execution_start")({
         type: "tool_execution_start",
         toolCallId: "tc_edit_context",
         toolName: "edit",
-        args: {
-          path: file,
-          edits: [
-            {
-              oldText: "  Pair with a one-time QR code.",
-              newText: "  Pair with a one-time QR code.\n  Test note: edit preview smoke test.",
-            },
-          ],
-        },
+        args: { path: file, edits: [{
+          oldText: "  Pair with a one-time QR code.",
+          newText: "  Pair with a one-time QR code.\n  Test note: edit preview smoke test.",
+        }] },
       });
-
-      const requests = relayRef.current!.send.mock.calls
-        .slice(sendsBefore)
-        .map((c) => c[0] as string)
-        .map(decodeSentCt)
-        .filter((d) => d.inner.type === "tool_request");
-      const args = requests[0]!.inner.args as {
+      const partial = sentFrames(sendsBefore).find((item) => item.frame.type === "timeline_partial");
+      const args = (partial?.frame as Extract<ReturnType<typeof decodeServerFrameV2>, { type: "timeline_partial" }> | undefined)?.args as {
         hunks: Array<{ lines: Array<{ kind: string; oldLine?: number; newLine?: number; text?: string }> }>;
       };
-      expect(args.hunks[0]!.lines).toEqual(
-        expect.arrayContaining([
-          { kind: "context", oldLine: 3, newLine: 3, text: "  Pair with a one-time QR code." },
-          { kind: "add", newLine: 4, text: "  Test note: edit preview smoke test." },
-          { kind: "context", oldLine: 4, newLine: 5, text: "</p>" },
-        ]),
-      );
-      expect(args.hunks[0]!.lines).not.toEqual(
-        expect.arrayContaining([
-          { kind: "remove", oldLine: 3, text: "  Pair with a one-time QR code." },
-        ]),
-      );
+      expect(args.hunks[0]!.lines).toEqual(expect.arrayContaining([
+        { kind: "context", oldLine: 3, newLine: 3, text: "  Pair with a one-time QR code." },
+        { kind: "add", newLine: 4, text: "  Test note: edit preview smoke test." },
+        { kind: "context", oldLine: 4, newLine: 5, text: "</p>" },
+      ]));
+      expect(args.hunks[0]!.lines).not.toEqual(expect.arrayContaining([
+        { kind: "remove", oldLine: 3, text: "  Pair with a one-time QR code." },
+      ]));
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
   });
 
-  test("tool_execution_start ignored when _peerChannel is null (idle state)", () => {
+  test("tool_execution_start is ignored while no v2 channel is attached", () => {
     expect(_getState()).toBe("idle");
-
-    const onToolStart = captureEventHandler("tool_execution_start");
-    onToolStart({
-      type: "tool_execution_start",
-      toolCallId: "tc_idle",
-      toolName: "bash",
-      args: { command: "ls" },
+    captureEventHandler("tool_execution_start")({
+      type: "tool_execution_start", toolCallId: "tc_idle", toolName: "bash", args: { command: "ls" },
     });
-
-    // Relay was never instantiated in idle state (no start happened)
     expect(relayRef.current).toBeNull();
   });
 
-  test("start → end pair emits tool_request then tool_result (no gate)", async () => {
-    await _pairForTest("peer-pair");
-
-    const onToolStart = captureEventHandler("tool_execution_start");
-    const onToolEnd = captureEventHandler("tool_execution_end");
-
-    onToolStart({
-      type: "tool_execution_start",
-      toolCallId: "tc_2",
-      toolName: "Read",
-      args: { file_path: "/tmp/x" },
+  test("tool start and end broadcast running and delta partials", async () => {
+    const { harness } = await setupV2("peer-pair");
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+    harness.handler("tool_execution_start")({
+      type: "tool_execution_start", toolCallId: "tc_2", toolName: "Read", args: { file_path: "/tmp/x" },
     });
-    onToolEnd({
-      type: "tool_execution_end",
-      toolCallId: "tc_2",
+    harness.handler("tool_execution_end")({
+      type: "tool_execution_end", toolCallId: "tc_2", toolName: "Read", result: { content: "hello" }, isError: false,
+    });
+
+    const partials = sentFrames(sendsBefore).map((item) => item.frame)
+      .filter((frame): frame is Extract<ReturnType<typeof decodeServerFrameV2>, { type: "timeline_partial" }> => frame.type === "timeline_partial");
+    expect(partials).toContainEqual(expect.objectContaining({ type: "timeline_partial", partial_id: "tc_2", kind: "tool", status: "running" }));
+    expect(partials).toContainEqual(expect.objectContaining({ type: "timeline_partial", partial_id: "tc_2", kind: "tool", status: "delta", delta: JSON.stringify({ content: "hello" }) }));
+  });
+
+  test("persisted tool result becomes a formal v2 tool event", async () => {
+    const { sessionManager, harness } = await setupV2("peer-tool-event");
+    const message = {
+      role: "toolResult",
+      toolCallId: "tc_ok",
       toolName: "Read",
-      result: { content: "hello" },
+      args: { path: "/tmp/x" },
+      content: [{ type: "text", text: "file contents" }],
       isError: false,
+      timestamp: Date.now(),
+    };
+    harness.handler("agent_start")({ type: "agent_start" });
+    harness.handler("message_start")({ type: "message_start", message }, { sessionManager } as never);
+    harness.handler("tool_execution_end")({
+      type: "tool_execution_end", toolCallId: "tc_ok", toolName: "Read", result: message.content, isError: false,
     });
+    harness.handler("message_end")({ type: "message_end", message }, { sessionManager } as never);
+    sessionManager.appendMessage(message as never);
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
-    const sent = relayRef.current!.send.mock.calls.map((c) => c[0] as string).map(decodeSentCt);
-    const requests = sent.filter((d) => d.inner.type === "tool_request");
-    const results = sent.filter((d) => d.inner.type === "tool_result");
-    expect(requests).toHaveLength(1);
-    expect(results).toHaveLength(1);
-    expect(results[0]!.inner).toMatchObject({
-      type: "tool_result",
-      tool_call_id: "tc_2",
-    });
+    const frames = sentFrames().map((item) => item.frame);
+    expect(frames).toContainEqual(expect.objectContaining({
+      type: "timeline_partial",
+      kind: "tool",
+      partial_id: "tc_ok",
+      status: "delta",
+      delta: "file contents",
+    }));
+    expect(frames).toContainEqual(expect.objectContaining({
+      type: "timeline_event",
+      event: expect.objectContaining({
+        kind: "tool",
+        tool_call_id: "tc_ok",
+        tool: "Read",
+        args: { path: "/tmp/x" },
+        status: "complete",
+        result: [{ type: "text", text: "file contents" }],
+      }),
+    }));
   });
 
-  test("tool_result stringifies content-array/object (no [object Object]) and == re-sync", async () => {
-    await _pairForTest("peer-tr");
-    const onToolEnd = captureEventHandler("tool_execution_end");
+  test("tool result wrapper is emitted as a readable v2 delta", async () => {
+    const { harness } = await setupV2("peer-tool-wrapper");
     const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    // success: content-array result → joined text (was "[object Object]").
-    onToolEnd({
-      type: "tool_execution_end", toolCallId: "tc_ok", toolName: "Read",
-      result: [{ type: "text", text: "file contents" }], isError: false,
-    });
-    // error: content-array → text (was "[object Object]").
-    onToolEnd({
-      type: "tool_execution_end", toolCallId: "tc_err", toolName: "Bash",
-      result: [{ type: "text", text: "command failed: boom" }], isError: true,
-    });
-    // plain object → readable JSON (was "[object Object]").
-    onToolEnd({
-      type: "tool_execution_end", toolCallId: "tc_obj", toolName: "X",
-      result: { code: 1, msg: "nope" }, isError: true,
-    });
-
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string).map(decodeSentCt)
-      .filter((d) => d.inner.type === "tool_result");
-    const ok = sent.find((d) => d.inner.tool_call_id === "tc_ok");
-    const err = sent.find((d) => d.inner.tool_call_id === "tc_err");
-    const obj = sent.find((d) => d.inner.tool_call_id === "tc_obj");
-
-    expect(ok?.inner.result).toBe("file contents");
-    expect(err?.inner.error).toBe("command failed: boom");
-    expect(obj?.inner.error).toBe(JSON.stringify({ code: 1, msg: "nope" }));
-    expect(JSON.stringify(sent)).not.toContain("[object Object]");
-
-    // live == re-sync: the history mapper yields identical text for the same tool.
-    const histOk = _mapAgentMessagesToEvents([
-      { role: "toolResult", toolCallId: "tc_ok", content: [{ type: "text", text: "file contents" }], timestamp: 1 },
-    ])[0] as { result?: string };
-    const histErr = _mapAgentMessagesToEvents([
-      { role: "toolResult", toolCallId: "tc_err", isError: true, content: [{ type: "text", text: "command failed: boom" }], timestamp: 1 },
-    ])[0] as { error?: string };
-    expect(histOk.result).toBe(ok?.inner.result);
-    expect(histErr.error).toBe(err?.inner.error);
-  });
-
-  test("tool_result unwraps the live { content:[…], details } wrapper (== re-sync)", async () => {
-    await _pairForTest("peer-tr2");
-    const onToolEnd = captureEventHandler("tool_execution_end");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    // Live: event.result is the WRAPPER object, NOT a bare content-array.
-    onToolEnd({
-      type: "tool_execution_end", toolCallId: "tc_w", toolName: "run_command",
+    harness.handler("tool_execution_end")({
+      type: "tool_execution_end",
+      toolCallId: "tc_w",
+      toolName: "run_command",
       result: { content: [{ type: "text", text: "ping: cannot resolve host" }], details: {} },
       isError: true,
     });
 
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string).map(decodeSentCt)
-      .filter((d) => d.inner.type === "tool_result");
-    const w = sent.find((d) => d.inner.tool_call_id === "tc_w");
-    // unwrapped to the clean text — no braces / JSON wrapper / "[object Object]".
-    expect(w?.inner.error).toBe("ping: cannot resolve host");
-    expect(JSON.stringify(sent)).not.toContain("\"content\"");
-
-    // live == re-sync: history (m.content = bare content-array) gives same text.
-    const hist = _mapAgentMessagesToEvents([
-      { role: "toolResult", toolCallId: "tc_w", isError: true, content: [{ type: "text", text: "ping: cannot resolve host" }], timestamp: 1 },
-    ])[0] as { error?: string };
-    expect(hist.error).toBe(w?.inner.error);
+    const partial = sentFrames(sendsBefore).find((item) => item.frame.type === "timeline_partial");
+    expect(partial?.frame).toMatchObject({
+      type: "timeline_partial",
+      kind: "tool",
+      partial_id: "tc_w",
+      status: "delta",
+      delta: "ping: cannot resolve host",
+    });
   });
 });
 
@@ -3407,203 +3418,183 @@ describe("session sync", () => {
     _setSessionStartedAtForTest(null);
   });
 
-  test("session_sync with no active session → empty history + eos:true + truncated:false", async () => {
-    await _pairForTest("peer-ss-1");
-    _setMessageBufferForTest([]);
-    _setSessionStartedAtForTest(null); // simulate edge: paired but no session
-
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-    routeClientMessage(
-      { type: "session_sync", id: "req-1" },
-      { abort: () => undefined },
+  async function setupV2(peer: string) {
+    const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+    const sessionManager = SessionManager.inMemory(process.cwd());
+    const harness = captureEventHarness();
+    harness.handler("session_start")(
+      { type: "session_start", reason: "startup" },
+      { sessionManager, ui: { notify: vi.fn() }, abort: vi.fn(), compact: vi.fn() } as never,
     );
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
+      type: "pair_request",
+      id: `pair-${peer}`,
+      token: "test-token",
+      device_name: peer,
+    }));
+    await vi.waitFor(() => expect(_hasActivePeerForTest(peer)).toBe(true));
+    const channelId = `channel-${peer}`;
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
+      type: "session_hello",
+      id: `hello-${peer}`,
+      channel_id: channelId,
+    }));
+    let ready: Extract<ReturnType<typeof decodeServerFrameV2>, { type: "session_ready" }> | undefined;
+    await vi.waitFor(() => {
+      ready = relayRef.current!.send.mock.calls
+        .map((call) => decodeV2Sent(call[0] as string).frame)
+        .find((frame): frame is Extract<ReturnType<typeof decodeServerFrameV2>, { type: "session_ready" }> =>
+          frame.type === "session_ready" && frame.target_channel_id === channelId);
+      expect(ready).toBeDefined();
+    });
+    return { sessionManager, harness, channelId, historyGeneration: ready!.history_generation };
+  }
 
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore).map((c) => c[0] as string);
-    const histories = sent.map(decodeSentCt).filter((d) => d.inner.type === "session_history");
-    expect(histories).toHaveLength(1);
-    expect(histories[0]!.inner).toMatchObject({
-      type: "session_history",
-      in_reply_to: "req-1",
-      events: [],
-      eos: true,
-      truncated: false,
+  async function appendUser(
+    harness: ReturnType<typeof captureEventHarness>,
+    sessionManager: Awaited<ReturnType<typeof setupV2>>["sessionManager"],
+    text: string,
+  ): Promise<void> {
+    const message = { role: "user", content: text, timestamp: Date.now() };
+    harness.handler("agent_start")({ type: "agent_start" });
+    harness.handler("message_start")({ type: "message_start", message }, { sessionManager } as never);
+    harness.handler("message_end")({ type: "message_end", message }, { sessionManager } as never);
+    sessionManager.appendMessage(message as never);
+    harness.handler("agent_end")({ type: "agent_end" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+
+  async function sync(
+    peer: string,
+    channelId: string,
+    historyGeneration: string,
+    id: string,
+    before: string | null,
+    limit?: number,
+  ) {
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
+      type: "session_sync",
+      id,
+      channel_id: channelId,
+      history_generation: historyGeneration,
+      before,
+      ...(limit === undefined ? {} : { limit }),
+    }));
+    let frames: Array<{ peer: string; frame: ReturnType<typeof decodeServerFrameV2> }> = [];
+    await vi.waitFor(() => {
+      frames = relayRef.current!.send.mock.calls.slice(sendsBefore)
+        .map((call) => decodeV2Sent(call[0] as string));
+      expect(frames.length).toBeGreaterThan(0);
+    });
+    return frames;
+  }
+
+  test("session_sync after session_hello returns an empty authoritative v2 chunk", async () => {
+    const { channelId, historyGeneration } = await setupV2("peer-ss-empty");
+    const frames = await sync("peer-ss-empty", channelId, historyGeneration, "sync-empty", null);
+    expect(frames).toEqual([expect.objectContaining({
+      peer: "peer-ss-empty",
+      frame: expect.objectContaining({
+        type: "session_history_chunk",
+        target_channel_id: channelId,
+        in_reply_to: "sync-empty",
+        history_generation: historyGeneration,
+        events: [],
+        fragments: [],
+        final_chunk: true,
+        eos: true,
+      }),
+    })]);
+  });
+
+  test("session_sync recovers persisted branch events instead of the legacy message buffer", async () => {
+    const { sessionManager, harness, channelId, historyGeneration } = await setupV2("peer-ss-history");
+    await appendUser(harness, sessionManager, "branch-backed history");
+    const frames = await sync("peer-ss-history", channelId, historyGeneration, "sync-history", null);
+    const chunk = frames.find((item) => item.frame.type === "session_history_chunk");
+    expect(chunk?.peer).toBe("peer-ss-history");
+    expect(chunk?.frame).toMatchObject({
+      type: "session_history_chunk",
+      target_channel_id: channelId,
+      events: [expect.objectContaining({
+        kind: "user",
+        origin: "unknown",
+        delivery: "unknown",
+        blocks: [{ type: "text", text: "branch-backed history" }],
+      })],
     });
   });
 
-  test("no limit in request → server uses env default (30)", async () => {
-    delete process.env["REMOTE_PI_SYNC_LIMIT"];
-    await _pairForTest("peer-ss-mirror-1");
+  test("session_sync paginates formal groups through next_before without a truncated field", async () => {
+    const { sessionManager, harness, channelId, historyGeneration } = await setupV2("peer-ss-page");
+    for (let index = 0; index < 6; index += 1) await appendUser(harness, sessionManager, `turn-${index}`);
 
-    const sessionTs = 1_700_000_000_000;
-    _setSessionStartedAtForTest(sessionTs);
-    // 5 events: under default 30 → truncated:false
-    _setMessageBufferForTest([
-      { role: "user", content: "a", timestamp: sessionTs + 1 },
-      { role: "assistant", content: [{ type: "text", text: "A" }], timestamp: sessionTs + 2 },
-      { role: "user", content: "b", timestamp: sessionTs + 3 },
-      { role: "assistant", content: [{ type: "text", text: "B" }], timestamp: sessionTs + 4 },
-      { role: "user", content: "c", timestamp: sessionTs + 5 },
-    ]);
+    const first = await sync("peer-ss-page", channelId, historyGeneration, "sync-page-1", null, 2);
+    const firstChunk = first.find((item) => item.frame.type === "session_history_chunk")?.frame;
+    expect(firstChunk).toMatchObject({ type: "session_history_chunk", final_chunk: true, eos: false });
+    if (!firstChunk || firstChunk.type !== "session_history_chunk" || firstChunk.eos) throw new Error("missing next_before");
+    expect(firstChunk.events).toHaveLength(2);
+    expect(firstChunk).not.toHaveProperty("truncated");
 
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-    routeClientMessage(
-      { type: "session_sync", id: "req-2" },
-      { abort: () => undefined },
-    );
+    const second = await sync("peer-ss-page", channelId, historyGeneration, "sync-page-2", firstChunk.next_before, 2);
+    const secondChunk = second.find((item) => item.frame.type === "session_history_chunk")?.frame;
+    expect(secondChunk).toMatchObject({ type: "session_history_chunk", final_chunk: true, eos: false });
+    if (!secondChunk || secondChunk.type !== "session_history_chunk" || secondChunk.eos) throw new Error("missing second next_before");
 
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore).map((c) => c[0] as string);
-    const h = sent.map(decodeSentCt).find((d) => d.inner.type === "session_history")!;
-    const events = h.inner["events"] as unknown[];
-    expect(events.length).toBe(5);
-    expect(h.inner["truncated"]).toBe(false);
-    expect(h.inner["eos"]).toBe(true);
+    const third = await sync("peer-ss-page", channelId, historyGeneration, "sync-page-3", secondChunk.next_before, 2);
+    expect(third).toContainEqual(expect.objectContaining({
+      peer: "peer-ss-page",
+      frame: expect.objectContaining({ type: "session_history_chunk", final_chunk: true, eos: true }),
+    }));
   });
 
-  test("client limit < env → server respects client limit + truncated true if overflow", async () => {
-    delete process.env["REMOTE_PI_SYNC_LIMIT"];  // default 30
-    await _pairForTest("peer-ss-mirror-2");
+  test("session_sync response is directed to the requesting logical channel", async () => {
+    const first = await setupV2("peer-ss-a");
+    const secondPeer = "peer-ss-b";
+    relayRef.current!.emit("message", makeV2Line(secondPeer, {
+      protocol_version: 2,
+      type: "pair_request",
+      id: "pair-peer-ss-b",
+      token: "test-token",
+      device_name: "Second phone",
+    }));
+    await vi.waitFor(() => expect(_hasActivePeerForTest(secondPeer)).toBe(true));
+    const secondChannel = "channel-peer-ss-b";
+    relayRef.current!.emit("message", makeV2Line(secondPeer, {
+      protocol_version: 2,
+      type: "session_hello",
+      id: "hello-peer-ss-b",
+      channel_id: secondChannel,
+    }));
+    let secondReady: Extract<ReturnType<typeof decodeServerFrameV2>, { type: "session_ready" }> | undefined;
+    await vi.waitFor(() => {
+      secondReady = relayRef.current!.send.mock.calls.map((call) => decodeV2Sent(call[0] as string).frame)
+        .find((frame): frame is Extract<ReturnType<typeof decodeServerFrameV2>, { type: "session_ready" }> =>
+          frame.type === "session_ready" && frame.target_channel_id === secondChannel);
+      expect(secondReady).toBeDefined();
+    });
+    await appendUser(first.harness, first.sessionManager, "only direct reply");
 
-    const ts = 1_700_000_000_000;
-    _setSessionStartedAtForTest(ts);
-    // 10 events; client asks for 3
-    const messages = Array.from({ length: 10 }, (_, i) => ({
-      role: i % 2 === 0 ? "user" : "assistant",
-      content: i % 2 === 0 ? `m${i}` : [{ type: "text", text: `m${i}` }],
-      timestamp: ts + i,
-    } as { role: string; content: unknown; timestamp: number }));
-    _setMessageBufferForTest(messages);
-
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-    routeClientMessage(
-      { type: "session_sync", id: "req-3", limit: 3 },
-      { abort: () => undefined },
-    );
-
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore).map((c) => c[0] as string);
-    const h = sent.map(decodeSentCt).find((d) => d.inner.type === "session_history")!;
-    const events = h.inner["events"] as Array<{ ts: number }>;
-    expect(events.length).toBe(3);
-    // Last 3 (latest ts)
-    expect(events[0]!.ts).toBe(ts + 7);
-    expect(events[2]!.ts).toBe(ts + 9);
-    expect(h.inner["truncated"]).toBe(true);
+    const frames = await sync(secondPeer, secondChannel, secondReady!.history_generation, "sync-b", null);
+    expect(frames.every((item) => item.peer === secondPeer)).toBe(true);
+    expect(frames).toContainEqual(expect.objectContaining({
+      frame: expect.objectContaining({ type: "session_history_chunk", target_channel_id: secondChannel }),
+    }));
   });
 
-  test("client limit > env → server clamps to env", async () => {
-    process.env["REMOTE_PI_SYNC_LIMIT"] = "5";
-    await _pairForTest("peer-ss-mirror-3");
-
-    const ts = 1_700_000_000_000;
-    _setSessionStartedAtForTest(ts);
-    // 10 events; client asks for 100; server cap is 5
-    const messages = Array.from({ length: 10 }, (_, i) => ({
-      role: "user",
-      content: `m${i}`,
-      timestamp: ts + i,
-    } as { role: string; content: unknown; timestamp: number }));
-    _setMessageBufferForTest(messages);
-
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-    routeClientMessage(
-      { type: "session_sync", id: "req-4", limit: 100 },
-      { abort: () => undefined },
-    );
-
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore).map((c) => c[0] as string);
-    const h = sent.map(decodeSentCt).find((d) => d.inner.type === "session_history")!;
-    const events = h.inner["events"] as Array<{ ts: number }>;
-    expect(events.length).toBe(5);
-    expect(events[0]!.ts).toBe(ts + 5);  // last 5 of 10
-    expect(events[4]!.ts).toBe(ts + 9);
-    expect(h.inner["truncated"]).toBe(true);
-
-    delete process.env["REMOTE_PI_SYNC_LIMIT"];
-  });
-
-  test("buffer with 5 events → returns 5, truncated:false", async () => {
-    delete process.env["REMOTE_PI_SYNC_LIMIT"];
-    await _pairForTest("peer-ss-mirror-4");
-
-    const ts = 1_700_000_000_000;
-    _setSessionStartedAtForTest(ts);
-    _setMessageBufferForTest(
-      Array.from({ length: 5 }, (_, i) => ({
-        role: "user",
-        content: `m${i}`,
-        timestamp: ts + i,
-      } as { role: string; content: unknown; timestamp: number })),
-    );
-
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-    routeClientMessage(
-      { type: "session_sync", id: "req-5" },
-      { abort: () => undefined },
-    );
-
-    const h = (relayRef.current!.send.mock.calls.slice(sendsBefore).map((c) => c[0] as string))
-      .map(decodeSentCt)
-      .find((d) => d.inner.type === "session_history")!;
-    expect((h.inner["events"] as unknown[]).length).toBe(5);
-    expect(h.inner["truncated"]).toBe(false);
-  });
-
-  test("buffer with 50 events + env=30 → returns 30, truncated:true", async () => {
-    delete process.env["REMOTE_PI_SYNC_LIMIT"];  // default 30
-    await _pairForTest("peer-ss-mirror-5");
-
-    const ts = 1_700_000_000_000;
-    _setSessionStartedAtForTest(ts);
-    _setMessageBufferForTest(
-      Array.from({ length: 50 }, (_, i) => ({
-        role: "user",
-        content: `m${i}`,
-        timestamp: ts + i,
-      } as { role: string; content: unknown; timestamp: number })),
-    );
-
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-    routeClientMessage(
-      { type: "session_sync", id: "req-6" },
-      { abort: () => undefined },
-    );
-
-    const h = (relayRef.current!.send.mock.calls.slice(sendsBefore).map((c) => c[0] as string))
-      .map(decodeSentCt)
-      .find((d) => d.inner.type === "session_history")!;
-    const events = h.inner["events"] as Array<{ ts: number }>;
-    expect(events.length).toBe(30);
-    expect(events[0]!.ts).toBe(ts + 20);   // last 30 of 50 (indices 20..49)
-    expect(events[29]!.ts).toBe(ts + 49);
-    expect(h.inner["truncated"]).toBe(true);
-  });
-
-  test("REMOTE_PI_SYNC_LIMIT=10 → server respects env override", async () => {
-    process.env["REMOTE_PI_SYNC_LIMIT"] = "10";
-    await _pairForTest("peer-ss-mirror-6");
-
-    const ts = 1_700_000_000_000;
-    _setSessionStartedAtForTest(ts);
-    _setMessageBufferForTest(
-      Array.from({ length: 25 }, (_, i) => ({
-        role: "user",
-        content: `m${i}`,
-        timestamp: ts + i,
-      } as { role: string; content: unknown; timestamp: number })),
-    );
-
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-    routeClientMessage(
-      { type: "session_sync", id: "req-7" },
-      { abort: () => undefined },
-    );
-
-    const h = (relayRef.current!.send.mock.calls.slice(sendsBefore).map((c) => c[0] as string))
-      .map(decodeSentCt)
-      .find((d) => d.inner.type === "session_history")!;
-    expect((h.inner["events"] as unknown[]).length).toBe(10);
-    expect(h.inner["truncated"]).toBe(true);
-
-    delete process.env["REMOTE_PI_SYNC_LIMIT"];
+  test("session_sync with a stale generation returns a directed reset", async () => {
+    const { channelId } = await setupV2("peer-ss-reset");
+    const frames = await sync("peer-ss-reset", channelId, "stale-generation", "sync-stale", null);
+    expect(frames).toContainEqual(expect.objectContaining({
+      peer: "peer-ss-reset",
+      frame: expect.objectContaining({ type: "reset", target_channel_id: channelId, reason: "generation_changed" }),
+    }));
   });
 
   test("mapping: assistant with TextContent + ToolCall → 2 events", () => {
@@ -3685,29 +3676,45 @@ describe("session sync", () => {
     });
   });
 
-  test("pair_ok carries session_started_at = _sessionStartedAt", async () => {
-    const beforePair = Date.now();
-    await _pairForTest("peer-ss-5");
-    const afterPair = Date.now();
-
-    const sent = relayRef.current!.send.mock.calls.map((c) => c[0] as string);
-    const pairOks = sent.map(decodeSentCt).filter((d) => d.inner.type === "pair_ok");
-    expect(pairOks).toHaveLength(1);
-    const tsField = pairOks[0]!.inner["session_started_at"] as number;
-    expect(typeof tsField).toBe("number");
-    expect(tsField).toBeGreaterThanOrEqual(beforePair);
-    expect(tsField).toBeLessThanOrEqual(afterPair);
+  test("strict v2 pairing sends pair_ok before the channel handshake", async () => {
+    const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+    const sessionManager = SessionManager.inMemory(process.cwd());
+    const harness = captureEventHarness();
+    harness.handler("session_start")(
+      { type: "session_start", reason: "startup" },
+      { sessionManager, ui: { notify: vi.fn() }, abort: vi.fn(), compact: vi.fn() } as never,
+    );
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
+    relayRef.current!.emit("message", makeV2Line("peer-ss-pair", {
+      protocol_version: 2,
+      type: "pair_request",
+      id: "pair-strict-v2",
+      token: "test-token",
+      device_name: "Strict phone",
+    }));
+    await vi.waitFor(() => expect(_hasActivePeerForTest("peer-ss-pair")).toBe(true));
+    const pairOk = relayRef.current!.send.mock.calls
+      .map((call) => decodeV2Sent(call[0] as string))
+      .find((item) => item.frame.type === "pair_ok");
+    expect(pairOk).toMatchObject({
+      peer: "peer-ss-pair",
+      frame: { protocol_version: 2, type: "pair_ok", in_reply_to: "pair-strict-v2" },
+    });
   });
 
-  test("pair_ok carries room_id so the app can address subsequent inners", async () => {
-    await _pairForTest("peer-ss-room");
-
-    const sent = relayRef.current!.send.mock.calls.map((c) => c[0] as string);
-    const pairOks = sent.map(decodeSentCt).filter((d) => d.inner.type === "pair_ok");
-    expect(pairOks).toHaveLength(1);
-    const roomId = pairOks[0]!.inner["room_id"] as unknown;
-    expect(typeof roomId).toBe("string");
-    expect(roomId as string).toMatch(/^[A-Za-z0-9_-]{12}$/);
+  test("session_hello establishes the channel generation used by session_sync", async () => {
+    const { channelId, historyGeneration } = await setupV2("peer-ss-ready");
+    const ready = relayRef.current!.send.mock.calls
+      .map((call) => decodeV2Sent(call[0] as string).frame)
+      .find((frame) => frame.type === "session_ready");
+    expect(ready).toMatchObject({
+      protocol_version: 2,
+      type: "session_ready",
+      target_channel_id: channelId,
+      history_generation: historyGeneration,
+      self_sender_ref: "peer-ss-ready",
+    });
   });
 });
 
@@ -5524,148 +5531,148 @@ describe("cumulative buffer", () => {
     _setSessionStartedAtForTest(null);
   });
 
-  test("3 turns via message_end → session_sync returns 6 events (no overwrite)", async () => {
-    await _pairForTest("peer-mt");
-    const onMsgEnd = captureEventHandler("message_end");
-    const baseTs = 1_700_000_000_000;
-
-    for (let i = 0; i < 3; i++) {
-      const turnTs = baseTs + i * 10_000;
-      onMsgEnd({
-        type: "message_end",
-        message: {
-          role: "user",
-          content: [{ type: "text", text: `prompt ${i + 1}` }],
-          timestamp: turnTs + 100,
-        },
-      });
-      onMsgEnd({
-        type: "message_end",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: `reply ${i + 1}` }],
-          timestamp: turnTs + 200,
-          usage: { input: 10, output: 5 },
-        },
-      });
-    }
-
-    expect(_getMessageBufferForTest()).toHaveLength(6);
-
-    const sessionTs = baseTs;
-    _setSessionStartedAtForTest(sessionTs);
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-    routeClientMessage(
-      { type: "session_sync", id: "mt-1" },
-      { abort: () => undefined },
+  async function setupV2(peer: string) {
+    const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+    const sessionManager = SessionManager.inMemory(process.cwd());
+    const harness = captureEventHarness();
+    harness.handler("session_start")(
+      { type: "session_start", reason: "startup" },
+      { sessionManager, ui: { notify: vi.fn() }, abort: vi.fn(), compact: vi.fn() } as never,
     );
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
+      type: "pair_request",
+      id: `pair-${peer}`,
+      token: "test-token",
+      device_name: peer,
+    }));
+    await vi.waitFor(() => expect(_hasActivePeerForTest(peer)).toBe(true));
+    const channelId = `channel-${peer}`;
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
+      type: "session_hello",
+      id: `hello-${peer}`,
+      channel_id: channelId,
+    }));
+    let ready: Extract<ReturnType<typeof decodeServerFrameV2>, { type: "session_ready" }> | undefined;
+    await vi.waitFor(() => {
+      ready = relayRef.current!.send.mock.calls.map((call) => decodeV2Sent(call[0] as string).frame)
+        .find((frame): frame is Extract<ReturnType<typeof decodeServerFrameV2>, { type: "session_ready" }> =>
+          frame.type === "session_ready" && frame.target_channel_id === channelId);
+      expect(ready).toBeDefined();
+    });
+    return { sessionManager, harness, channelId, historyGeneration: ready!.history_generation };
+  }
 
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore).map((c) => c[0] as string);
-    const histories = sent.map(decodeSentCt).filter((d) => d.inner.type === "session_history");
-    expect(histories).toHaveLength(1);
-    const events = histories[0]!.inner["events"] as Array<{ type: string; text?: string }>;
-    expect(events).toHaveLength(6);
-    expect(events.map((e) => e.type)).toEqual([
-      "user_input", "agent_message",
-      "user_input", "agent_message",
-      "user_input", "agent_message",
+  async function sync(
+    peer: string,
+    channelId: string,
+    historyGeneration: string,
+    id: string,
+  ) {
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
+      type: "session_sync",
+      id,
+      channel_id: channelId,
+      history_generation: historyGeneration,
+      before: null,
+    }));
+    let frames: Array<{ peer: string; frame: ReturnType<typeof decodeServerFrameV2> }> = [];
+    await vi.waitFor(() => {
+      frames = relayRef.current!.send.mock.calls.slice(sendsBefore).map((call) => decodeV2Sent(call[0] as string));
+      expect(frames.length).toBeGreaterThan(0);
+    });
+    return frames;
+  }
+
+  test("three persisted turns recover six formal events from the authoritative branch", async () => {
+    const { sessionManager, harness, channelId, historyGeneration } = await setupV2("peer-mt");
+    for (let index = 0; index < 3; index += 1) {
+      const user = { role: "user", content: `prompt ${index + 1}`, timestamp: Date.now() + index * 10 };
+      const assistant = { role: "assistant", content: [{ type: "text", text: `reply ${index + 1}` }], stopReason: "stop", timestamp: Date.now() + index * 10 + 1 };
+      harness.handler("agent_start")({ type: "agent_start" });
+      harness.handler("message_start")({ type: "message_start", message: user }, { sessionManager } as never);
+      harness.handler("message_end")({ type: "message_end", message: user }, { sessionManager } as never);
+      sessionManager.appendMessage(user as never);
+      harness.handler("message_start")({ type: "message_start", message: assistant }, { sessionManager } as never);
+      harness.handler("message_end")({ type: "message_end", message: assistant }, { sessionManager } as never);
+      sessionManager.appendMessage(assistant as never);
+      harness.handler("agent_end")({ type: "agent_end" });
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const frames = await sync("peer-mt", channelId, historyGeneration, "sync-three-turns");
+    const chunk = frames.find((item) => item.frame.type === "session_history_chunk")?.frame;
+    expect(chunk).toMatchObject({ type: "session_history_chunk", final_chunk: true, eos: true });
+    if (!chunk || chunk.type !== "session_history_chunk") throw new Error("history chunk missing");
+    expect(chunk.events).toHaveLength(6);
+    expect(chunk.events.map((event) => event.kind)).toEqual([
+      "user", "assistant", "user", "assistant", "user", "assistant",
     ]);
-    expect(events[0]!.text).toBe("prompt 1");
-    expect(events[2]!.text).toBe("prompt 2");
-    expect(events[4]!.text).toBe("prompt 3");
   });
 
-  test("mixed sources (extension + interactive) all land in buffer ordered by ts", async () => {
-    await _pairForTest("peer-mix");
-    const onInput = captureEventHandler("input");
-    const onMsgEnd = captureEventHandler("message_end");
-    const baseTs = 1_700_100_000_000;
-
-    // Turn A — via extension (app)
-    onInput({ type: "input", text: "from app", source: "extension" });
-    onMsgEnd({ type: "message_end", message: { role: "user", content: "from app", timestamp: baseTs + 1000 } });
-    onMsgEnd({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "reply A" }], timestamp: baseTs + 2000 } });
-
-    // Turn B — via interactive (terminal)
-    onInput({ type: "input", text: "from term 1", source: "interactive" });
-    onMsgEnd({ type: "message_end", message: { role: "user", content: "from term 1", timestamp: baseTs + 3000 } });
-    onMsgEnd({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "reply B" }], timestamp: baseTs + 4000 } });
-
-    // Turn C — via interactive (terminal)
-    onInput({ type: "input", text: "from term 2", source: "interactive" });
-    onMsgEnd({ type: "message_end", message: { role: "user", content: "from term 2", timestamp: baseTs + 5000 } });
-    onMsgEnd({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "reply C" }], timestamp: baseTs + 6000 } });
-
-    expect(_getMessageBufferForTest()).toHaveLength(6);
-
-    _setSessionStartedAtForTest(baseTs);
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-    routeClientMessage(
-      { type: "session_sync", id: "mix-1" },
-      { abort: () => undefined },
-    );
-
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore).map((c) => c[0] as string);
-    const histories = sent.map(decodeSentCt).filter((d) => d.inner.type === "session_history");
-    const events = histories[0]!.inner["events"] as Array<{ ts: number; type: string; text?: string }>;
-    expect(events).toHaveLength(6);
-    // Strictly ascending ts
-    for (let i = 1; i < events.length; i++) {
-      expect(events[i]!.ts).toBeGreaterThan(events[i - 1]!.ts);
+  test("terminal and extension input recover as ordered formal user events", async () => {
+    const { sessionManager, harness, channelId, historyGeneration } = await setupV2("peer-mix");
+    const inputs = [
+      { source: "extension" as const, text: "from extension" },
+      { source: "interactive" as const, text: "from terminal" },
+    ];
+    for (const input of inputs) {
+      const message = { role: "user", content: input.text, timestamp: Date.now() };
+      harness.handler("input")({ type: "input", text: input.text, source: input.source });
+      harness.handler("agent_start")({ type: "agent_start" });
+      harness.handler("message_start")({ type: "message_start", message }, { sessionManager } as never);
+      harness.handler("message_end")({ type: "message_end", message }, { sessionManager } as never);
+      sessionManager.appendMessage(message as never);
+      harness.handler("agent_end")({ type: "agent_end" });
     }
-    const userTexts = events.filter((e) => e.type === "user_input").map((e) => e.text);
-    expect(userTexts).toEqual(["from app", "from term 1", "from term 2"]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const frames = await sync("peer-mix", channelId, historyGeneration, "sync-mixed");
+    const chunk = frames.find((item) => item.frame.type === "session_history_chunk")?.frame;
+    if (!chunk || chunk.type !== "session_history_chunk") throw new Error("history chunk missing");
+    const users = chunk.events.filter((event) => event.kind === "user");
+    expect(users.map((event) => event.blocks)).toEqual([
+      [{ type: "text", text: "from extension" }],
+      [{ type: "text", text: "from terminal" }],
+    ]);
+    expect(users.every((event) => event.origin === "unknown" && event.delivery === "unknown")).toBe(true);
   });
 
-  test("toolCall + toolResult in same turn → tool_request + tool_result events", async () => {
-    await _pairForTest("peer-tools");
-    const onMsgEnd = captureEventHandler("message_end");
-    const ts = 1_700_200_000_000;
+  test("persisted tool result recovers as a formal v2 tool event", async () => {
+    const { sessionManager, harness, channelId, historyGeneration } = await setupV2("peer-tools");
+    const tool = {
+      role: "toolResult",
+      toolCallId: "tc_1",
+      toolName: "bash",
+      args: { command: "ls" },
+      content: [{ type: "text", text: "file1\nfile2" }],
+      isError: false,
+      timestamp: Date.now(),
+    };
+    harness.handler("agent_start")({ type: "agent_start" });
+    harness.handler("message_start")({ type: "message_start", message: tool }, { sessionManager } as never);
+    harness.handler("message_end")({ type: "message_end", message: tool }, { sessionManager } as never);
+    sessionManager.appendMessage(tool as never);
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
-    // user prompt
-    onMsgEnd({ type: "message_end", message: { role: "user", content: "do bash", timestamp: ts } });
-    // assistant message that contains a tool call block
-    onMsgEnd({
-      type: "message_end",
-      message: {
-        role: "assistant",
-        content: [
-          { type: "text", text: "running" },
-          { type: "toolCall", id: "tc_1", name: "bash", arguments: { command: "ls" } },
-        ],
-        timestamp: ts + 100,
-      },
+    const frames = await sync("peer-tools", channelId, historyGeneration, "sync-tool");
+    const chunk = frames.find((item) => item.frame.type === "session_history_chunk")?.frame;
+    expect(chunk).toMatchObject({
+      type: "session_history_chunk",
+      events: [expect.objectContaining({
+        kind: "tool",
+        tool_call_id: "tc_1",
+        tool: "bash",
+        args: { command: "ls" },
+        status: "complete",
+        result: [{ type: "text", text: "file1\nfile2" }],
+      })],
     });
-    // tool result message
-    onMsgEnd({
-      type: "message_end",
-      message: {
-        role: "toolResult",
-        toolCallId: "tc_1",
-        toolName: "bash",
-        content: [{ type: "text", text: "file1\nfile2" }],
-        isError: false,
-        timestamp: ts + 200,
-      },
-    });
-
-    expect(_getMessageBufferForTest()).toHaveLength(3);
-
-    _setSessionStartedAtForTest(ts);
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-    routeClientMessage(
-      { type: "session_sync", id: "t-1" },
-      { abort: () => undefined },
-    );
-
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore).map((c) => c[0] as string);
-    const events = (
-      sent.map(decodeSentCt).find((d) => d.inner.type === "session_history")!.inner["events"]
-    ) as Array<{ type: string; tool_call_id?: string }>;
-    const types = events.map((e) => e.type);
-    expect(types).toEqual(["user_input", "agent_message", "tool_request", "tool_result"]);
-    expect(events[2]!.tool_call_id).toBe("tc_1");
-    expect(events[3]!.tool_call_id).toBe("tc_1");
   });
 
   test("_cmdStart preserves buffer across stop/start cycle (Pi session outlives relay)", async () => {
