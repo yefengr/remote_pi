@@ -3736,17 +3736,17 @@ describe("bye on teardown", () => {
   });
 
   test("paired + /remote-pi stop → channel.send sees bye{peer_stop} BEFORE detach", async () => {
-    await _pairForTest("peer-bye-1");
+    await _pairForTestWithCtx("peer-bye-1", makeMockCtx());
     const sendsBefore = relayRef.current!.send.mock.calls.length;
 
     const stop = captureHandler("remote-pi stop");
     await stop("", makeMockCtx());
 
     const sent = relayRef.current!.send.mock.calls.slice(sendsBefore).map((c) => c[0] as string);
-    const decoded = sent.map(decodeSentCt);
-    const byeIdx = decoded.findIndex((d) => d.inner.type === "bye");
+    const decoded = sent.map(decodeV2Sent);
+    const byeIdx = decoded.findIndex((d) => d.frame.type === "bye");
     expect(byeIdx).toBeGreaterThanOrEqual(0);
-    expect(decoded[byeIdx]!.inner).toMatchObject({ type: "bye", reason: "peer_stop" });
+    expect(decoded[byeIdx]!.frame).toMatchObject({ type: "bye", reason: "peer_stop" });
     expect(decoded[byeIdx]!.peer).toBe("peer-bye-1");
     // After the bye, no more sends to that peer (channel detached)
     const afterBye = decoded.slice(byeIdx + 1);
@@ -3820,25 +3820,24 @@ describe("bye on teardown", () => {
     await stop("", makeMockCtx());
 
     const sent = relayRef.current!.send.mock.calls.slice(sendsBefore).map((c) => c[0] as string);
-    const byes = sent.map(decodeSentCt).filter((d) => d.inner.type === "bye");
-    expect(byes).toHaveLength(0);
+    expect(sent).toHaveLength(0);
     expect(_getState()).toBe("idle");
   });
 
   test("revoke of attached owner → channel sees bye{session_replaced}, relay stays started", async () => {
     _tokenStatus = "ok";
     const ACTIVE = OWNER_STANDARD_FIXTURE;
-    // Attach the peer so it lives in _activePeers
-    await _pairForTest(ACTIVE);
+    // Attach the peer through the production v2 channel.
+    await _pairForTestWithCtx(ACTIVE, makeMockCtx());
     const sendsBefore = relayRef.current!.send.mock.calls.length;
 
     const revoke = captureHandler("remote-pi revoke");
     await revoke(OWNER_STANDARD_FIXTURE.slice(0, 8), makeMockCtx());
 
     const sent = relayRef.current!.send.mock.calls.slice(sendsBefore).map((c) => c[0] as string);
-    const byes = sent.map(decodeSentCt).filter((d) => d.inner.type === "bye");
+    const byes = sent.map(decodeV2Sent).filter((d) => d.frame.type === "bye");
     expect(byes).toHaveLength(1);
-    expect(byes[0]!.inner).toMatchObject({ type: "bye", reason: "session_replaced" });
+    expect(byes[0]!.frame).toMatchObject({ type: "bye", reason: "session_replaced" });
     // Multi-channel (W2D): only this owner's channel is closed; the relay
     // stays up, ready for new pairings. Pre-W2D this dropped to idle.
     expect(_hasActivePeerForTest(ACTIVE)).toBe(false);
@@ -3923,7 +3922,7 @@ describe("session_shutdown teardown", () => {
   });
 
   test("session_shutdown invalidates without bye before a deferred mesh leave", async () => {
-    await _pairForTest(OWNER_STANDARD_FIXTURE);
+    await _pairForTestWithCtx(OWNER_STANDARD_FIXTURE, makeMockCtx());
     const relay = relayRef.current!;
     const sendsBefore = relay.send.mock.calls.length;
     const peerModule = await import("./session/peer.js");
@@ -3951,8 +3950,8 @@ describe("session_shutdown teardown", () => {
       expect(_hasMeshNodeForTest()).toBe(false);
       const sent = relay.send.mock.calls
         .slice(sendsBefore)
-        .map((call) => decodeSentCt(call[0] as string));
-      expect(sent.filter(({ inner }) => inner.type === "bye")).toEqual([]);
+        .map((call) => decodeV2Sent(call[0] as string));
+      expect(sent.filter(({ frame }) => frame.type === "bye")).toEqual([]);
     } finally {
       leaveGate.resolve(undefined);
       await shuttingDown;
