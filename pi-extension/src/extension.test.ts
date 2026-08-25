@@ -306,6 +306,29 @@ function decodeV2Sent(raw: string): { peer: string; frame: ReturnType<typeof dec
   return { peer: outer.peer, frame: decodeServerFrameV2(Buffer.from(outer.ct, "base64").toString("utf8")) };
 }
 
+async function initializeV2SessionForTest(): Promise<void> {
+  const sessionManager = (await import("@earendil-works/pi-coding-agent")).SessionManager.inMemory(process.cwd());
+  const harness = captureEventHarness();
+  harness.handler("session_start")(
+    { type: "session_start", reason: "startup" },
+    {
+      sessionManager,
+      ui: { notify: vi.fn() },
+      abort: vi.fn(),
+      compact: vi.fn(),
+    } as never,
+  );
+}
+
+function emitKnownV2Hello(peer: string, suffix: string): void {
+  relayRef.current!.emit("message", makeV2Line(peer, {
+    protocol_version: 2,
+    type: "session_hello",
+    id: `hello-${suffix}`,
+    channel_id: `channel-${suffix}`,
+  }));
+}
+
 function decodeSentCt(raw: string): { peer: string; inner: { type: string; [k: string]: unknown } } {
   const outer = JSON.parse(raw) as { peer: string; ct: string };
   const inner = JSON.parse(Buffer.from(outer.ct, "base64").toString("utf8")) as {
@@ -434,17 +457,7 @@ describe("state machine + pair_request flow", () => {
     const stop = captureHandler("remote-pi stop");
     await stop("", makeMockCtx());
 
-    const sessionManager = (await import("@earendil-works/pi-coding-agent")).SessionManager.inMemory(process.cwd());
-    const harness = captureEventHarness();
-    harness.handler("session_start")(
-      { type: "session_start", reason: "startup" },
-      {
-        sessionManager,
-        ui: { notify: vi.fn() },
-        abort: vi.fn(),
-        compact: vi.fn(),
-      } as never,
-    );
+    await initializeV2SessionForTest();
   });
 
   test("start: idle → started", async () => {
@@ -771,6 +784,7 @@ describe("/remote-pi revoke", () => {
     );
     const stop = captureHandler("remote-pi stop");
     await stop("", makeMockCtx());
+    await initializeV2SessionForTest();
   });
 
   test("empty arg → usage warning", async () => {
@@ -874,11 +888,12 @@ describe("/remote-pi revoke", () => {
     captureHandler("remote-pi");
     await _connectForTest(makeMockCtx());
 
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: ACTIVE_PEER,
-      ct: Buffer.from(JSON.stringify({
-        type: "pair_request", id: "req-1", token: "test-token", device_name: "Active Phone",
-      })).toString("base64"),
+    relayRef.current!.emit("message", makeV2Line(ACTIVE_PEER, {
+      protocol_version: 2,
+      type: "pair_request",
+      id: "req-1",
+      token: "test-token",
+      device_name: "Active Phone",
     }));
     await vi.waitFor(() => expect(_getState()).toBe("paired"), { timeout: 2000 });
 
@@ -906,12 +921,8 @@ describe("/remote-pi revoke", () => {
     );
 
     await _connectForTest(makeMockCtx());
-    relayRef.current!.emit("message", makeInnerLine(OWNER_STANDARD_FIXTURE, {
-      type: "ping", id: "url-safe-owner",
-    }));
-    relayRef.current!.emit("message", makeInnerLine(OTHER_OWNER_STANDARD_FIXTURE, {
-      type: "ping", id: "other-owner",
-    }));
+    emitKnownV2Hello(OWNER_STANDARD_FIXTURE, "url-safe-owner");
+    emitKnownV2Hello(OTHER_OWNER_STANDARD_FIXTURE, "other-owner");
     await vi.waitFor(() => expect(_getActivePeerCountForTest()).toBe(2));
 
     const revoke = captureHandler("remote-pi revoke");
@@ -941,12 +952,8 @@ describe("/remote-pi revoke", () => {
       await _connectForTest(makeMockCtx());
       expect(fetchMock).toHaveBeenCalledTimes(2);
 
-      relayRef.current!.emit("message", makeInnerLine(OWNER_STANDARD_FIXTURE, {
-        type: "ping", id: "absent-owner-active",
-      }));
-      relayRef.current!.emit("message", makeInnerLine(OTHER_OWNER_STANDARD_FIXTURE, {
-        type: "ping", id: "surviving-owner-active",
-      }));
+      emitKnownV2Hello(OWNER_STANDARD_FIXTURE, "absent-owner-active");
+      emitKnownV2Hello(OTHER_OWNER_STANDARD_FIXTURE, "surviving-owner-active");
       await vi.waitFor(() => expect(_getActivePeerCountForTest()).toBe(2));
 
       _knownPeers.splice(_knownPeers.findIndex(
@@ -976,11 +983,12 @@ describe("/remote-pi revoke", () => {
 
     await _connectForTest(makeMockCtx());
 
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: ACTIVE_PEER,
-      ct: Buffer.from(JSON.stringify({
-        type: "pair_request", id: "req-1", token: "test-token", device_name: "Active Phone",
-      })).toString("base64"),
+    relayRef.current!.emit("message", makeV2Line(ACTIVE_PEER, {
+      protocol_version: 2,
+      type: "pair_request",
+      id: "req-1",
+      token: "test-token",
+      device_name: "Active Phone",
     }));
     await vi.waitFor(() => expect(_getState()).toBe("paired"), { timeout: 2000 });
 

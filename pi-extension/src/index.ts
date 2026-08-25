@@ -1339,14 +1339,22 @@ export function _getState(): "idle" | "started" | "paired" {
   return _anyPeerActive() ? "paired" : "started";
 }
 
-/** Test-only: number of owners currently attached via PlainPeerChannel. */
+function _activePeerIds(): Set<string> {
+  return new Set([..._activePeers.keys(), ..._v2ActivePeers.keys()]);
+}
+
+function _isPeerActive(appPeerId: string): boolean {
+  return _activePeers.has(appPeerId) || _v2ActivePeers.has(appPeerId);
+}
+
+/** Test-only: number of distinct owners currently attached. */
 export function _getActivePeerCountForTest(): number {
-  return Math.max(_activePeers.size, _v2ActivePeers.size);
+  return _activePeerIds().size;
 }
 
 /** Test-only: true if a specific peer (base64 std) has an attached channel. */
 export function _hasActivePeerForTest(appPeerIdStd: string): boolean {
-  return _activePeers.has(appPeerIdStd) || _v2ActivePeers.has(appPeerIdStd);
+  return _isPeerActive(appPeerIdStd);
 }
 
 
@@ -1513,7 +1521,7 @@ function _reportRevocationByFingerprint(canonicalOwnerPubkey: string): void {
 }
 
 function _revokeActiveOwnerRuntime(canonicalOwnerPubkey: string): void {
-  if (!_activePeers.has(canonicalOwnerPubkey)) return;
+  if (!_isPeerActive(canonicalOwnerPubkey)) return;
   _refreshPairingsCache();
   _detachPeerChannel(canonicalOwnerPubkey);
   _refreshFooter();
@@ -2888,9 +2896,10 @@ function _cmdStatus(ctx: Pick<ExtensionContext, "ui">): void {
   let relayLine: string;
   if (_state === "idle") {
     relayLine = `⚪ Relay: off (${relayUrl}) — run /remote-pi to start`;
-  } else if (_activePeers.size > 0) {
-    const count = _activePeers.size;
-    const shortids = [..._activePeers.keys()].map((peerId) => peerId.slice(0, 8)).join(", ");
+  } else if (_anyPeerActive()) {
+    const activePeerIds = [..._activePeerIds()];
+    const count = activePeerIds.length;
+    const shortids = activePeerIds.map((peerId) => peerId.slice(0, 8)).join(", ");
     relayLine = `🟢 Relay: ${count} owner${count === 1 ? "" : "s"} online (${shortids}) (${relayUrl})`;
   } else {
     relayLine = _hasGlobalPairings
@@ -3311,7 +3320,7 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
         }
         const presentOwners = new Set(canonicalOwnerPubkeys);
         let effectFailed = false;
-        for (const canonicalOwnerPubkey of [..._activePeers.keys()]) {
+        for (const canonicalOwnerPubkey of _activePeerIds()) {
           if (
             _selfRevoke !== producer ||
             producerEpoch !== _selfRevokeEpoch
@@ -3498,7 +3507,7 @@ async function _cmdList(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
   const lines = peers.flatMap((record) => {
     const inspected = _inspectPeerRecord(record);
     if (!inspected) return [];
-    const tag = inspected.runtimeKey !== null && _activePeers.has(inspected.runtimeKey)
+    const tag = inspected.runtimeKey !== null && _isPeerActive(inspected.runtimeKey)
       ? " 🟢 online"
       : " ⚪ offline";
     return `• ${inspected.rawHandle.slice(0, 8)} — ${inspected.record.name}${tag}`;
@@ -3567,11 +3576,21 @@ async function _cmdRevoke(arg: string, ctx: Pick<ExtensionContext, "ui" | "cwd">
   await removePeer(peer.rawHandle);
   _refreshPairingsCache();
 
-  // Storage removal uses the exact saved representation; the active channel
-  // is indexed by its canonical identity.
-  if (peer.runtimeKey !== null && _activePeers.has(peer.runtimeKey)) {
-    const channel = _activePeers.get(peer.runtimeKey);
-    try { channel?.send({ type: "bye", reason: "session_replaced" }); } catch { /* best-effort */ }
+  // Storage removal uses the exact saved representation; active channels are
+  // indexed by the canonical identity in either transport generation.
+  if (peer.runtimeKey !== null && _isPeerActive(peer.runtimeKey)) {
+    const legacyChannel = _activePeers.get(peer.runtimeKey);
+    const v2Binding = _v2ActivePeers.get(peer.runtimeKey);
+    try { legacyChannel?.send({ type: "bye", reason: "session_replaced" }); } catch { /* best-effort */ }
+    try {
+      v2Binding?.channel.sendV2({
+        protocol_version: 2,
+        type: "bye",
+        session_id: _currentSessionManager?.getSessionId() ?? "unknown",
+        history_generation: v2Binding.service.generation,
+        reason: "session_replaced",
+      });
+    } catch { /* best-effort */ }
     _detachPeerChannel(peer.runtimeKey);
     _refreshFooter();
   }
