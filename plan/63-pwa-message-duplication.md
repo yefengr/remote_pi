@@ -3,7 +3,8 @@
 ## 状态
 
 - 阶段 0A（Pi SDK 生命周期与 marker 基础拓扑验证）：**已完成（2026-08-24）**
-- 阶段 0B（SDK 输入关联契约验证）：待完成
+- 阶段 0B（SDK 输入关联与 run epoch 契约验证）：**已完成（2026-08-25）**
+- 阶段 1（协议、类型与入口边界）：下一步
 - Protocol v2、Extension、Site 生产实现：尚未开始
 - Relay：无代码改动
 
@@ -27,7 +28,22 @@ Protocol v2 是强制升级，不能与 v1 互通。不得实现字段 fallback�
 
 验证结果：定向契约测试 6/6 通过；测试文件严格单文件 TypeScript 检查通过；`pi-extension` typecheck 通过、全量测试 804 通过（3 skipped）、build 通过；`git diff --check` 通过。
 
-阶段 0A 只证明生命周期、持久化窗口与 marker 基础拓扑。其 test-only scanner 曾为测试便利防御性跳过 `custom_message`；这不是生产恢复契约。生产 scanner 只能跳过阶段 0A 已实际证明安全的第三方 `custom` appendEntry，其余 entry 均为硬边界。
+阶段 0A 只证明生命周期、持久化窗口与 marker 基础拓扑。其 test-only scanner 曾为测试便利防御性跳过多种非目标 entry；这不是生产恢复契约。
+
+## 阶段 0B 已完成的事实
+
+阶段 0B 继续使用真实 `AgentSession`、`ExtensionRunner`、公开 `pi.sendUserMessage()`、真实扩展工具与本地 fake provider；未修改 Pi SDK、生产协议、PWA 或 Relay。新增契约测试与独立终审已确认：
+
+1. 后续 input handler 返回 `handled` 时，提前登记的全局 FIFO 会留下孤儿，并错误绑定下一条真实 user `message_start`。
+2. 两个空闲请求遇到异步 input handler 时可以按 `later -> earlier` 进入生命周期；FIFO 两条关联都会反转，ALS 仍为两条消息恢复各自 request ID。
+3. 空闲普通 PWA 调用的 input handler 中 `ctx.isIdle()` 为 true，`AsyncLocalStorage` correlation 可可靠到达对应 user `message_start`。
+4. streaming 期间发送的 steer 在同一 run epoch、`agent_end` 前被消费，但 user `message_start` 已不在原 ALS scope，不能可靠恢复 PWA request ID。
+5. 在 `agent_end` handler 内同步调用 `sendUserMessage` 会开启新 run epoch，但 ALS 已丢失；该路径不能标记为可靠 PWA queued。
+6. PWA 请求在 busy 时只进入 Remote Pi 自有队列，等 `agent_end` 后下一 macrotask 确认 SDK idle，再以原 request ID 建立 ALS 并调用 `sendUserMessage`，可可靠进入新 run epoch并标记为 `pwa/queued`。
+7. run epoch 边界为 `agent_start -> messages/tools -> agent_end`；steer 归入当前 epoch，空闲普通消息与可靠 queued 各自开启新 epoch。
+8. SessionManager 的 metadata `custom` entry 不记录扩展来源，因此生产 scanner 可实现的规则是：Remote Pi marker 为硬边界，其他非 marker metadata `custom` 可跳过；所有 non-custom、未知 entry 和角色不兼容 message 均为硬边界。
+
+验证结果：定向契约测试 13/13 通过；同一测试循环 20 次稳定通过；`pi-extension` typecheck 与 `git diff --check` 通过；独立只读终审无 P0/P1 finding。
 
 ## 背景与目标
 
@@ -76,10 +92,10 @@ Protocol v2 是强制升级，不能与 v1 互通。不得实现字段 fallback�
 | 历史真源 | 当前 `SessionManager.getBranch()` 的 branch。 |
 | 扩展持久化 | 同一 Pi session JSONL 的最小 marker；不建立独立数据库。 |
 | 旧 Pi entry | 无 Remote Pi marker 的 `SessionMessageEntry` 使用 `legacy:<pi-entry-id>`，`origin` 为 `unknown`；不恢复旧 PWA ID、source 或 steer。 |
-| 输入关联 | 仅对 Remote Pi 自己在空闲时调用 `sendUserMessage` 的普通 PWA 消息使用 Node `AsyncLocalStorage`；在 user `message_start` 读取 correlation 并用 `WeakMap<AgentMessage, Correlation>` 绑定。 |
+| 输入关联 | Remote Pi 自己在空闲时发送的普通 PWA，以及 busy 时先进入 Remote Pi 自有队列、待下一 macrotask 确认 idle 后排出的 queued，使用 Node `AsyncLocalStorage`；在 user `message_start` 读取 correlation 并用 `WeakMap<AgentMessage, Correlation>` 绑定。 |
 | 永久 ID | `message_id` 与其他 `event_id` 由真实 Pi 生命周期生成，不依赖 provenance、senderRef 或 `client_request_id`。 |
 | 不可靠输入 | PWA steer、SDK followUp、terminal、RPC、第三方 `sendUserMessage` 缺少可靠 token 时均为 `unknown`；只有明确 SDK 能力证明为扩展发起时才可为 `extension`。 |
-| PWA queued | 只有实际空闲排出且阶段 0B 验证通过时才是可靠 `pwa/queued`；否则为 `unknown`。 |
+| PWA queued | 只有 busy 时先存入 Remote Pi 自有队列、`agent_end` 后下一 macrotask 确认 SDK idle，再恢复原 request correlation 排出的消息是可靠 `pwa/queued`；`agent_end` handler 内同步排出为 `unknown`。 |
 | 正式事件 | 不可变；assistant、thinking、tool 的 running 与 delta 只能走 `timeline_partial`。 |
 | 分页 | 首次冻结 snapshot head；每页最多 5 个原子回合组；`before` 是绑定 session、generation、snapshot 与排他 branch 位置的服务端不透明 cursor。 |
 | PWA 缓存 | Dexie 仅持久化最近 5 个正式回合组；partial 和更早页不持久化。 |
@@ -140,7 +156,7 @@ PWA 发送普通消息时生成临时请求 ID：
 
 PWA 立即显示内存 pending。pending、accepted 和未知送达状态都不是正式历史，不能写入 marker 或 IndexedDB 正式表。
 
-对空闲普通 PWA 调用，Extension 在自身 `sendUserMessage` 调用链建立 `AsyncLocalStorage` 请求作用域；user `message_start` 从作用域读取 correlation，生成 `message_id` 和必要 marker 后，以 `WeakMap<AgentMessage, Correlation>` 绑定具体 SDK 消息。真实 SDK 已知后续 handled 会让顺序账本留下孤儿，异步 handler 会使顺序反转；因此不得以 FIFO 推断 user 归属。steer 延后消费时 ALS 上下文会丢失，不能伪造关联。
+对空闲普通 PWA 调用，Extension 在自身 `sendUserMessage` 调用链建立 `AsyncLocalStorage` 请求作用域；对 busy 时收到的 queued 请求，先保存于 Remote Pi 自有队列，待 `agent_end` 后下一 macrotask 确认 SDK idle，再以原 correlation 建立 ALS 并调用 `sendUserMessage`。user `message_start` 从作用域读取 correlation，生成 `message_id` 和必要 marker 后，以 `WeakMap<AgentMessage, Correlation>` 绑定具体 SDK 消息。真实 SDK 已证明后续 handled 会让顺序账本留下孤儿，异步 handler 会使顺序反转；因此不得以 FIFO 推断 user 归属。steer 和 `agent_end` handler 内同步排出的 queued 在消费时均已丢失原 ALS，不能伪造关联。
 
 只有可靠关联时，Extension 才能发送定向确认：
 
@@ -197,19 +213,17 @@ type Origin = "pwa" | "extension" | "unknown";
 type Delivery = "normal" | "queued" | "unknown";
 ```
 
-`pwa` 仅用于可靠关联的 PWA 普通消息，或阶段 0B 后已经证明的实际空闲排出 queued 消息。`extension` 需要明确 SDK 能力证明为扩展来源。其余来源均为 `unknown`，包括没有可靠 token 的 terminal、RPC、PWA steer、SDK followUp 和第三方调用。UI 仅保证可靠 PWA 显示 `You` 或其他 PWA 的 `Remote`，以及经验证的 `Queued`；其他来源显示 `Unknown`。
+`pwa` 仅用于可靠关联的空闲普通 PWA 消息，或 busy 时先进入 Remote Pi 自有队列、待下一 macrotask确认 idle 后排出的 queued 消息。`extension` 需要明确 SDK 能力证明为扩展来源。其余来源均为 `unknown`，包括没有可靠 token 的 terminal、RPC、PWA steer、SDK followUp、`agent_end` handler 内同步排出的 queued 和第三方调用。UI 仅保证可靠 PWA 显示 `You` 或其他 PWA 的 `Remote`，以及上述可靠排出路径的 `Queued`；其他来源显示 `Unknown`。
 
 `senderRef` 仅在可靠 PWA 来源保存，由认证 Owner peer 派生。它不表示 tab、物理连接或 PWA 安装实例。
 
-组归属不依赖上述归因。阶段 0B 必须先锁定 `agent_start`、user `message_start`、queued user 和 `agent_end` 的真实顺序，再冻结等价的 run epoch 状态机。目标规则是：
+组归属不依赖上述来源归因，并按阶段 0B 已锁定的 run epoch 状态机处理：
 
 - `agent_start` 打开新的 run epoch，`agent_end` 关闭并清理该 epoch；
-- run epoch 内第一个没有 active group 的 user 建立 group，后续在同一 epoch 被 SDK 消费的 user 归入该 active group，但不因此推断来源或 delivery；
-- 空闲普通 PWA 与实际空闲排出的可靠 queued 各自启动新 run，并建立新 group；
-- steer 不新增 group；assistant 与 tool 按 run epoch 中的 active group 归属；
-- 不得根据最近 user、全局指针跨 run 延续、文本或 FIFO 推导 assistant 回复根或 group。
-
-若阶段 0B 证明当前 SDK 的事件顺序不满足上述边界，阶段 1 必须按真实事件选择等价 run boundary；在契约验证完成前不得实现隐含的全局 active-group 猜测。
+- epoch 内第一个 user 建立 group，后续在同一 epoch 被 SDK 消费的 user 归入该 group，但不因此推断来源或 delivery；
+- 空闲普通 PWA、可靠 queued，以及 `agent_end` handler 内同步排出的 unknown user 都会开启新 epoch并建立新 group；
+- steer 在当前 epoch 内消费，不新增 group；assistant 与 tool 按当前 epoch 的 group 归属；
+- 不得根据最近 user、跨 epoch 的全局指针、文本或 FIFO 推导 assistant 回复根或 group。
 
 因此方案不承诺 Terminal、RPC、Steer 的准确 UI 标签，也不需要将其作为永久 ID 的输入。
 
@@ -317,12 +331,12 @@ assistant 和其他需要独立稳定身份的持久 entry 也写最小 marker�
 
 恢复只扫描 `ctx.sessionManager.getBranch()`。从 Remote Pi marker 向后寻找角色匹配的目标 entry 时：
 
-1. 只允许跳过阶段 0A 已证明安全的第三方 `custom` appendEntry。
-2. `custom_message`、其他未证明安全的 entry、角色不兼容 message、下一个 Remote Pi marker、branch 结束均为硬边界。
+1. Remote Pi marker 是硬边界；其他非 marker metadata `custom` 可以跳过。SessionManager 不保存其扩展来源，因此生产 scanner 不尝试区分“第三方”或 Remote Pi 自有 metadata custom。
+2. `custom_message`、其他 non-custom 或未知 entry、角色不兼容 message、branch 结束均为硬边界。
 3. 硬边界前未找到目标 entry 时，marker 是孤儿，必须忽略，不得向后继续猜测。
 4. marker 或角色顺序异常时，仅拒绝该 marker 的关联，不能污染后续 entry。
 
-阶段 0A 的 `marker -> target -> custom_message` 事实不允许将 `custom_message` 放宽为可跳过项。阶段 0B 与阶段 1 应修订相应测试预期，移除 test-only scanner 的宽松生产推论。
+阶段 0A 的 `marker -> target -> custom_message` 事实不允许将 `custom_message` 放宽为可跳过项。阶段 0B 已将 test-only scanner 收紧为上述可实现边界。
 
 无 marker 的旧 `SessionMessageEntry` 仍可显示，稳定 ID 为 `legacy:<pi-entry-id>`，且 `origin: "unknown"`。这只保证旧 Pi 数据连续性，不恢复旧 PWA ID、sender、source、delivery 或 steer 关系。
 
@@ -392,9 +406,9 @@ PWA 没收到 `user_message_started` 或正式事件时，无法区分未送达�
 
 ### pi-extension
 
-- 执行阶段 0B 的真实 SDK 输入关联验证；在完成前不将 queued 标记为可靠 PWA 来源。
+- 以阶段 0B 契约测试作为输入关联、queued 排出、run epoch 和 scanner 边界的回归前提。
 - 冻结 v2 严格帧、错误、marker、TimelineEvent、fragment 和 fixture schema。
-- 为自身空闲普通 PWA `sendUserMessage` 实现 ALS correlation 与 `WeakMap<AgentMessage, Correlation>`；不实现全来源关联账本。
+- 为自身空闲普通 PWA，以及下一 macrotask确认 idle 后排出的 Remote Pi queued，实现 ALS correlation 与 `WeakMap<AgentMessage, Correlation>`；不实现全来源关联账本。
 - 在 `message_start` 写入最小 marker，在 post-`message_end` macrotask 验证当前 branch 落盘后才发布正式事件。
 - 严格扫描当前 branch，恢复 marker 与 legacy entry，忽略孤儿。
 - 维护 `(owner peer/senderRef, channel_id)` 逻辑 channel、generation、定向响应和有界幂等状态。
@@ -415,18 +429,17 @@ PWA 没收到 `user_message_started` 或正式事件时，无法区分未送达�
 
 ## 验证计划
 
-### 阶段 0B：SDK 输入关联契约（待完成）
+### 阶段 0B：SDK 输入关联契约（已完成）
 
-以下均须用真实 SDK 入口和可复现测试验证，未通过前不得把对应来源或 run 边界写成可靠：
+`pi-extension/src/timeline/sdk_contract.test.ts` 已用真实 SDK 锁定：
 
-1. later handled 导致顺序关联遗留孤儿的反例。
-2. 异步 handler 导致顺序关联反转的反例。
-3. 空闲普通 PWA 调用中 ALS correlation 正确绑定 `message_start` 的正例。
-4. PWA queued 在实际空闲排出时的真实行为与可靠 `pwa/queued` 边界。
-5. steer 延后消费导致 ALS 上下文丢失的边界。
-6. `agent_start -> user/message/tool -> agent_end` 的 run epoch 顺序，以及 queued 与 steer user 是否位于同一 run 的边界。
-
-阶段 0B 与阶段 1 必须把现有 test-only scanner 中对 `custom_message`、thinking/model change、label、session info、compaction 和 branch summary 等未获 0A 证明类型的防御性 skip 全部改为严格硬边界预期；只有真实证明安全的第三方 `custom` 可以跳过。
+1. later handled 的 FIFO 孤儿反例。
+2. 异步 handler 导致 `later -> earlier` 生命周期顺序与 FIFO 双向反转。
+3. 空闲普通 PWA 的 ALS correlation 正确绑定两条反序 `message_start`。
+4. busy 时进入 Remote Pi 自有队列、下一 macrotask确认 idle 后排出的可靠 `pwa/queued` 路径。
+5. steer 与 `agent_end` handler 内同步 queued 的 ALS 丢失边界。
+6. 真实工具、steer、同步 queued 与 idle queued 的 run epoch 顺序。
+7. 仅非 marker metadata `custom` 可跳过，其余 entry 均为 scanner 硬边界。
 
 ### Extension 自动化测试
 
@@ -434,9 +447,9 @@ PWA 没收到 `user_message_started` 或正式事件时，无法区分未送达�
 - 相同幂等键相同 payload 不重复调用 SDK；不同 payload 返回 `invalid_message`；observed 必须同 senderRef。
 - 空闲普通 PWA：pending -> 可靠 `user_message_started` -> entry 落盘 -> 正式事件与历史一致。
 - 无可靠 token 的输入不产生虚假确认、sender 或请求关联；PWA steer、followUp、terminal、RPC、第三方调用均保持 `unknown`，除非测试证明 extension 来源。
-- queued 仅在阶段 0B 证明的实际空闲排出路径上为 `pwa/queued`。
-- 普通与可靠 queued 组建立、active group 内未关联 user 归属、steer 不新建组、assistant/tool 不按最近 user 错误换根。
-- marker 后进程退出、下一个 marker、角色不兼容 entry、`custom_message` 和 branch 结束均使孤儿不发布；已验证安全的第三方 `custom` 可跳过。
+- queued 仅在 busy 时进入 Remote Pi 自有队列、下一 macrotask确认 idle 并恢复 ALS 的排出路径上为 `pwa/queued`；`agent_end` handler 内同步排出为 `unknown`。
+- 普通与可靠 queued 各自建立新 epoch/group、steer 留在当前 epoch、同步 unknown queued 建立新 epoch/group，assistant/tool 不按最近 user 错误换根。
+- marker 后进程退出、下一个 marker、角色不兼容 entry、`custom_message` 和 branch 结束均使孤儿不发布；其他非 marker metadata `custom` 可跳过。
 - current branch 恢复不混入废弃 branch；无 marker entry 使用 legacy ID。
 - assistant 最终事件只发布一次，toolResult 最终事件只发布一次；partial 不进入历史；无 toolResult 恢复为 interrupted。
 - 同 ID 实时与历史内容冲突触发 reset。
@@ -484,13 +497,13 @@ git diff --check
 
 验证真实 SDK 生命周期、marker 基础拓扑、`custom` 交错、`custom_message` 延后顺序、孤儿边界和当前 branch 隔离；结果固定在 `pi-extension/src/timeline/sdk_contract.test.ts`。
 
-### 阶段 0B：下一步
+### 阶段 0B：已完成
 
-用真实 SDK 完成 later handled 孤儿、异步 handler 反序、空闲 ALS 正例、queued 实际空闲排出、steer 上下文丢失和 run epoch 顺序验证；将 scanner 测试中除已证明第三方 `custom` 外的防御性跳过全部收紧为硬边界。
+真实 SDK 测试已锁定 handled/FIFO 反例、异步反序、空闲 ALS、可靠 queued 排出、steer/同步 queued 上下文边界、run epoch 顺序和严格 scanner。
 
-### 阶段 1：协议、类型与入口边界
+### 阶段 1：协议、类型与入口边界（下一步）
 
-冻结严格 v2 schema、错误、fixture、marker、TimelineEvent 和入口边界；盘点直接消费者；不实现生产兼容层或宽松 schema。
+以阶段 0A/0B 契约为前提，冻结严格 v2 schema、错误、fixture、marker、TimelineEvent 和入口边界；盘点直接消费者；不实现生产兼容层或宽松 schema。
 
 ### 阶段 2：Extension 最小永久提交链路
 

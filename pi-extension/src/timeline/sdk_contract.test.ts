@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -107,6 +108,130 @@ async function nextMacrotask(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve(value: T | PromiseLike<T>): void;
+  reject(reason?: unknown): void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function waitFor<T>(promise: Promise<T>, label: string, timeoutMs = 5_000): Promise<T> {
+  return await new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(`Timed out waiting for ${label}`));
+    }, timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (reason: unknown) => {
+        clearTimeout(timeout);
+        reject(reason);
+      },
+    );
+  });
+}
+
+async function waitForAgentIdle(session: TestSession, label: string): Promise<void> {
+  await waitFor(
+    new Promise<void>((resolve) => {
+      const check = (): void => {
+        if (!session.isStreaming) resolve();
+        else setImmediate(check);
+      };
+      check();
+    }),
+    label,
+  );
+}
+
+function messageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((part): part is { type: "text"; text: string } => (
+      typeof part === "object"
+      && part !== null
+      && "type" in part
+      && part.type === "text"
+      && "text" in part
+      && typeof part.text === "string"
+    ))
+    .map((part) => part.text)
+    .join("\n");
+}
+
+function expectSubsequence(events: readonly string[], expected: readonly string[]): void {
+  let cursor = 0;
+  for (const event of events) {
+    if (event === expected[cursor]) cursor += 1;
+    if (cursor === expected.length) return;
+  }
+  throw new Error(`Expected event subsequence not found: ${expected.join(" -> ")}`);
+}
+
+type PublicSendUserMessage = (
+  content: string,
+  options?: { deliverAs?: "steer" | "followUp" },
+) => void;
+
+type StreamGate = {
+  started: Deferred<void>;
+  release: Deferred<void>;
+};
+
+function gatedTextStream(message: FakeAssistantMessage, gate: StreamGate): LocalStream {
+  const stream = {
+    async *[Symbol.asyncIterator]() {
+      yield { type: "start", partial: message };
+      gate.started.resolve(undefined);
+      await gate.release.promise;
+      yield { type: "done", reason: "stop" as const, message };
+    },
+    async result() {
+      await gate.release.promise;
+      return message;
+    },
+  };
+  return stream as unknown as LocalStream;
+}
+
+function firstAssistantGatedStream(gate: StreamGate): LocalStreamFn {
+  let invocation = 0;
+  return () => {
+    invocation += 1;
+    const message = makeAssistant([{ type: "text", text: "gated local assistant response" }], "stop");
+    return invocation === 1 ? gatedTextStream(message, gate) : fakeStream(message);
+  };
+}
+
+function toolThenGatedTextStream(gate: StreamGate): LocalStreamFn {
+  let invocation = 0;
+  return () => {
+    invocation += 1;
+    if (invocation === 1) {
+      return fakeStream(makeAssistant([{
+        type: "toolCall",
+        id: "sdk-contract-epoch-tool-call",
+        name: TEST_TOOL_NAME,
+        arguments: {},
+      }], "toolUse"));
+    }
+    const message = makeAssistant([{ type: "text", text: "gated epoch tool response" }], "stop");
+    return invocation === 2 ? gatedTextStream(message, gate) : fakeStream(message);
+  };
+}
+
 async function createHarness(options: {
   sessionManager: SessionManager;
   extensionFactories?: ExtensionFactory[];
@@ -157,10 +282,6 @@ async function createHarness(options: {
 
 type MarkerEntry = Extract<BranchEntry, { type: "custom" }> & { customType: typeof REMOTE_PI_MARKER };
 
-function isMarker(entry: BranchEntry | undefined): entry is MarkerEntry {
-  return entry?.type === "custom" && entry.customType === REMOTE_PI_MARKER;
-}
-
 function hasMessageEntry(entries: readonly BranchEntry[], message: unknown): boolean {
   return entries.some((entry) => entry.type === "message" && entry.message === message);
 }
@@ -177,8 +298,16 @@ function appendAssistant(manager: SessionManager, text: string): string {
  * Test-only recovery scanner for the plan/63 marker adjacency contract.
  * It is deliberately local: production recovery remains out of scope for phase 0.
  */
+type ScanEntry = BranchEntry | { type: string };
+
+function isMarker(entry: ScanEntry | undefined): entry is MarkerEntry {
+  return entry?.type === "custom"
+    && "customType" in entry
+    && entry.customType === REMOTE_PI_MARKER;
+}
+
 function scanTargetAfterMarker(
-  entries: readonly BranchEntry[],
+  entries: readonly ScanEntry[],
   markerIndex: number,
   targetRole: "user" | "assistant" | "toolResult",
 ): BranchEntry | undefined {
@@ -186,21 +315,9 @@ function scanTargetAfterMarker(
     const entry = entries[index]!;
     if (isMarker(entry)) return undefined;
 
-    switch (entry.type) {
-      case "custom":
-      case "custom_message":
-      case "thinking_level_change":
-      case "model_change":
-      case "label":
-      case "session_info":
-      case "compaction":
-      case "branch_summary":
-        continue;
-      case "message":
-        return entry.message.role === targetRole ? entry : undefined;
-      default:
-        return undefined;
-    }
+    if (entry.type === "custom") continue;
+    if (entry.type !== "message" || !("message" in entry)) return undefined;
+    return entry.message.role === targetRole ? entry : undefined;
   }
   return undefined;
 }
@@ -419,7 +536,7 @@ describe("plan/63 SDK timeline contracts", () => {
     }
   });
 
-  test("scanner rejects hard boundaries and defensively skips legal non-target entries", () => {
+  test("scanner skips non-marker metadata custom; all non-custom entries hard boundaries", () => {
     const nextMarkerManager = SessionManager.inMemory(process.cwd());
     const firstMarker = nextMarkerManager.appendCustomEntry(REMOTE_PI_MARKER, { expectedRole: "user" });
     const secondMarker = nextMarkerManager.appendCustomEntry(REMOTE_PI_MARKER, { expectedRole: "user" });
@@ -428,22 +545,603 @@ describe("plan/63 SDK timeline contracts", () => {
     expect(scanTargetAfterMarker(nextMarkerBranch, nextMarkerBranch.findIndex((entry) => entry.id === firstMarker), "user")).toBeUndefined();
     expect(scanTargetAfterMarker(nextMarkerBranch, nextMarkerBranch.findIndex((entry) => entry.id === secondMarker), "user")?.id).toBe(secondTarget);
 
+    const compatibleCustomManager = SessionManager.inMemory(process.cwd());
+    const compatibleCustomMarker = compatibleCustomManager.appendCustomEntry(REMOTE_PI_MARKER, { expectedRole: "user" });
+    compatibleCustomManager.appendCustomEntry("third-party:metadata", { visible: false });
+    const compatibleCustomTarget = appendUser(compatibleCustomManager, "target after third-party custom");
+    const compatibleCustomBranch = compatibleCustomManager.getBranch();
+    expect(scanTargetAfterMarker(
+      compatibleCustomBranch,
+      compatibleCustomBranch.findIndex((entry) => entry.id === compatibleCustomMarker),
+      "user",
+    )?.id).toBe(compatibleCustomTarget);
+
     const incompatibleManager = SessionManager.inMemory(process.cwd());
     const incompatibleMarker = incompatibleManager.appendCustomEntry(REMOTE_PI_MARKER, { expectedRole: "user" });
     appendAssistant(incompatibleManager, "incompatible assistant");
     const incompatibleBranch = incompatibleManager.getBranch();
     expect(scanTargetAfterMarker(incompatibleBranch, incompatibleBranch.findIndex((entry) => entry.id === incompatibleMarker), "user")).toBeUndefined();
 
-    // Runtime message_start handlers currently queue custom_message through steer, so it cannot
-    // occupy this window. Keep scanner recovery conservative for legacy or abnormal topologies.
-    const legalManager = SessionManager.inMemory(process.cwd());
-    const legalMarker = legalManager.appendCustomEntry(REMOTE_PI_MARKER, { expectedRole: "user" });
-    legalManager.appendCustomEntry("third-party:metadata", { visible: false });
-    legalManager.appendCustomMessageEntry("third-party:context", "legal context", false);
-    legalManager.appendThinkingLevelChange("low");
-    const legalTarget = appendUser(legalManager, "target after legal entries");
-    const legalBranch = legalManager.getBranch();
-    expect(scanTargetAfterMarker(legalBranch, legalBranch.findIndex((entry) => entry.id === legalMarker), "user")?.id).toBe(legalTarget);
+    const hardBoundaryFactories: ReadonlyArray<(manager: SessionManager, marker: string) => void> = [
+      (manager) => { manager.appendCustomMessageEntry("third-party:context", "context", false); },
+      (manager) => { manager.appendThinkingLevelChange("low"); },
+      (manager) => { manager.appendModelChange("sdk-contract", "model"); },
+      (manager, marker) => { manager.appendLabelChange(marker, "bookmark"); },
+      (manager) => { manager.appendSessionInfo("session name"); },
+      (manager, marker) => { manager.appendCompaction("summary", marker, 0); },
+      (manager, marker) => { manager.branchWithSummary(marker, "branch summary"); },
+    ];
+    for (const appendBoundary of hardBoundaryFactories) {
+      const manager = SessionManager.inMemory(process.cwd());
+      const marker = manager.appendCustomEntry(REMOTE_PI_MARKER, { expectedRole: "user" });
+      appendBoundary(manager, marker);
+      appendUser(manager, "unreachable target after hard boundary");
+      const branch = manager.getBranch();
+      expect(scanTargetAfterMarker(branch, branch.findIndex((entry) => entry.id === marker), "user")).toBeUndefined();
+    }
+
+    const unknownBoundary = [
+      { type: "custom", id: "marker", parentId: null, timestamp: "0", customType: REMOTE_PI_MARKER },
+      { type: "unknown_future_entry" },
+    ] satisfies readonly ScanEntry[];
+    expect(scanTargetAfterMarker(unknownBoundary, 0, "user")).toBeUndefined();
+  });
+
+  test("later handled input leaves a FIFO correlation orphan and consumes the wrong real user start", async () => {
+    const expectedFifo: string[] = [];
+    const startedUsers: Array<{ text: string; consumedRequestId?: string }> = [];
+    let send!: PublicSendUserMessage;
+    const handled = deferred<void>();
+    const firstInputObserved = deferred<void>();
+    const firstInputMayFinish = deferred<void>();
+    const secondAgentEnded = deferred<void>();
+    let inputCount = 0;
+
+    const earlyRemotePiFactory: ExtensionFactory = (pi) => {
+      send = (content, options) => { pi.sendUserMessage(content, options); };
+      pi.on("input", (event) => {
+        if (event.source !== "extension") return;
+        expectedFifo.push(event.text);
+      });
+    };
+    const laterHandlerFactory: ExtensionFactory = (pi) => {
+      pi.on("input", async (event) => {
+        if (event.source !== "extension") return;
+        inputCount += 1;
+        if (inputCount !== 1) return;
+        firstInputObserved.resolve(undefined);
+        await firstInputMayFinish.promise;
+        handled.resolve(undefined);
+        return { action: "handled" };
+      });
+    };
+    const observerFactory: ExtensionFactory = (pi) => {
+      pi.on("message_start", (event) => {
+        if (event.message.role !== "user") return;
+        startedUsers.push({
+          text: messageText(event.message.content),
+          consumedRequestId: expectedFifo.shift(),
+        });
+      });
+      pi.on("agent_end", () => {
+        secondAgentEnded.resolve(undefined);
+      });
+    };
+    const session = await createHarness({
+      sessionManager: SessionManager.inMemory(process.cwd()),
+      extensionFactories: [earlyRemotePiFactory, laterHandlerFactory, observerFactory],
+    });
+
+    try {
+      send("first handled request");
+      await waitFor(firstInputObserved.promise, "first handled input");
+      firstInputMayFinish.resolve(undefined);
+      await waitFor(handled.promise, "handled input result");
+      send("second real request");
+      await waitFor(
+        new Promise<void>((resolve) => {
+          const check = (): void => {
+            if (startedUsers.length === 1) resolve();
+            else setImmediate(check);
+          };
+          check();
+        }),
+        "second user message_start",
+      );
+      await waitFor(secondAgentEnded.promise, "second real agent end");
+      await waitForAgentIdle(session, "second real request becoming idle");
+
+      expect(startedUsers).toEqual([{
+        text: "second real request",
+        consumedRequestId: "first handled request",
+      }]);
+      expect(expectedFifo).toEqual(["second real request"]);
+    } finally {
+      session.dispose();
+    }
+  });
+
+  test("async input handlers reverse FIFO correlation when the later request starts before the earlier request", async () => {
+    const fifo: string[] = [];
+    const startedUsers: Array<{ text: string; consumedRequestId?: string }> = [];
+    let send!: PublicSendUserMessage;
+    const firstHandlerEntered = deferred<void>();
+    const releaseFirstHandler = deferred<void>();
+    const firstHandlerFinished = deferred<void>();
+    const firstStarted = deferred<void>();
+    const secondStarted = deferred<void>();
+    const laterAgentEnded = deferred<void>();
+    const earlierAgentEnded = deferred<void>();
+    let agentEndCount = 0;
+    let inputCount = 0;
+
+    const remotePiLedgerFactory: ExtensionFactory = (pi) => {
+      send = (content, options) => { pi.sendUserMessage(content, options); };
+      pi.on("input", async (event) => {
+        if (event.source !== "extension") return;
+        fifo.push(event.text);
+        inputCount += 1;
+        if (inputCount !== 1) return;
+        firstHandlerEntered.resolve(undefined);
+        await releaseFirstHandler.promise;
+        firstHandlerFinished.resolve(undefined);
+      });
+    };
+    const observerFactory: ExtensionFactory = (pi) => {
+      pi.on("message_start", (event) => {
+        if (event.message.role !== "user") return;
+        startedUsers.push({ text: messageText(event.message.content), consumedRequestId: fifo.shift() });
+        if (startedUsers.length === 1) firstStarted.resolve(undefined);
+        if (startedUsers.length === 2) secondStarted.resolve(undefined);
+      });
+      pi.on("agent_end", () => {
+        agentEndCount += 1;
+        if (agentEndCount === 1) laterAgentEnded.resolve(undefined);
+        if (agentEndCount === 2) earlierAgentEnded.resolve(undefined);
+      });
+    };
+    const session = await createHarness({
+      sessionManager: SessionManager.inMemory(process.cwd()),
+      extensionFactories: [remotePiLedgerFactory, observerFactory],
+    });
+
+    try {
+      send("earlier idle request");
+      await waitFor(firstHandlerEntered.promise, "earlier input handler");
+      send("later idle request");
+      await waitFor(firstStarted.promise, "later user message_start");
+      await waitFor(laterAgentEnded.promise, "later agent end");
+      await waitForAgentIdle(session, "later request becoming idle");
+      releaseFirstHandler.resolve(undefined);
+      await waitFor(firstHandlerFinished.promise, "earlier delayed handler completion");
+      await waitFor(secondStarted.promise, "earlier user message_start");
+      await waitFor(earlierAgentEnded.promise, "earlier agent end");
+      await waitForAgentIdle(session, "earlier request becoming idle");
+
+      expect(startedUsers).toEqual([
+        { text: "later idle request", consumedRequestId: "earlier idle request" },
+        { text: "earlier idle request", consumedRequestId: "later idle request" },
+      ]);
+      expect(fifo).toEqual([]);
+    } finally {
+      session.dispose();
+    }
+  });
+
+  test("AsyncLocalStorage keeps each requestId correct when async input handlers start later before earlier", async () => {
+    const correlation = new AsyncLocalStorage<{ requestId: string }>();
+    const startedUsers: Array<{ text: string; requestId?: string }> = [];
+    const inputIdleStates: boolean[] = [];
+    let send!: PublicSendUserMessage;
+    const firstHandlerEntered = deferred<void>();
+    const releaseFirstHandler = deferred<void>();
+    const firstHandlerFinished = deferred<void>();
+    const firstStarted = deferred<void>();
+    const secondStarted = deferred<void>();
+    const laterAgentEnded = deferred<void>();
+    const earlierAgentEnded = deferred<void>();
+    let agentEndCount = 0;
+    let inputCount = 0;
+
+    const asyncExtensionFactory: ExtensionFactory = (pi) => {
+      send = (content, options) => { pi.sendUserMessage(content, options); };
+      pi.on("input", async (event, ctx) => {
+        if (event.source !== "extension") return;
+        inputIdleStates.push(ctx.isIdle());
+        inputCount += 1;
+        if (inputCount !== 1) return;
+        firstHandlerEntered.resolve(undefined);
+        await releaseFirstHandler.promise;
+        firstHandlerFinished.resolve(undefined);
+      });
+      pi.on("message_start", (event) => {
+        if (event.message.role !== "user") return;
+        startedUsers.push({ text: messageText(event.message.content), requestId: correlation.getStore()?.requestId });
+        if (startedUsers.length === 1) firstStarted.resolve(undefined);
+        if (startedUsers.length === 2) secondStarted.resolve(undefined);
+      });
+      pi.on("agent_end", () => {
+        agentEndCount += 1;
+        if (agentEndCount === 1) laterAgentEnded.resolve(undefined);
+        if (agentEndCount === 2) earlierAgentEnded.resolve(undefined);
+      });
+    };
+    const session = await createHarness({
+      sessionManager: SessionManager.inMemory(process.cwd()),
+      extensionFactories: [asyncExtensionFactory],
+    });
+
+    try {
+      correlation.run({ requestId: "request-earlier" }, () => send("earlier ALS request"));
+      await waitFor(firstHandlerEntered.promise, "earlier ALS input handler");
+      correlation.run({ requestId: "request-later" }, () => send("later ALS request"));
+      await waitFor(firstStarted.promise, "later ALS user message_start");
+      await waitFor(laterAgentEnded.promise, "later ALS agent end");
+      await waitForAgentIdle(session, "later ALS request becoming idle");
+      releaseFirstHandler.resolve(undefined);
+      await waitFor(firstHandlerFinished.promise, "earlier ALS delayed handler completion");
+      await waitFor(secondStarted.promise, "earlier ALS user message_start");
+      await waitFor(earlierAgentEnded.promise, "earlier ALS agent end");
+
+      expect(startedUsers).toEqual([
+        { text: "later ALS request", requestId: "request-later" },
+        { text: "earlier ALS request", requestId: "request-earlier" },
+      ]);
+      expect(inputIdleStates).toEqual([true, true]);
+    } finally {
+      session.dispose();
+    }
+  });
+
+  test("steer delays user message_start beyond the originating ALS scope without a new agent epoch", async () => {
+    const correlation = new AsyncLocalStorage<{ requestId: string }>();
+    const gate: StreamGate = { started: deferred<void>(), release: deferred<void>() };
+    let send!: PublicSendUserMessage;
+    const events: string[] = [];
+    const users: Array<{ text: string; requestId?: string; epoch: number }> = [];
+    const steerStarted = deferred<void>();
+    let epoch = 0;
+
+    const observerFactory: ExtensionFactory = (pi) => {
+      send = (content, options) => { pi.sendUserMessage(content, options); };
+      pi.on("agent_start", () => {
+        epoch += 1;
+        events.push(`agent_start:${epoch}`);
+      });
+      pi.on("agent_end", () => { events.push(`agent_end:${epoch}`); });
+      pi.on("message_start", (event) => {
+        if (event.message.role !== "user") return;
+        const user = {
+          text: messageText(event.message.content),
+          requestId: correlation.getStore()?.requestId,
+          epoch,
+        };
+        users.push(user);
+        events.push(`user:${user.text}:${epoch}`);
+        if (user.text === "steer during streaming") steerStarted.resolve(undefined);
+      });
+    };
+    const session = await createHarness({
+      sessionManager: SessionManager.inMemory(process.cwd()),
+      extensionFactories: [observerFactory],
+      streamFn: firstAssistantGatedStream(gate),
+    });
+
+    try {
+      const rootPrompt = session.prompt("root streaming request");
+      await waitFor(gate.started.promise, "root assistant stream start");
+      correlation.run({ requestId: "steer-request" }, () => {
+        send("steer during streaming", { deliverAs: "steer" });
+      });
+      gate.release.resolve(undefined);
+      await waitFor(steerStarted.promise, "steer user message_start");
+      await rootPrompt;
+
+      expect(users).toEqual([
+        { text: "root streaming request", requestId: undefined, epoch: 1 },
+        { text: "steer during streaming", requestId: undefined, epoch: 1 },
+      ]);
+      expect(events).toContain("agent_start:1");
+      expect(events).toContain("agent_end:1");
+      expect(events.indexOf("user:steer during streaming:1")).toBeLessThan(events.indexOf("agent_end:1"));
+    } finally {
+      session.dispose();
+    }
+  });
+
+  test("agent_end synchronous sendUserMessage starts a new epoch and loses its ALS scope", async () => {
+    const correlation = new AsyncLocalStorage<{ requestId: string }>();
+    const events: string[] = [];
+    const users: Array<{ text: string; requestId?: string; epoch: number }> = [];
+    const queuedStarted = deferred<void>();
+    let epoch = 0;
+    let queued = false;
+
+    const observerFactory: ExtensionFactory = (pi) => {
+      pi.on("agent_start", () => { epoch += 1; events.push(`agent_start:${epoch}`); });
+      pi.on("agent_end", () => {
+        events.push(`agent_end:${epoch}`);
+        if (queued) return;
+        queued = true;
+        correlation.run({ requestId: "queued-sync" }, () => {
+          pi.sendUserMessage("queued from agent_end", { deliverAs: "steer" });
+        });
+      });
+      pi.on("message_start", (event) => {
+        if (event.message.role !== "user") return;
+        const user = { text: messageText(event.message.content), requestId: correlation.getStore()?.requestId, epoch };
+        users.push(user);
+        events.push(`user:${user.text}:${epoch}`);
+        if (user.text === "queued from agent_end") queuedStarted.resolve(undefined);
+      });
+    };
+    const session = await createHarness({
+      sessionManager: SessionManager.inMemory(process.cwd()),
+      extensionFactories: [observerFactory],
+    });
+
+    try {
+      await session.prompt("root for synchronous queued continuation");
+      await waitFor(queuedStarted.promise, "synchronous queued continuation start");
+
+      expect(users).toEqual([
+        { text: "root for synchronous queued continuation", requestId: undefined, epoch: 1 },
+        { text: "queued from agent_end", requestId: undefined, epoch: 2 },
+      ]);
+      await waitForAgentIdle(session, "synchronous queued agent end");
+      expect(events.filter((event) => event.startsWith("agent_start:"))).toEqual(["agent_start:1", "agent_start:2"]);
+      expect(events.filter((event) => event.startsWith("agent_end:"))).toEqual(["agent_end:1", "agent_end:2"]);
+    } finally {
+      session.dispose();
+    }
+  });
+
+  test("a Remote Pi queue drains on the next macrotask only after the agent is idle", async () => {
+    const correlation = new AsyncLocalStorage<{ requestId: string }>();
+    const events: string[] = [];
+    const users: Array<{ text: string; requestId?: string }> = [];
+    const gate: StreamGate = { started: deferred<void>(), release: deferred<void>() };
+    const queuedDrained = deferred<void>();
+    const rootAgentEnded = deferred<void>();
+    const queuedAgentEnded = deferred<void>();
+    const remoteQueue: Array<{ text: string; requestId: string }> = [];
+    const drainIdleStates: boolean[] = [];
+    const queuedInputIdleStates: boolean[] = [];
+    let send!: PublicSendUserMessage;
+    let session!: TestSession;
+    let epoch = 0;
+    let drainScheduled = false;
+
+    const observerFactory: ExtensionFactory = (pi) => {
+      send = (content, options) => { pi.sendUserMessage(content, options); };
+      pi.on("agent_start", () => {
+        epoch += 1;
+        events.push(`agent_start:${epoch}`);
+      });
+      pi.on("input", (event, ctx) => {
+        if (event.source === "extension" && event.text === "queued from Remote Pi PWA") {
+          queuedInputIdleStates.push(ctx.isIdle());
+        }
+      });
+      pi.on("message_start", (event) => {
+        if (event.message.role !== "user" && event.message.role !== "assistant") return;
+        const text = messageText(event.message.content);
+        events.push(`message_start:${event.message.role}:${text}:${epoch}`);
+        if (event.message.role === "user") {
+          users.push({ text, requestId: correlation.getStore()?.requestId });
+        }
+      });
+      pi.on("message_end", (event) => {
+        if (event.message.role === "user" || event.message.role === "assistant") {
+          events.push(`message_end:${event.message.role}:${messageText(event.message.content)}:${epoch}`);
+        }
+      });
+      pi.on("agent_end", () => {
+        events.push(`agent_end:${epoch}`);
+        if (epoch === 2) {
+          queuedAgentEnded.resolve(undefined);
+          return;
+        }
+        rootAgentEnded.resolve(undefined);
+        if (drainScheduled) return;
+        drainScheduled = true;
+        setImmediate(() => {
+          drainIdleStates.push(!session.isStreaming);
+          const next = remoteQueue.shift();
+          expect(next).toBeDefined();
+          if (!next) return;
+          correlation.run({ requestId: next.requestId }, () => {
+            send(next.text);
+          });
+          queuedDrained.resolve(undefined);
+        });
+      });
+    };
+    session = await createHarness({
+      sessionManager: SessionManager.inMemory(process.cwd()),
+      extensionFactories: [observerFactory],
+      streamFn: firstAssistantGatedStream(gate),
+    });
+
+    try {
+      const rootPrompt = session.prompt("root for Remote Pi queue");
+      await waitFor(gate.started.promise, "root assistant stream start");
+      remoteQueue.push({ text: "queued from Remote Pi PWA", requestId: "remote-pwa-request" });
+      expect(session.isStreaming).toBe(true);
+      expect(remoteQueue).toHaveLength(1);
+      gate.release.resolve(undefined);
+      await waitFor(rootAgentEnded.promise, "root agent end");
+      await waitFor(queuedDrained.promise, "Remote Pi queue drain");
+      await rootPrompt;
+      await waitFor(queuedAgentEnded.promise, "Remote Pi queued agent end");
+      await waitForAgentIdle(session, "Remote Pi queued request becoming idle");
+
+      expect(drainIdleStates).toEqual([true]);
+      expect(queuedInputIdleStates).toEqual([true]);
+      expect(remoteQueue).toEqual([]);
+      expect(users).toEqual([
+        { text: "root for Remote Pi queue", requestId: undefined },
+        { text: "queued from Remote Pi PWA", requestId: "remote-pwa-request" },
+      ]);
+      expect(events).toContain("agent_start:2");
+      expect(events.filter((event) => event.startsWith("agent_end:"))).toEqual(["agent_end:1", "agent_end:2"]);
+      expectSubsequence(events, [
+        "agent_start:1",
+        "message_start:user:root for Remote Pi queue:1",
+        "message_end:user:root for Remote Pi queue:1",
+        "message_start:assistant:gated local assistant response:1",
+        "message_end:assistant:gated local assistant response:1",
+        "agent_end:1",
+        "agent_start:2",
+        "message_start:user:queued from Remote Pi PWA:2",
+        "message_end:user:queued from Remote Pi PWA:2",
+        "message_start:assistant:gated local assistant response:2",
+        "message_end:assistant:gated local assistant response:2",
+        "agent_end:2",
+      ]);
+    } finally {
+      gate.release.resolve(undefined);
+      session.dispose();
+    }
+  });
+
+  test("real tool, steer, synchronous queued continuation, and idle queued send expose their agent epochs", async () => {
+    const events: string[] = [];
+    const gate: StreamGate = { started: deferred<void>(), release: deferred<void>() };
+    let send!: PublicSendUserMessage;
+    const rootToolCount = { value: 0 };
+    const steerStarted = deferred<void>();
+    const synchronousQueuedStarted = deferred<void>();
+    const idleQueuedStarted = deferred<void>();
+    const epochOneEnded = deferred<void>();
+    const epochTwoEnded = deferred<void>();
+    const epochThreeEnded = deferred<void>();
+    let epoch = 0;
+    let synchronousQueued = false;
+    let idleQueued = false;
+
+    const epochFactory: ExtensionFactory = (pi) => {
+      send = (content, options) => { pi.sendUserMessage(content, options); };
+      pi.registerTool({
+        name: TEST_TOOL_NAME,
+        label: "SDK contract epoch tool",
+        description: "Produces one deterministic local tool result.",
+        parameters: Type.Object({}),
+        execute: async () => {
+          rootToolCount.value += 1;
+          return { content: [{ type: "text", text: "epoch tool result" }], details: {} };
+        },
+      });
+      pi.on("agent_start", () => { epoch += 1; events.push(`agent_start:${epoch}`); });
+      pi.on("message_start", (event) => {
+        if (event.message.role === "user") {
+          const text = messageText(event.message.content);
+          events.push(`message_start:user:${text}:${epoch}`);
+          if (text === "epoch steer") steerStarted.resolve(undefined);
+          if (text === "epoch synchronous queued") synchronousQueuedStarted.resolve(undefined);
+          if (text === "epoch idle queued") idleQueuedStarted.resolve(undefined);
+          return;
+        }
+        if (event.message.role === "assistant" || event.message.role === "toolResult") {
+          const text = event.message.role === "assistant" ? messageText(event.message.content) : "";
+          events.push(`message_start:${event.message.role}:${text}:${epoch}`);
+        }
+      });
+      pi.on("message_end", (event) => {
+        if (event.message.role !== "user" && event.message.role !== "assistant" && event.message.role !== "toolResult") return;
+        const text = event.message.role === "assistant" ? messageText(event.message.content) : "";
+        events.push(`message_end:${event.message.role}:${text}:${epoch}`);
+      });
+      pi.on("agent_end", () => {
+        events.push(`agent_end:${epoch}`);
+        if (epoch === 1) {
+          epochOneEnded.resolve(undefined);
+          if (!synchronousQueued) {
+            synchronousQueued = true;
+            pi.sendUserMessage("epoch synchronous queued", { deliverAs: "steer" });
+          }
+          return;
+        }
+        if (epoch === 2) {
+          epochTwoEnded.resolve(undefined);
+          if (!idleQueued) {
+            idleQueued = true;
+            setImmediate(() => { pi.sendUserMessage("epoch idle queued", { deliverAs: "steer" }); });
+          }
+          return;
+        }
+        if (epoch === 3) epochThreeEnded.resolve(undefined);
+      });
+    };
+    const session = await createHarness({
+      sessionManager: SessionManager.inMemory(process.cwd()),
+      extensionFactories: [epochFactory],
+      streamFn: toolThenGatedTextStream(gate),
+      enableExtensionTools: true,
+    });
+
+    try {
+      const rootPrompt = session.prompt("epoch root");
+      await waitFor(
+        new Promise<void>((resolve) => {
+          const check = (): void => {
+            if (rootToolCount.value === 1) resolve();
+            else setImmediate(check);
+          };
+          check();
+        }),
+        "root tool execution",
+      );
+      await waitFor(gate.started.promise, "gated final assistant stream start");
+      send("epoch steer", { deliverAs: "steer" });
+      await nextMacrotask();
+      expect(events).not.toContain("message_start:user:epoch steer:1");
+      gate.release.resolve(undefined);
+      await waitFor(steerStarted.promise, "epoch steer start");
+      await waitFor(epochOneEnded.promise, "epoch one end");
+      await waitFor(synchronousQueuedStarted.promise, "epoch synchronous queued start");
+      await waitFor(epochTwoEnded.promise, "epoch two end");
+      await waitFor(idleQueuedStarted.promise, "epoch idle queued start");
+      await waitFor(epochThreeEnded.promise, "epoch three end");
+      await rootPrompt;
+      await waitForAgentIdle(session, "complete epoch trace");
+
+      expectSubsequence(events, [
+        "agent_start:1",
+        "message_start:user:epoch root:1",
+        "message_end:user::1",
+        "message_start:assistant::1",
+        "message_end:assistant::1",
+        "message_start:toolResult::1",
+        "message_end:toolResult::1",
+        "message_start:assistant:gated epoch tool response:1",
+        "message_end:assistant:gated epoch tool response:1",
+        "message_start:user:epoch steer:1",
+        "message_end:user::1",
+        "message_start:assistant:gated epoch tool response:1",
+        "message_end:assistant:gated epoch tool response:1",
+        "agent_end:1",
+      ]);
+      expectSubsequence(events, [
+        "agent_start:2",
+        "message_start:user:epoch synchronous queued:2",
+        "message_end:user::2",
+        "message_start:assistant:gated epoch tool response:2",
+        "message_end:assistant:gated epoch tool response:2",
+        "agent_end:2",
+      ]);
+      expectSubsequence(events, [
+        "agent_start:3",
+        "message_start:user:epoch idle queued:3",
+        "message_end:user::3",
+        "message_start:assistant:gated epoch tool response:3",
+        "message_end:assistant:gated epoch tool response:3",
+        "agent_end:3",
+      ]);
+    } finally {
+      gate.release.resolve(undefined);
+      session.dispose();
+    }
   });
 
   test("getEntries retains abandoned branches while getBranch exposes only the current leaf path", () => {
