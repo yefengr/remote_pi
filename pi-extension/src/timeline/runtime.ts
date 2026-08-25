@@ -27,6 +27,8 @@ type MessageRecord = {
 
 export type Correlation = {
   clientRequestId?: string;
+  channelId?: string;
+  requestId?: string;
   origin: "pwa" | "extension" | "unknown";
   delivery: "normal" | "queued" | "unknown";
   senderRef?: string;
@@ -42,8 +44,18 @@ type PendingMessage = {
 type SessionEntry = ReturnType<SessionManager["getBranch"]>[number];
 type MessageEntry = Extract<SessionEntry, { type: "message" }>;
 
+export type TimelineStarted = {
+  eventId: string;
+  groupId: string;
+  role: MessageRole;
+  correlation: Correlation;
+  blocks: JsonValue[];
+};
+
 export type TimelineRuntimeOptions = {
-  onPublished?: (event: TimelineEvent) => void;
+  getHistoryGeneration?: () => string;
+  onStarted?: (started: TimelineStarted) => void;
+  onPublished?: (event: TimelineEvent, correlation: Correlation) => void;
 };
 
 export class TimelineRuntime {
@@ -60,9 +72,13 @@ export class TimelineRuntime {
   private epoch = 0;
   private activeGroupId: string | null = null;
   private active = false;
-  private readonly onPublished?: (event: TimelineEvent) => void;
+  private readonly getHistoryGenerationValue?: () => string;
+  private readonly onStarted?: (started: TimelineStarted) => void;
+  private readonly onPublished?: (event: TimelineEvent, correlation: Correlation) => void;
 
   constructor(options: TimelineRuntimeOptions = {}) {
+    this.getHistoryGenerationValue = options.getHistoryGeneration;
+    this.onStarted = options.onStarted;
     this.onPublished = options.onPublished;
   }
 
@@ -92,11 +108,16 @@ export class TimelineRuntime {
   }
 
   get historyGeneration(): string | null {
-    return this.sessionId;
+    if (!this.sessionManager) return null;
+    return this.getHistoryGenerationValue?.() ?? this.sessionManager.getSessionId();
   }
 
   get currentEpoch(): number {
     return this.epoch;
+  }
+
+  get currentGroupId(): string | null {
+    return this.activeGroupId;
   }
 
   getPublishedEvents(): readonly TimelineEvent[] {
@@ -126,10 +147,10 @@ export class TimelineRuntime {
     this.activeGroupId = null;
   }
 
-  onMessageStart(message: unknown, sessionManager: SessionManager): void {
+  onMessageStart(message: unknown, sessionManager: SessionManager): TimelineStarted | null {
     this.attach(sessionManager);
     const record = this.asMessageRecord(message);
-    if (!record) return;
+    if (!record) return null;
     if (!this.active) {
       this.onAgentStart();
     }
@@ -144,6 +165,15 @@ export class TimelineRuntime {
     const pending = { message: objectMessage, role: record.role, marker, correlation };
     this.pending.set(objectMessage, pending);
     this.pendingByRole[record.role].push(pending);
+    const started: TimelineStarted = {
+      eventId,
+      groupId,
+      role: record.role,
+      correlation: { ...correlation },
+      blocks: record.role === "user" ? this.userBlocks(record.content) : [],
+    };
+    this.onStarted?.(started);
+    return started;
   }
 
   onMessageEnd(message: unknown, sessionManager: SessionManager): void {
@@ -166,7 +196,7 @@ export class TimelineRuntime {
       if (!target) return;
       const event = this.toTimelineEvent(target, pending.marker, pending.correlation, sessionManager);
       if (!event) return;
-      this.publish(event);
+      this.publish(event, pending.correlation);
     });
   }
 
@@ -201,10 +231,10 @@ export class TimelineRuntime {
     return recovered;
   }
 
-  private publish(event: TimelineEvent): void {
+  private publish(event: TimelineEvent, correlation: Correlation): void {
     if (this.published.some((existing) => existing.event_id === event.event_id)) return;
     this.published.push(event);
-    this.onPublished?.(event);
+    this.onPublished?.(event, { ...correlation });
   }
 
   private correlationFor(message: unknown): Correlation {
@@ -262,7 +292,8 @@ export class TimelineRuntime {
     if (!message) return null;
     const sessionId = sessionManager.getSessionId();
     const timestamp = this.timestamp(entry.timestamp, message.timestamp);
-    const base = { event_id: marker.event_id, session_id: sessionId, history_generation: sessionId, timestamp };
+    const historyGeneration = this.getHistoryGenerationValue?.() ?? sessionId;
+    const base = { event_id: marker.event_id, session_id: sessionId, history_generation: historyGeneration, timestamp };
     const groupId = marker.group_id;
     if (message.role === "user") {
       const senderRef = marker.kind === "user" && marker.sender_ref ? { sender_ref: marker.sender_ref } : {};

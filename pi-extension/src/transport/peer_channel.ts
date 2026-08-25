@@ -1,9 +1,21 @@
 import type { ClientMessage, ServerMessage } from "../protocol/types.js";
+import {
+  decodeClientFrameV2,
+  encodeServerFrameV2,
+  type ClientFrame,
+  type ServerFrame,
+} from "../protocol/v2/index.js";
 import type { RelayClient } from "./relay_client.js";
 
 /** Sink for ServerMessage outbound to the remote app. */
 export interface PeerChannel {
   send(msg: ServerMessage): void;
+}
+
+export interface V2Channel {
+  getPeerId(): string;
+  sendV2(msg: ServerFrame): void;
+  detach(): void;
 }
 
 /**
@@ -35,6 +47,72 @@ interface OuterEnvelope {
  * `myRoomId` is the *local* Pi's room id — sent on every outbound envelope
  * so the app can correlate which Pi sent it (multi-pi support, plano 17).
  */
+export class V2PeerChannel implements V2Channel {
+  private readonly unsubscribe: () => void;
+
+  constructor(
+    private readonly relay: RelayClient,
+    private readonly remotePeerId: string,
+    private readonly onMessage: (msg: ClientFrame) => void,
+  ) {
+    const listener = (line: string) => this.onLine(line);
+    relay.on("message", listener);
+    this.unsubscribe = () => relay.off("message", listener);
+  }
+
+  getPeerId(): string {
+    return this.remotePeerId;
+  }
+
+  sendV2(msg: ServerFrame): void {
+    const ct = Buffer.from(encodeServerFrameV2(msg)).toString("base64");
+    try {
+      this.relay.send(JSON.stringify({ peer: this.remotePeerId, ct } satisfies OuterEnvelope));
+    } catch {
+      // Reconnect plus authoritative history recovers dropped formal events.
+    }
+  }
+
+  detach(): void {
+    this.unsubscribe();
+  }
+
+  private onLine(line: string): void {
+    let outer: OuterEnvelope;
+    try {
+      outer = JSON.parse(line) as OuterEnvelope;
+    } catch {
+      return;
+    }
+    if (outer.peer !== this.remotePeerId || !outer.ct) return;
+    try {
+      const plaintext = Buffer.from(outer.ct, "base64").toString("utf8");
+      this.onMessage(decodeClientFrameV2(plaintext));
+    } catch {
+      // Strict v2 boundary. A parseable legacy/invalid request receives an upgrade
+      // error; malformed bytes without an id cannot be safely targeted.
+      try {
+        const raw = JSON.parse(Buffer.from(outer.ct, "base64").toString("utf8")) as Record<string, unknown>;
+        const id = typeof raw.id === "string" ? raw.id : undefined;
+        const channelId = typeof raw.channel_id === "string" ? raw.channel_id : undefined;
+        if (id) {
+          this.sendV2({
+            protocol_version: 2,
+            type: "protocol_error",
+            ...(channelId ? { target_channel_id: channelId } : {}),
+            in_reply_to: id,
+            code: "protocol_upgrade_required",
+            message: "Protocol v2 is required",
+          });
+        }
+      } catch {
+        // Ignore malformed outer payloads.
+      }
+    }
+  }
+}
+
+/** @deprecated Protocol v1 test helper. Production uses V2PeerChannel. */
 export class PlainPeerChannel implements PeerChannel {
   private readonly _unsubscribe: () => void;
 

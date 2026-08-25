@@ -39,7 +39,13 @@ function markerEntries(session: SessionManager): Array<Record<string, unknown>> 
 describe("TimelineRuntime", () => {
   test("binds ALS correlation to the message object and publishes a committed user event after persistence", async () => {
     const session = SessionManager.inMemory(process.cwd());
-    const runtime = new TimelineRuntime();
+    const started: unknown[] = [];
+    const committed: unknown[] = [];
+    const runtime = new TimelineRuntime({
+      getHistoryGeneration: () => "generation-1",
+      onStarted: (value) => started.push(value),
+      onPublished: (event, correlation) => committed.push({ event, correlation }),
+    });
     runtime.attach(session);
     runtime.onAgentStart();
     const message = userMessage("hello");
@@ -61,6 +67,15 @@ describe("TimelineRuntime", () => {
       sender_ref: "owner-1",
     });
     expect(marker).not.toHaveProperty("client_request_id");
+    expect(started).toEqual([
+      expect.objectContaining({
+        eventId: marker.event_id,
+        groupId: marker.group_id,
+        role: "user",
+        correlation,
+        blocks: [{ type: "text", text: "hello" }],
+      }),
+    ]);
 
     runtime.onMessageEnd(message, session);
     expect(runtime.getPublishedEvents()).toHaveLength(0);
@@ -76,7 +91,9 @@ describe("TimelineRuntime", () => {
       delivery: "normal",
       sender_ref: "owner-1",
       status: "committed",
+      history_generation: "generation-1",
     });
+    expect(committed).toEqual([{ event, correlation }]);
   });
 
   test("marks steer as unknown and preserves the same run group", async () => {

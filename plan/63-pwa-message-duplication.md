@@ -6,7 +6,7 @@
 - 阶段 0B（SDK 输入关联与 run epoch 契约验证）：**已完成（2026-08-25）**
 - 阶段 1（协议、类型与入口边界）：**已完成（2026-08-25）**
 - 阶段 2（Extension 最小永久提交链路）：**已完成（2026-08-25）**
-- 阶段 3（v2 逻辑 channel 与权威历史）：下一步
+- 阶段 3（v2 逻辑 channel 与权威历史）：**已完成（2026-08-25，Extension 侧）**
 - Protocol v2 schema、codec、fixture：已冻结；Extension 时间线生产提交链路已接入，v2 wire 尚未切换
 - Relay：无代码改动
 
@@ -454,8 +454,8 @@ PWA 没收到 `user_message_started` 或正式事件时，无法区分未送达�
 - 在 `message_start` 写入最小 marker，在 post-`message_end` macrotask 验证当前 branch 落盘后才发布正式事件。
 - 严格扫描当前 branch，恢复 marker 与 legacy entry，忽略孤儿。
 - 维护 `(owner peer/senderRef, channel_id)` 逻辑 channel、generation、定向响应和有界幂等状态。
-- 实现 snapshot 分页、512 KiB inner chunk、按需 fragment、内存边界与 reset。
-- 映射 assistant、thinking、工具、compaction、branch summary、可序列化 custom 与 provider error；partial 仅实时。
+- [已完成] 实现 snapshot 分页、512 KiB inner chunk、按需 fragment、内存边界与 reset。
+- [已完成] 映射 assistant、thinking、工具、compaction、branch summary、可序列化 custom 与 provider error；partial 仅实时。
 
 ### site
 
@@ -551,9 +551,17 @@ git diff --check
 
 已实现最小 marker、ALS、WeakMap、post-`message_end` 落盘验证、严格恢复和正式事件 buffer；旧 v1 wire 保持不变，下一阶段切换 v2 逻辑 channel 与权威历史。
 
-### 阶段 3：v2 逻辑 channel 与权威历史（下一步）
+### 阶段 3：v2 逻辑 channel 与权威历史（已完成，Extension 侧）
 
-实现 hello/ready、Owner/channel 逻辑路由、定向响应、generation、幂等、snapshot 分页、chunk、fragment 与 reset；Relay 只做透明转发验证。
+1. `V2PeerChannel` 在 Relay opaque outer envelope 内建立 strict v2 codec 边界；未版本、v1、错误方向、schema/size 不合法的 payload 不进入业务路由，若可解析 request id 则返回 `protocol_upgrade_required`。
+2. `TimelineV2Service` 维护认证 Owner 下的多 `channel_id`、hello/ready、direct response、Owner broadcast、generation reset、`received/accepted/committed/unknown_delivery` 和 observed 清理；幂等键为 generation + senderRef + client request ID，payload fingerprint 覆盖 text/images/streaming_behavior。
+3. `TimelineHistoryPager` 从当前 SessionManager branch 建立不透明进程内 cursor，冻结 snapshot head，按最多 5 个原子 group 分页；普通 append 保持快照稳定，branch/session/generation 变化返回 reset；空 session 也返回可消费的 eos chunk。
+4. 历史 chunk 限制为 512 KiB，window 限制为 32 MiB，事件超 frame 时按完整 JSON UTF-8 以 50 KiB decoded fragment 传输；实时正式事件复用 fragment，assistant/thinking/tool running/delta 只走严格 `timeline_partial`。
+5. `TimelineRuntime` 的 generation、started 和 committed callback 已接入生产入口；可靠普通 PWA 只在真实 `message_start` 后收到 started/accepted，在 post-`message_end` 落盘确认后收到 committed 和正式事件。Relay 未修改。
+
+阶段 3 新增 v2 契约测试通过；旧 `extension.test.ts` 中仍有一组历史 v1 pair/route/assertion，需要在阶段 4/5 的客户端切换中迁移为 v2 断言；生产入口不保留 v1 fallback。
+
+阶段 4 继续负责 Site pending/history/Dexie/UI；阶段 5 再完成跨项目 v2 联调。
 
 ### 阶段 4：Site pending、时间线与 IndexedDB
 

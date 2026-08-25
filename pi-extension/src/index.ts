@@ -69,8 +69,17 @@ import type {
   WireImage,
   QueuedMessageItem,
 } from "./protocol/types.js";
+import {
+  decodeClientFrameV2,
+  encodeServerFrameV2,
+  parseTimelinePartialV2,
+  type ClientFrame,
+  type ServerFrame,
+  type TimelinePartial,
+} from "./protocol/v2/index.js";
 import { RelayClient, RoomAlreadyOpenError } from "./transport/relay_client.js";
-import { PlainPeerChannel } from "./transport/peer_channel.js";
+import { PlainPeerChannel, V2PeerChannel } from "./transport/peer_channel.js";
+import { TimelineV2Service } from "./timeline/v2_service.js";
 import {
   createExtensionUiBridge,
   type ExtensionUiBridge,
@@ -173,6 +182,8 @@ let _relayUrl: string | null = null;  // URL used by current _relay connection
  *     `/remote-pi status` output both derive from this.
  */
 const _activePeers = new Map<string, PlainPeerChannel>();
+type V2PeerBinding = { channel: V2PeerChannel; service: TimelineV2Service };
+const _v2ActivePeers = new Map<string, V2PeerBinding>();
 let _peerShort = "";  // shortid of the most recently attached peer (UX hint only)
 
 const REMOTE_PI_RECEIVED_IMAGE_TYPE = "remote-pi:received-image";
@@ -852,7 +863,119 @@ type BufferMsg = {
 let _messageBuffer: BufferMsg[] = [];
 let _timelineRuntime: TimelineRuntime | null = null;
 let _timelineSessionManager: SessionManager | null = null;
+let _timelineGeneration = randomUUID();
+let _currentSessionManager: SessionManager | null = null;
 const _timelinePublishedEvents: unknown[] = [];
+
+function _sendV2Frames(peerId: string, frames: readonly ServerFrame[]): void {
+  const binding = _v2ActivePeers.get(peerId);
+  if (!binding) return;
+  for (const frame of frames) binding.channel.sendV2(frame);
+}
+
+function _broadcastV2(frameFactory: (service: TimelineV2Service) => readonly ServerFrame[]): void {
+  for (const binding of _v2ActivePeers.values()) {
+    for (const frame of frameFactory(binding.service)) binding.channel.sendV2(frame);
+  }
+}
+
+function _handleTimelineStarted(started: import("./timeline/runtime.js").TimelineStarted): void {
+  const senderRef = started.correlation.senderRef;
+  if (!senderRef) return;
+  const binding = _v2ActivePeers.get(senderRef);
+  if (!binding) return;
+  _sendV2Frames(senderRef, binding.service.started(started));
+}
+
+function _handleTimelinePartial(raw: unknown): void {
+  try {
+    const partial = parseTimelinePartialV2(raw);
+    _broadcastV2((service) => {
+      const frame = service.partial(partial);
+      return frame ? [frame] : [];
+    });
+  } catch {
+    // Partial output is best-effort and never becomes formal history.
+  }
+}
+
+function _handleTimelinePublished(event: import("./protocol/v2/index.js").TimelineEvent, correlation: Correlation): void {
+  _broadcastV2((service) => service.publishFrames(event));
+  if (correlation.clientRequestId && correlation.senderRef) {
+    _sendV2Frames(correlation.senderRef, _v2ActivePeers.get(correlation.senderRef)?.service.commit(
+      correlation.clientRequestId,
+      event.event_id,
+      "group_id" in event ? event.group_id : undefined,
+    ) ?? []);
+  }
+}
+
+function _rotateTimelineGeneration(reason: "generation_changed" | "branch_changed" | "session_replaced"): void {
+  _timelineGeneration = randomUUID();
+  for (const binding of _v2ActivePeers.values()) {
+    binding.service.refreshGeneration(_timelineGeneration);
+    for (const frame of binding.service.reset(reason)) binding.channel.sendV2(frame);
+  }
+}
+
+function _ensureV2Service(senderRef: string): TimelineV2Service | null {
+  const sessionManager = _currentSessionManager;
+  if (!sessionManager) return null;
+  const runtime = _ensureTimelineRuntime(sessionManager);
+  const current = _v2ActivePeers.get(senderRef);
+  if (current) return current.service;
+  const service = new TimelineV2Service({
+    sessionManager,
+    senderRef,
+    generation: _timelineGeneration,
+    runtime,
+    onUserMessage: (frame, correlation) => {
+      const previousTurnId = _currentTurnId;
+      const steering = frame.streaming_behavior === "steer";
+      const seededTurnId = !steering || _currentTurnId === null;
+      if (seededTurnId) _currentTurnId = frame.id;
+      const content = frame.images && frame.images.length > 0
+        ? [...frame.images.map((image) => ({ type: "image" as const, data: image.data, mimeType: image.mime })), { type: "text" as const, text: frame.text }]
+        : frame.text;
+      const wake = _wakeAgent(content, `v2 user_message id=${frame.client_request_id}`, "steer", correlation);
+      if (!wake.ok) {
+        if (seededTurnId) _currentTurnId = previousTurnId;
+        return false;
+      }
+      if (steering) _trackPendingSteer(frame.client_request_id, frame.text);
+      return true;
+    },
+    onCancel: (targetId) => _abortCurrentTurn(_lastEventCtx ?? _lastCtx ?? undefined),
+  });
+  return service;
+}
+
+function _routeV2ClientFrameFrom(senderRef: string, frame: ClientFrame): void {
+  let binding = _v2ActivePeers.get(senderRef);
+  if (!binding) {
+    const service = _ensureV2Service(senderRef);
+    const relay = _relay;
+    if (!service || !relay) return;
+    const channel = new V2PeerChannel(relay, senderRef, (incoming) => _routeV2ClientFrameFrom(senderRef, incoming));
+    binding = { channel, service };
+    _v2ActivePeers.set(senderRef, binding);
+  }
+  const frames = binding.service.handle(frame);
+  for (const response of frames) binding.channel.sendV2(response);
+}
+
+function _attachV2Peer(relay: RelayClient, appPeerId: string): void {
+  _detachPeerChannel(appPeerId);
+  const channel = new V2PeerChannel(relay, appPeerId, (frame) => _routeV2ClientFrameFrom(appPeerId, frame));
+  const service = _ensureV2Service(appPeerId);
+  if (!service) {
+    channel.detach();
+    return;
+  }
+  _v2ActivePeers.set(appPeerId, { channel, service });
+  _peerShort = appPeerId.slice(0, 8);
+  _refreshFooter();
+}
 
 type PendingSteer = { id: string; text: string };
 let _pendingSteers: PendingSteer[] = [];
@@ -864,10 +987,16 @@ let _queuedItems: PwaQueuedItem[] = [];
 type MeshEnvelope = { id: string; from: string; re: string | null; body: unknown };
 
 function _ensureTimelineRuntime(sessionManager: SessionManager): TimelineRuntime {
+  _currentSessionManager = sessionManager;
   if (_timelineRuntime === null || _timelineSessionManager !== sessionManager) {
     _timelinePublishedEvents.length = 0;
     _timelineRuntime = new TimelineRuntime({
-      onPublished: (event) => _timelinePublishedEvents.push(event),
+      getHistoryGeneration: () => _timelineGeneration,
+      onStarted: _handleTimelineStarted,
+      onPublished: (event, correlation) => {
+        _timelinePublishedEvents.push(event);
+        _handleTimelinePublished(event, correlation);
+      },
     });
     _timelineRuntime.attach(sessionManager);
     _timelineSessionManager = sessionManager;
@@ -1207,17 +1336,17 @@ export function _hasPendingReconnect(): boolean {
  */
 export function _getState(): "idle" | "started" | "paired" {
   if (_state === "idle") return "idle";
-  return _activePeers.size > 0 ? "paired" : "started";
+  return _anyPeerActive() ? "paired" : "started";
 }
 
 /** Test-only: number of owners currently attached via PlainPeerChannel. */
 export function _getActivePeerCountForTest(): number {
-  return _activePeers.size;
+  return Math.max(_activePeers.size, _v2ActivePeers.size);
 }
 
 /** Test-only: true if a specific peer (base64 std) has an attached channel. */
 export function _hasActivePeerForTest(appPeerIdStd: string): boolean {
-  return _activePeers.has(appPeerIdStd);
+  return _activePeers.has(appPeerIdStd) || _v2ActivePeers.has(appPeerIdStd);
 }
 
 
@@ -1242,7 +1371,7 @@ function _broadcastToActive(msg: ServerMessage): void {
 
 /** Returns true when at least one owner is attached. Derived `paired` UX. */
 function _anyPeerActive(): boolean {
-  return _activePeers.size > 0;
+  return _activePeers.size > 0 || _v2ActivePeers.size > 0;
 }
 
 /**
@@ -1259,12 +1388,15 @@ function _attachPeerChannel(appPeerId: string, channel: PlainPeerChannel): void 
  *  `_onPeerDisconnect`, `_cmdRevoke`, and the SelfRevoke callback. */
 function _detachPeerChannel(appPeerId: string): void {
   const ch = _activePeers.get(appPeerId);
-  if (!ch) return;
-  try { ch.detach(); } catch { /* best-effort */ }
+  const v2 = _v2ActivePeers.get(appPeerId);
+  if (!ch && !v2) return;
+  try { ch?.detach(); } catch { /* best-effort */ }
+  try { v2?.channel.detach(); } catch { /* best-effort */ }
   _activePeers.delete(appPeerId);
+  _v2ActivePeers.delete(appPeerId);
   if (_peerShort === appPeerId.slice(0, 8)) {
     // Pick a different remaining peer for the UX hint, or clear when none.
-    const next = _activePeers.keys().next().value;
+    const next = _activePeers.keys().next().value ?? _v2ActivePeers.keys().next().value;
     _peerShort = next ? next.slice(0, 8) : "";
   }
 }
@@ -1421,6 +1553,15 @@ function _goIdle(byeReason?: import("./protocol/types.js").ByeReason): void {
   // "offline" immediately instead of waiting ~50s for a ping miss.
   if (byeReason && _state !== "idle" && _anyPeerActive()) {
     _broadcastToActive({ type: "bye", reason: byeReason });
+    for (const binding of _v2ActivePeers.values()) {
+      binding.channel.sendV2({
+        protocol_version: 2,
+        type: "bye",
+        session_id: _currentSessionManager?.getSessionId() ?? "unknown",
+        history_generation: binding.service.generation,
+        reason: byeReason,
+      });
+    }
   }
 
   // Cancel any pending reconnect attempt. Critical: /remote-pi stop must
@@ -1440,7 +1581,11 @@ function _goIdle(byeReason?: import("./protocol/types.js").ByeReason): void {
   for (const ch of _activePeers.values()) {
     try { ch.detach(); } catch { /* best-effort */ }
   }
+  for (const binding of _v2ActivePeers.values()) {
+    try { binding.channel.detach(); } catch { /* best-effort */ }
+  }
   _activePeers.clear();
+  _v2ActivePeers.clear();
   _peerShort = "";
   _currentTurnId = null;
   _pendingReceivedImagePreviews.length = 0;
@@ -1499,8 +1644,12 @@ function _onRelayClose(closedRelay: RelayClient): void {
   for (const ch of _activePeers.values()) {
     try { ch.detach(); } catch { /* best-effort */ }
   }
+  for (const binding of _v2ActivePeers.values()) {
+    try { binding.channel.detach(); } catch { /* best-effort */ }
+  }
   if (_queuedItems.length > 0) _resetQueuedItems({ broadcast: true });
   _activePeers.clear();
+  _v2ActivePeers.clear();
   _peerShort = "";
   _currentTurnId = null;
   _pendingSteers = [];
@@ -1780,9 +1929,9 @@ async function _renameAgent(newName: string): Promise<void> {
  */
 export function _onPeerDisconnect(appPeerId?: string): void {
   if (_state === "idle") return;
-  const target = appPeerId ?? [..._activePeers.keys()].pop();
+  const target = appPeerId ?? [...new Set([..._activePeers.keys(), ..._v2ActivePeers.keys()])].pop();
   if (!target) return;
-  if (!_activePeers.has(target)) return;
+  if (!_activePeers.has(target) && !_v2ActivePeers.has(target)) return;
 
   _detachPeerChannel(target);
   if (_anyPeerActive()) {
@@ -1878,53 +2027,56 @@ function _installAutoListener(relay: RelayClient): () => void {
 
     if (!hasListenerAuthority()) return;
     // Already-attached owners: their PlainPeerChannel handles routing.
-    if (_activePeers.has(outer.peer)) return;
+    if (_activePeers.has(outer.peer) || _v2ActivePeers.has(outer.peer)) return;
 
-    // Decode inner envelope (base64 JSON)
-    let inner: ClientMessage;
+    let inner: ClientFrame;
     try {
       const plaintext = Buffer.from(outer.ct, "base64").toString("utf8");
-      const parsed = JSON.parse(plaintext) as unknown;
-      if (
-        !parsed ||
-        typeof parsed !== "object" ||
-        typeof (parsed as Record<string, unknown>).type !== "string"
-      ) return;
-      inner = parsed as ClientMessage;
-    } catch { return; }
+      inner = decodeClientFrameV2(plaintext);
+    } catch {
+      try {
+        const raw = JSON.parse(Buffer.from(outer.ct, "base64").toString("utf8")) as Record<string, unknown>;
+        const id = typeof raw.id === "string" ? raw.id : undefined;
+        if (id) {
+          const error: ServerFrame = {
+            protocol_version: 2,
+            type: "protocol_error",
+            ...(typeof raw.channel_id === "string" ? { target_channel_id: raw.channel_id } : {}),
+            in_reply_to: id,
+            code: "protocol_upgrade_required",
+            message: "Protocol v2 is required",
+          };
+          const errCt = Buffer.from(JSON.stringify(error)).toString("base64");
+          relay.send(JSON.stringify({ peer: outer.peer, ct: errCt }));
+        }
+      } catch {
+        // Malformed frames without a parseable id are not targetable.
+      }
+      return;
+    }
 
     const appPeerId = outer.peer;
 
     if (inner.type === "pair_request") {
-      await _handlePairRequest(relay, appPeerId, inner, hasListenerAuthority);
+      await _handlePairRequestV2(relay, appPeerId, inner, hasListenerAuthority);
       return;
     }
 
-    // Reconnect path: known peer (peers.json) without an active channel
-    // sends a non-pair message → attach + route through the new channel.
-    // See pairing.md §Reconexão.
     const known = await _findKnownPeer(appPeerId);
     if (!hasListenerAuthority()) return;
     if (known) {
-      const channel = _attachOwner(relay, appPeerId, known.name);
-      // The PlainPeerChannel listener for this owner won't have seen the
-      // line that triggered the attach (we already consumed it); route
-      // it explicitly via the new channel so the sender gets a reply.
-      // Use _liveCtx (session_start-fresh) — not bare _lastCtx (#55).
-      _routeClientMessageFrom(channel, inner, (_liveCtx() as typeof _noopCtx) ?? _noopCtx);
+      _attachV2Peer(relay, appPeerId);
+      _routeV2ClientFrameFrom(appPeerId, inner);
       return;
     }
 
-    // Unknown peer with non-pair_request inner — signal so the app can react
-    // (peer was revoked / never paired). pair_request from unknown peer was
-    // already handled above as a legitimate path. We never log inner contents,
-    // only inner.type.
-    const errReply: ServerMessage = {
-      type: "error",
-      code: "unknown_peer",
+    const error: ServerFrame = {
+      protocol_version: 2,
+      type: "protocol_error",
+      code: "invalid_channel",
       message: "Peer not paired — re-scan QR",
     };
-    const errCt = Buffer.from(JSON.stringify(errReply)).toString("base64");
+    const errCt = Buffer.from(JSON.stringify(error)).toString("base64");
     relay.send(JSON.stringify({ peer: appPeerId, ct: errCt }));
   };
 
@@ -1955,6 +2107,44 @@ const _HARNESS = {
   version: _readExtensionVersion(),
 } as const;
 const _HOSTNAME = hostname();
+
+async function _handlePairRequestV2(
+  relay: RelayClient,
+  appPeerId: string,
+  inner: Extract<ClientFrame, { type: "pair_request" }>,
+  hasListenerAuthority: () => boolean,
+): Promise<void> {
+  const sendInner = (msg: ServerFrame) => {
+    const ct = Buffer.from(encodeServerFrameV2(msg)).toString("base64");
+    relay.send(JSON.stringify({ peer: appPeerId, ct }));
+  };
+  const status = qrSession.consumeToken(inner.token);
+  if (status !== "ok") {
+    const code = status === "expired" ? "token_expired" : status === "consumed" ? "token_consumed" : "token_unknown";
+    sendInner({ protocol_version: 2, type: "pair_error", in_reply_to: inner.id, code, message: "Pairing token is invalid or expired" });
+    return;
+  }
+  try {
+    await addPeer({ name: inner.device_name, remote_epk: appPeerId, paired_at: new Date().toISOString() });
+  } catch {
+    sendInner({ protocol_version: 2, type: "pair_error", in_reply_to: inner.id, code: "internal_error", message: "Failed to persist peer" });
+    return;
+  }
+  if (!hasListenerAuthority()) return;
+  const cwd = _lastCtx && "cwd" in _lastCtx ? (_lastCtx as ExtensionCommandContext).cwd : process.cwd();
+  const sessionName = _displayName(cwd);
+  _attachV2Peer(relay, appPeerId);
+  sendInner({
+    protocol_version: 2,
+    type: "pair_ok",
+    in_reply_to: inner.id,
+    session_name: sessionName,
+    session_started_at: _sessionStartedAt ?? Date.now(),
+    room_id: _myRoomId ?? roomIdFor(cwd, sessionName),
+    harness: _HARNESS,
+    hostname: _HOSTNAME,
+  });
+}
 
 async function _handlePairRequest(
   relay: RelayClient,
@@ -2212,10 +2402,20 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
 
   pi.on("message_update", (event) => {
     if (!_anyPeerActive() || !_currentTurnId) return;
-    const ae = event.assistantMessageEvent;
-    if (ae.type === "text_delta") {
-      _broadcastToActive({ type: "agent_chunk", in_reply_to: _currentTurnId, delta: ae.delta });
-    }
+    const ae = event.assistantMessageEvent as { type?: string; delta?: string };
+    if (ae.type !== "text_delta" && ae.type !== "thinking_delta") return;
+    const kind = ae.type === "thinking_delta" ? "thinking" : "assistant";
+    _handleTimelinePartial({
+      protocol_version: 2,
+      type: "timeline_partial",
+      session_id: _currentSessionManager?.getSessionId() ?? "unknown",
+      history_generation: _timelineGeneration,
+      group_id: _timelineRuntime?.currentGroupId ?? _currentTurnId,
+      partial_id: `${_currentTurnId}:${kind}`,
+      kind,
+      status: "delta",
+      delta: typeof ae.delta === "string" ? ae.delta : "",
+    });
   });
 
   // Notify every connected owner that a tool is about to run (visibility
@@ -2224,25 +2424,36 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // they render a "Tool running… done" timeline in each paired app.
   pi.on("tool_execution_start", (event) => {
     if (!_anyPeerActive()) return;
-    _broadcastToActive({
-      type: "tool_request",
+    _handleTimelinePartial({
+      protocol_version: 2,
+      type: "timeline_partial",
+      session_id: _currentSessionManager?.getSessionId() ?? "unknown",
+      history_generation: _timelineGeneration,
+      group_id: _timelineRuntime?.currentGroupId ?? _currentTurnId ?? randomUUID(),
+      partial_id: event.toolCallId,
+      kind: "tool",
+      status: "running",
       tool_call_id: event.toolCallId,
       tool: event.toolName,
-      args: _enrichToolArgs(event.toolName, event.args),
+      args: _protocolJsonValue(_enrichToolArgs(event.toolName, event.args)),
     });
   });
 
   pi.on("tool_execution_end", (event) => {
     if (!_anyPeerActive()) return;
-    // Stringify like the history mapper (same helper) so the live text == what
-    // a session_sync replays for this tool. Raw `String(event.result)` turned
-    // a content-array/object into "[object Object]" and the success branch sent
-    // the object unstringified — both diverging from re-sync.
-    const text = _stringifyToolResult(event.result);
-    const msg: ServerMessage = event.isError
-      ? { type: "tool_result", tool_call_id: event.toolCallId, error: text }
-      : { type: "tool_result", tool_call_id: event.toolCallId, result: text };
-    _broadcastToActive(msg);
+    _handleTimelinePartial({
+      protocol_version: 2,
+      type: "timeline_partial",
+      session_id: _currentSessionManager?.getSessionId() ?? "unknown",
+      history_generation: _timelineGeneration,
+      group_id: _timelineRuntime?.currentGroupId ?? _currentTurnId ?? randomUUID(),
+      partial_id: event.toolCallId,
+      kind: "tool",
+      status: "delta",
+      tool_call_id: event.toolCallId,
+      tool: event.toolName,
+      delta: _stringifyToolResult(event.result),
+    });
   });
 
   // Cumulative session buffer fed via `message_end`, which fires once per
@@ -2376,6 +2587,10 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   pi.on("session_start", (_event, ctx) => {
     _lastEventCtx = ctx;
     const sessionManager = (ctx as { sessionManager?: unknown } | undefined)?.sessionManager;
+    if (sessionManager && typeof (sessionManager as { getSessionId?: unknown }).getSessionId === "function") {
+      _currentSessionManager = sessionManager as SessionManager;
+      _rotateTimelineGeneration("session_replaced");
+    }
     if (sessionManager && typeof (sessionManager as { getBranch?: unknown }).getBranch === "function") {
       const timeline = _ensureTimelineRuntime(sessionManager as SessionManager);
       timeline.resetSession(sessionManager as SessionManager);
@@ -2447,6 +2662,10 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         void _cmdRoot(initCtx);
       }
     }
+  });
+
+  pi.on("session_tree", () => {
+    _rotateTimelineGeneration("branch_changed");
   });
 
   // Tear down THIS instance's live handles when the SDK replaces the session
@@ -4930,6 +5149,18 @@ function _stringifyContent(content: unknown): string {
  * (same as `_stringifyContent`); any other object → readable JSON; other
  * primitives → `String()`; null/undefined → "". Never "[object Object]".
  */
+function _protocolJsonValue(value: unknown): import("./protocol/v2/index.js").JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (Array.isArray(value)) return value.map(_protocolJsonValue);
+  if (typeof value === "object") {
+    const output: Record<string, import("./protocol/v2/index.js").JsonValue> = {};
+    for (const [key, item] of Object.entries(value)) output[key] = _protocolJsonValue(item);
+    return output;
+  }
+  return null;
+}
+
 function _stringifyToolResult(value: unknown): string {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) return _stringifyContent(value);

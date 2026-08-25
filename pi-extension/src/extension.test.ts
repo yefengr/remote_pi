@@ -13,6 +13,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getCapabilities, setCapabilities } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { decodeServerFrameV2, type ClientFrame } from "./protocol/v2/index.js";
 
 const _convertToPngMock = vi.hoisted(() => vi.fn(async () => null));
 
@@ -293,6 +294,16 @@ function captureHandler(commandName: string): CmdHandler {
 function makeInnerLine(peer: string, inner: object): string {
   const ct = Buffer.from(JSON.stringify(inner)).toString("base64");
   return JSON.stringify({ peer, ct });
+}
+
+function makeV2Line(peer: string, frame: ClientFrame): string {
+  const ct = Buffer.from(JSON.stringify(frame)).toString("base64");
+  return JSON.stringify({ peer, ct });
+}
+
+function decodeV2Sent(raw: string): { peer: string; frame: ReturnType<typeof decodeServerFrameV2> } {
+  const outer = JSON.parse(raw) as { peer: string; ct: string };
+  return { peer: outer.peer, frame: decodeServerFrameV2(Buffer.from(outer.ct, "base64").toString("utf8")) };
 }
 
 function decodeSentCt(raw: string): { peer: string; inner: { type: string; [k: string]: unknown } } {
@@ -5968,5 +5979,69 @@ describe("model meta", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  test("v2 production path performs pair, hello, received, started, and committed history event", async () => {
+    _knownPeers.length = 0;
+    _addedPeers.length = 0;
+    _tokenStatus = "ok";
+    const sessionManager = (await import("@earendil-works/pi-coding-agent")).SessionManager.inMemory(process.cwd());
+    const harness = captureEventHarness();
+    const message = { role: "user", content: "hello v2", timestamp: 1 };
+    const pi = {
+      sendUserMessage: vi.fn(() => {
+        harness.handler("agent_start")({ type: "agent_start" });
+        harness.handler("message_start")({ type: "message_start", message }, { sessionManager } as never);
+      }),
+      sendMessage: vi.fn(),
+    };
+    _setPiForTest(pi as never);
+    harness.handler("session_start")({ type: "session_start", reason: "startup" }, {
+      sessionManager,
+      ui: { notify: vi.fn() },
+      abort: vi.fn(),
+      compact: vi.fn(),
+    } as never);
+    await _connectForTest(makeMockCtx());
+    const peer = "v2-owner";
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
+      type: "pair_request",
+      id: "pair-v2",
+      token: "test-token",
+      device_name: "V2 Phone",
+    }));
+    await vi.waitFor(() => expect(_hasActivePeerForTest(peer)).toBe(true), { timeout: 2000 });
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
+      type: "session_hello",
+      id: "hello-v2",
+      channel_id: "channel-v2",
+    }));
+    const generation = [...relayRef.current!.send.mock.calls]
+      .map((call) => decodeV2Sent(call[0] as string).frame)
+      .find((frame) => frame.type === "session_ready");
+    expect(generation).toMatchObject({ type: "session_ready", target_channel_id: "channel-v2" });
+    const historyGeneration = (generation as Extract<typeof generation, { type: "session_ready" }>).history_generation;
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
+      type: "user_message",
+      id: "wire-v2",
+      channel_id: "channel-v2",
+      history_generation: historyGeneration,
+      client_request_id: "request-v2",
+      text: "hello v2",
+    }));
+    await vi.waitFor(() => expect(pi.sendUserMessage).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    harness.handler("message_end")({ type: "message_end", message }, { sessionManager } as never);
+    sessionManager.appendMessage(message as never);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const frames = relayRef.current!.send.mock.calls.map((call) => decodeV2Sent(call[0] as string).frame);
+    expect(frames).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "user_message_status", status: "received", target_channel_id: "channel-v2" }),
+      expect.objectContaining({ type: "user_message_started", target_channel_id: "channel-v2" }),
+      expect.objectContaining({ type: "timeline_event", event: expect.objectContaining({ kind: "user", status: "committed" }) }),
+      expect.objectContaining({ type: "user_message_status", status: "committed", target_channel_id: "channel-v2" }),
+    ]));
   });
 });
