@@ -128,6 +128,14 @@ export class TimelineRuntime {
     return this.messageCorrelations.get(message);
   }
 
+  publishSessionEntry(entry: SessionEntry, sessionManager: SessionManager): TimelineEvent | null {
+    this.attach(sessionManager);
+    const event = this.toSystemEvent(entry, sessionManager);
+    if (!event) return null;
+    this.publish(event, { origin: "unknown", delivery: "unknown" });
+    return event;
+  }
+
   runWithCorrelation<T>(correlation: Correlation, callback: () => T): T {
     return this.correlations.run(correlation, callback);
   }
@@ -228,6 +236,10 @@ export class TimelineRuntime {
       const event = this.toTimelineEvent(entry, marker, this.correlationFromMarker(marker), sessionManager);
       if (event) recovered.push(event);
     }
+    for (const entry of branch) {
+      const event = this.toSystemEvent(entry, sessionManager);
+      if (event) recovered.push(event);
+    }
     return recovered;
   }
 
@@ -304,9 +316,17 @@ export class TimelineRuntime {
       });
     }
     if (message.role === "assistant") {
+      if (message.stopReason === "error") {
+        return TimelineEventSchema.parse({
+          ...base,
+          group_id: groupId,
+          kind: "provider_error",
+          message: this.nonEmpty(message.errorMessage ?? this.textFromContent(message.content) ?? "Provider error"),
+        });
+      }
       return TimelineEventSchema.parse({
         ...base, group_id: groupId, kind: "assistant", blocks: this.assistantBlocks(message.content),
-        status: message.stopReason === "error" ? "interrupted" : "complete",
+        status: "complete",
       });
     }
     const result = this.jsonValue(message.content);
@@ -322,6 +342,54 @@ export class TimelineRuntime {
       tool: message.toolName ?? "unknown", args: this.jsonValue(message.args ?? {}), truncated: false,
       status: "complete", result,
     });
+  }
+
+  private toSystemEvent(entry: SessionEntry, sessionManager: SessionManager): TimelineEvent | null {
+    const base = {
+      event_id: entry.id,
+      session_id: sessionManager.getSessionId(),
+      history_generation: this.getHistoryGenerationValue?.() ?? sessionManager.getSessionId(),
+      timestamp: this.timestamp(entry.timestamp),
+      truncated: false,
+    };
+    let candidate: unknown;
+    if (entry.type === "compaction") {
+      candidate = {
+        ...base,
+        kind: "compaction",
+        payload: {
+          summary: entry.summary,
+          first_kept_entry_id: entry.firstKeptEntryId,
+          tokens_before: entry.tokensBefore,
+          from_hook: entry.fromHook ?? false,
+          ...(entry.details === undefined ? {} : { details: this.jsonValue(entry.details) }),
+        },
+      };
+    } else if (entry.type === "branch_summary") {
+      candidate = {
+        ...base,
+        kind: "branch_summary",
+        payload: {
+          summary: entry.summary,
+          from_id: entry.fromId,
+          from_hook: entry.fromHook ?? false,
+          ...(entry.details === undefined ? {} : { details: this.jsonValue(entry.details) }),
+        },
+      };
+    } else if (entry.type === "custom" && entry.customType !== TIMELINE_MARKER) {
+      candidate = {
+        ...base,
+        kind: "custom",
+        payload: {
+          custom_type: entry.customType,
+          ...(entry.data === undefined ? {} : { data: this.jsonValue(entry.data) }),
+        },
+      };
+    } else {
+      return null;
+    }
+    const parsed = TimelineEventSchema.safeParse(candidate);
+    return parsed.success ? parsed.data : null;
   }
 
   private asMessageRecord(value: unknown): MessageRecord | null {

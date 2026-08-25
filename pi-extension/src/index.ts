@@ -37,6 +37,7 @@ import type {
   ExtensionContext,
   ExtensionFactory,
   SessionManager,
+  SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { SettingsManager, convertToPng } from "@earendil-works/pi-coding-agent";
 import { type Ed25519Keypair } from "./pairing/crypto.js";
@@ -2723,7 +2724,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     _publishWorking(true);
   });
   pi.on("session_compact", (event) => {
-    const entry = event?.compactionEntry as { summary?: unknown; tokensBefore?: unknown } | undefined;
+    const entry = event?.compactionEntry as (SessionEntry & { summary?: unknown; tokensBefore?: unknown }) | undefined;
     const summary = typeof entry?.summary === "string" ? entry.summary : "";
     const tokensBefore = typeof entry?.tokensBefore === "number" ? entry.tokensBefore : 0;
     const ts = Date.now();
@@ -2731,6 +2732,9 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // via message_end (only user/assistant/toolResult), so push a synthetic
     // marker the mapper turns into a `compaction` event — survives session_sync.
     _messageBuffer.push({ role: "compaction", content: summary, timestamp: ts, tokensBefore });
+    if (entry && _currentSessionManager) {
+      _ensureTimelineRuntime(_currentSessionManager).publishSessionEntry(entry, _currentSessionManager);
+    }
     // (1) Live result to every connected owner.
     _broadcastToActive({ type: "compaction", summary, tokens_before: tokensBefore, ts });
     // (3) Working ends.
