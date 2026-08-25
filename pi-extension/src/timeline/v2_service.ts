@@ -58,7 +58,6 @@ export class TimelineV2Service {
   }
 
   get generation(): string {
-    this.refreshGeneration();
     return this.generationValue;
   }
 
@@ -73,7 +72,7 @@ export class TimelineV2Service {
     }));
   }
 
-  refreshGeneration(next = this.sessionManager.getSessionId()): boolean {
+  refreshGeneration(next: string): boolean {
     if (!next || next === this.generationValue) return false;
     this.generationValue = next;
     this.state.setGeneration(next);
@@ -82,7 +81,6 @@ export class TimelineV2Service {
   }
 
   handle(frame: ClientFrame): ServerFrame[] {
-    this.refreshGeneration();
     switch (frame.type) {
       case "session_hello":
         return [this.ready(frame)];

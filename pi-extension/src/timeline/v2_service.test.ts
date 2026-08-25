@@ -39,6 +39,35 @@ describe("TimelineV2Service", () => {
     });
   });
 
+  test("keeps an explicit generation stable until the owner rotates it", () => {
+    const session = SessionManager.inMemory(process.cwd());
+    const service = new TimelineV2Service({
+      sessionManager: session,
+      senderRef: "owner-1",
+      generation: "generation-1",
+      runtime: new TimelineRuntime(),
+      onUserMessage: () => false,
+    });
+    expect(service.handle(hello())[0]).toMatchObject({ history_generation: "generation-1" });
+    expect(service.handle({
+      protocol_version: 2,
+      type: "ping",
+      id: "ping-1",
+      channel_id: "channel-1",
+      history_generation: "generation-1",
+    })[0]).toMatchObject({ type: "pong" });
+    expect(service.generation).toBe("generation-1");
+
+    expect(service.refreshGeneration("generation-2")).toBe(true);
+    expect(service.generation).toBe("generation-2");
+    expect(service.handle(user("generation-1"))[0]).toMatchObject({
+      type: "reset",
+      reason: "generation_changed",
+      history_generation: "generation-2",
+      target_channel_id: "channel-1",
+    });
+  });
+
   test("rejects old generation after hello", () => {
     const session = SessionManager.inMemory(process.cwd());
     const service = new TimelineV2Service({ sessionManager: session, senderRef: "owner-1", runtime: new TimelineRuntime(), onUserMessage: () => false });

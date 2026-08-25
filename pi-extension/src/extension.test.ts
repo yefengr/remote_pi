@@ -6032,13 +6032,27 @@ describe("model meta", () => {
       text: "hello v2",
     }));
     await vi.waitFor(() => expect(pi.sendUserMessage).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    harness.handler("message_update")({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "streaming v2" },
+    });
     harness.handler("message_end")({ type: "message_end", message }, { sessionManager } as never);
     sessionManager.appendMessage(message as never);
     await new Promise<void>((resolve) => setImmediate(resolve));
     const frames = relayRef.current!.send.mock.calls.map((call) => decodeV2Sent(call[0] as string).frame);
     expect(frames).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: "user_message_status", status: "received", target_channel_id: "channel-v2" }),
-      expect.objectContaining({ type: "user_message_started", target_channel_id: "channel-v2" }),
+      expect.objectContaining({
+        type: "user_message_started",
+        target_channel_id: "channel-v2",
+        history_generation: historyGeneration,
+      }),
+      expect.objectContaining({
+        type: "timeline_partial",
+        history_generation: historyGeneration,
+        kind: "assistant",
+        delta: "streaming v2",
+      }),
       expect.objectContaining({ type: "timeline_event", event: expect.objectContaining({ kind: "user", status: "committed" }) }),
       expect.objectContaining({ type: "user_message_status", status: "committed", target_channel_id: "channel-v2" }),
     ]));
