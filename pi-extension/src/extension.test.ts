@@ -6103,13 +6103,22 @@ describe("model meta", () => {
     expect(sendUserMessage).toHaveBeenCalledTimes(2);
   });
 
-  test("v2 production path performs pair, hello, received, started, and committed history event", async () => {
+  test("v2 production path publishes user, thinking, tool partials, and formal tool history", async () => {
     _knownPeers.length = 0;
     _addedPeers.length = 0;
     _tokenStatus = "ok";
     const sessionManager = (await import("@earendil-works/pi-coding-agent")).SessionManager.inMemory(process.cwd());
     const harness = captureEventHarness();
     const message = { role: "user", content: "hello v2", timestamp: 1 };
+    const toolMessage = {
+      role: "toolResult",
+      toolCallId: "tool-v2",
+      toolName: "Read",
+      args: { path: "/tmp/example" },
+      content: [{ type: "text", text: "tool complete" }],
+      isError: false,
+      timestamp: 2,
+    };
     const pi = {
       sendUserMessage: vi.fn(() => {
         harness.handler("agent_start")({ type: "agent_start" });
@@ -6159,8 +6168,34 @@ describe("model meta", () => {
       type: "message_update",
       assistantMessageEvent: { type: "text_delta", delta: "streaming v2" },
     });
+    harness.handler("message_update")({
+      type: "message_update",
+      assistantMessageEvent: { type: "thinking_delta", delta: "reasoning v2" },
+    });
+    harness.handler("tool_execution_start")({
+      type: "tool_execution_start",
+      toolCallId: "tool-v2",
+      toolName: "Read",
+      args: { path: "/tmp/example" },
+    });
+    harness.handler("tool_execution_end")({
+      type: "tool_execution_end",
+      toolCallId: "tool-v2",
+      toolName: "Read",
+      result: { content: "tool complete" },
+      isError: false,
+    });
     harness.handler("message_end")({ type: "message_end", message }, { sessionManager } as never);
     sessionManager.appendMessage(message as never);
+    harness.handler("message_start")(
+      { type: "message_start", message: toolMessage },
+      { sessionManager } as never,
+    );
+    harness.handler("message_end")(
+      { type: "message_end", message: toolMessage },
+      { sessionManager } as never,
+    );
+    sessionManager.appendMessage(toolMessage as never);
     await new Promise<void>((resolve) => setImmediate(resolve));
     const frames = relayRef.current!.send.mock.calls.map((call) => decodeV2Sent(call[0] as string).frame);
     expect(frames).toEqual(expect.arrayContaining([
@@ -6176,7 +6211,29 @@ describe("model meta", () => {
         kind: "assistant",
         delta: "streaming v2",
       }),
+      expect.objectContaining({
+        type: "timeline_partial",
+        history_generation: historyGeneration,
+        kind: "thinking",
+        delta: "reasoning v2",
+      }),
+      expect.objectContaining({
+        type: "timeline_partial",
+        history_generation: historyGeneration,
+        kind: "tool",
+        partial_id: "tool-v2",
+        status: "running",
+      }),
       expect.objectContaining({ type: "timeline_event", event: expect.objectContaining({ kind: "user", status: "committed" }) }),
+      expect.objectContaining({
+        type: "timeline_event",
+        event: expect.objectContaining({
+          kind: "tool",
+          tool_call_id: "tool-v2",
+          tool: "Read",
+          status: "complete",
+        }),
+      }),
       expect.objectContaining({ type: "user_message_status", status: "committed", target_channel_id: "channel-v2" }),
     ]));
   });
