@@ -39,3 +39,26 @@ test("prepends earlier history without clearing recent events", () => {
   const changed = runtime.prependHistory([earlier]);
   assert.deepEqual(changed.items.filter((item) => item.kind === "event").map((item) => item.event.event_id), ["earlier", "recent"]);
 });
+
+test("formal assistant clears assistant and thinking partials from the same group", () => {
+  const runtime = new TimelineRuntime();
+  runtime.setScope(scope);
+  runtime.receive({ protocol_version: 2, type: "timeline_partial", session_id: scope.sessionId, history_generation: scope.historyGeneration, group_id: "assistant-group", partial_id: "assistant-partial", kind: "assistant", status: "delta", delta: "answer" });
+  runtime.receive({ protocol_version: 2, type: "timeline_partial", session_id: scope.sessionId, history_generation: scope.historyGeneration, group_id: "assistant-group", partial_id: "thinking-partial", kind: "thinking", status: "delta", delta: "reasoning" });
+
+  const changed = runtime.commit({
+    event_id: "assistant-event",
+    session_id: scope.sessionId,
+    history_generation: scope.historyGeneration,
+    timestamp: 3,
+    group_id: "assistant-group",
+    kind: "assistant",
+    blocks: [
+      { type: "thinking", text: "reasoning" },
+      { type: "text", text: "answer" },
+    ],
+    status: "complete",
+  });
+
+  assert.equal(changed.items.some((item) => item.kind === "partial"), false);
+});

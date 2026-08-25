@@ -228,7 +228,11 @@ export class TimelineRuntime {
     if (event.kind === "user") this.reconcileUserMessage(event.message_id);
     if (event.kind === "assistant" || event.kind === "tool") {
       for (const [partialId, partial] of this.partials) {
-        if (partial.partial.group_id === event.group_id && partial.partial.kind === event.kind) this.partials.delete(partialId);
+        if (partial.partial.group_id !== event.group_id) continue;
+        const matchesFormalEvent = event.kind === "assistant"
+          ? partial.partial.kind === "assistant" || partial.partial.kind === "thinking"
+          : partial.partial.kind === "tool";
+        if (matchesFormalEvent) this.partials.delete(partialId);
       }
     }
   }

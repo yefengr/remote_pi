@@ -575,3 +575,22 @@ test("rejects unknown frames and preserves steer as an explicit v2 input", () =>
   assert.equal(first.observedFrames.length, 0);
   assert.deepEqual(first.eventIds(), []);
 });
+
+test("converges broadcast thinking and tool partials to formal events on every PWA", () => {
+  const { simulator, first, second } = setup();
+  first.hello();
+  second.hello();
+  simulator.emitPartial({ protocol_version: 2, type: "timeline_partial", session_id: "SESSION", history_generation: "G1", group_id: "ASSISTANT-GROUP", partial_id: "THINKING", kind: "thinking", status: "delta", delta: "reasoning" });
+  simulator.emitPartial({ protocol_version: 2, type: "timeline_partial", session_id: "SESSION", history_generation: "G1", group_id: "ASSISTANT-GROUP", partial_id: "ASSISTANT", kind: "assistant", status: "delta", delta: "answer" });
+  simulator.emitPartial({ protocol_version: 2, type: "timeline_partial", session_id: "SESSION", history_generation: "G1", group_id: "TOOL-GROUP", partial_id: "TOOL", kind: "tool", status: "running", tool_call_id: "TOOL-CALL", tool: "Read", args: { path: "/tmp/example" } });
+  assert.equal(first.currentItems().filter((item) => item.kind === "partial").length, 3);
+  assert.equal(second.currentItems().filter((item) => item.kind === "partial").length, 3);
+
+  simulator.emitEvent({ event_id: "ASSISTANT-EVENT", session_id: "SESSION", history_generation: "G1", timestamp: 8, group_id: "ASSISTANT-GROUP", kind: "assistant", blocks: [{ type: "thinking", text: "reasoning" }, { type: "text", text: "answer" }], status: "complete" });
+  simulator.emitEvent({ event_id: "TOOL-EVENT", session_id: "SESSION", history_generation: "G1", timestamp: 9, group_id: "TOOL-GROUP", kind: "tool", tool_call_id: "TOOL-CALL", tool: "Read", args: { path: "/tmp/example" }, truncated: false, status: "complete", result: "tool complete" });
+
+  for (const client of [first, second]) {
+    assert.equal(client.currentItems().some((item) => item.kind === "partial"), false);
+    assert.deepEqual(client.eventIds(), ["ASSISTANT-EVENT", "TOOL-EVENT"]);
+  }
+});
