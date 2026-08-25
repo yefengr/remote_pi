@@ -60,6 +60,11 @@ export class PlainPeerChannel implements PeerChannel {
 
   // ── PeerChannel interface ──────────────────────────────────────────────────
 
+  /** Authenticated Owner peer id used as a server-derived sender reference. */
+  getPeerId(): string {
+    return this.remotePeerId;
+  }
+
   send(msg: ServerMessage): void {
     const ct = Buffer.from(JSON.stringify(msg)).toString("base64");
     // NOTE: `room` removed from the outer envelope until relay (W1.A) + app

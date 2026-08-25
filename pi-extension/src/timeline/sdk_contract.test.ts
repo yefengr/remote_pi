@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { Type } from "typebox";
+import { TimelineRuntime } from "./runtime.js";
 import {
   AuthStorage,
   createAgentSession,
@@ -375,6 +376,52 @@ function lifecycleExtension(records: LifecycleRecord[], toolExecutionCount: { va
 }
 
 describe("plan/63 SDK timeline contracts", () => {
+  test("production-shaped runtime wiring publishes marker-backed events through the real SDK", async () => {
+    const published: string[] = [];
+    const startedMessages = new Map<string, object>();
+    const endedMessages = new Map<string, object>();
+    const runtime = new TimelineRuntime({
+      onPublished: (event) => published.push(`${event.kind}:${event.event_id}`),
+    });
+    const sessionManager = SessionManager.inMemory(process.cwd());
+    const extensionFactory: ExtensionFactory = (pi) => {
+      pi.on("agent_start", () => runtime.onAgentStart());
+      pi.on("message_start", (event, ctx) => {
+        startedMessages.set(event.message.role, event.message as object);
+        runtime.onMessageStart(event.message, ctx.sessionManager);
+      });
+      pi.on("message_end", (event, ctx) => {
+        endedMessages.set(event.message.role, event.message as object);
+        runtime.onMessageEnd(event.message, ctx.sessionManager);
+      });
+      pi.on("agent_end", () => runtime.onAgentEnd());
+    };
+    const session = await createHarness({
+      sessionManager,
+      extensionFactories: [extensionFactory],
+      streamFn: textStream(),
+    });
+
+    try {
+      await session.prompt("real SDK runtime wiring");
+      for (let attempt = 0; attempt < 5 && published.length < 2; attempt += 1) {
+        await nextMacrotask();
+      }
+      const branch = sessionManager.getBranch();
+      const markers = branch.filter((entry) => entry.type === "custom" && entry.customType === REMOTE_PI_MARKER);
+      expect(markers.length).toBe(2);
+      expect(markers.every((entry) => (
+        typeof entry.data === "object" && entry.data !== null &&
+        (entry.data as { version?: unknown }).version === 2
+      ))).toBe(true);
+      expect(published.map((event) => event.split(":", 1)[0])).toContain("user");
+      expect(Object.is(startedMessages.get("user"), endedMessages.get("user"))).toBe(true);
+      expect(published.map((event) => event.split(":", 1)[0])).toContain("assistant");
+    } finally {
+      session.dispose();
+    }
+  });
+
   test("persists user, assistant, and toolResult only after their message_end handlers", async () => {
     const records: LifecycleRecord[] = [];
     const toolExecutionCount = { value: 0 };

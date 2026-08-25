@@ -5,8 +5,9 @@
 - 阶段 0A（Pi SDK 生命周期与 marker 基础拓扑验证）：**已完成（2026-08-24）**
 - 阶段 0B（SDK 输入关联与 run epoch 契约验证）：**已完成（2026-08-25）**
 - 阶段 1（协议、类型与入口边界）：**已完成（2026-08-25）**
-- 阶段 2（Extension 最小永久提交链路）：下一步
-- Protocol v2 schema、codec、fixture：已冻结；生产入口尚未切换
+- 阶段 2（Extension 最小永久提交链路）：**已完成（2026-08-25）**
+- 阶段 3（v2 逻辑 channel 与权威历史）：下一步
+- Protocol v2 schema、codec、fixture：已冻结；Extension 时间线生产提交链路已接入，v2 wire 尚未切换
 - Relay：无代码改动
 
 本计划以 Protocol v2 消除 PWA 实时消息与 SessionManager 历史消息的重复。当前 Pi SessionManager branch 是正式历史真源；PWA IndexedDB 仅缓存最近 5 个回合组；PWA pending 和实时 partial 仅存在于内存。
@@ -74,6 +75,17 @@ Protocol v2 是强制升级，不能与 v1 互通。不得实现字段 fallback�
 6. 根 `PROTOCOL.md` 已将 v2 标记为当前唯一 inner 协议，旧 v1 章节保留为迁移审计历史基线；`plan/00-decisions.md` 已关闭旧的“无版本字段”决策。
 
 验证结果：Extension v2 定向 19/19、共享 fixture 4/4，Extension 全量 834 passed/3 skipped（41 files），typecheck、build 通过；Site v2 主测试 6/6、共享 fixture 3/3，定向 lint、typecheck、build 通过；共享 manifest 32 case 全部通过；`git diff --check` 通过。Site 全量 `pnpm lint` 仍会扫描构建生成且未被 Git 跟踪的 `public/sw.js`，该既有生成产物触发 1 个 `no-this-alias` error 与若干 warning；本阶段 v2 源文件定向 lint 已通过。
+
+## 阶段 2 已完成的事实
+
+1. 新增 `pi-extension/src/timeline/runtime.ts`，集中管理 `AsyncLocalStorage<Correlation>`、`WeakMap<object, Correlation>`、run epoch/group、marker、post-`message_end` branch 验证、strict scanner、legacy 恢复和正式 `TimelineEvent` 规范化。
+2. 空闲普通 PWA 消息在 `_wakeAgent` 调用链建立 correlation；可靠 normal user marker 使用 `origin: pwa`、`delivery: normal` 和认证 Owner peer 派生的 `sender_ref`。steer 与无法可靠关联的输入保持 `unknown`，不使用 FIFO、文本或最近 user 猜测。
+3. marker 在真实 `message_start` 写入；`message_end` 只安排下一 macrotask 从当前 branch 查找目标。Remote marker、`custom_message`、non-custom/unknown entry、角色不匹配、branch 结束均按已冻结硬边界处理。
+4. 真实 SDK 验证了 user 的 start/end message identity；assistant streaming 的 start partial 与 end final 可为不同对象，因此 runtime 只对 user 依赖 WeakMap identity，对 assistant/tool 使用同一 run 内未完成角色 marker 配对，不把该机制用于来源归因。
+5. 当前正式事件先进入 Extension runtime 的 published buffer/callback，旧 v1 `user_message`/`agent_chunk`/`tool_result`/`session_history` 仍保持原行为；本阶段不接入 v2 wire、Site、Relay、分页或幂等 LRU。
+6. `PlainPeerChannel.getPeerId()` 暴露认证 Owner peer 引用，供后续 v2 sender/channel 路由使用；不改变旧 transport 编解码。
+
+验证结果：阶段 2 定向回归 202/202 通过；Extension 全量测试 840 passed、3 skipped（42 files）；typecheck、build、diff check 通过。
 
 ## 背景与目标
 
@@ -535,11 +547,11 @@ git diff --check
 
 已冻结严格 v2 schema、错误、fixture、marker、TimelineEvent、partial、fragment、history chunk 和入口边界；已盘点直接消费者；未实现生产兼容层或宽松 schema，也未接入旧 v1 生产路由。
 
-### 阶段 2：Extension 最小永久提交链路（下一步）
+### 阶段 2：Extension 最小永久提交链路（已完成）
 
-实现最小 marker、ALS、WeakMap、post-`message_end` 落盘验证、严格恢复和正式事件；先验证永久 ID、group 与历史 mapper 一致。
+已实现最小 marker、ALS、WeakMap、post-`message_end` 落盘验证、严格恢复和正式事件 buffer；旧 v1 wire 保持不变，下一阶段切换 v2 逻辑 channel 与权威历史。
 
-### 阶段 3：v2 逻辑 channel 与权威历史
+### 阶段 3：v2 逻辑 channel 与权威历史（下一步）
 
 实现 hello/ready、Owner/channel 逻辑路由、定向响应、generation、幂等、snapshot 分页、chunk、fragment 与 reset；Relay 只做透明转发验证。
 

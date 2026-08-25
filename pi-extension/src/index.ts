@@ -36,6 +36,7 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
   ExtensionFactory,
+  SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { SettingsManager, convertToPng } from "@earendil-works/pi-coding-agent";
 import { type Ed25519Keypair } from "./pairing/crypto.js";
@@ -123,6 +124,7 @@ import {
   toWebSocketUrl,
 } from "./config.js";
 import { Box, Container, Image, Text } from "@earendil-works/pi-tui";
+import { TimelineRuntime, type Correlation } from "./timeline/runtime.js";
 
 // ── State machine ─────────────────────────────────────────────────────────────
 //
@@ -675,6 +677,7 @@ async function _deliverImageUserMessage(
   sender: PlainPeerChannel,
   msg: ClientUserMessage,
   shouldSteer: boolean,
+  correlation: Correlation,
 ): Promise<void> {
   const previewDelivery: ReceivedImagePreviewDelivery =
     shouldSteer || _currentTurnId !== null || _myRoomMeta?.working === true
@@ -704,6 +707,7 @@ async function _deliverImageUserMessage(
     _contentFromUserMessage(msg),
     `app user_message id=${msg.id} (+${msg.images?.length ?? 0} image)`,
     "steer",
+    correlation,
   );
   if (!wake.ok) {
     if (seededTurnId) _currentTurnId = previousTurnId;
@@ -846,6 +850,10 @@ type BufferMsg = {
   tokensBefore?: number;
 };
 let _messageBuffer: BufferMsg[] = [];
+let _timelineRuntime: TimelineRuntime | null = null;
+let _timelineSessionManager: SessionManager | null = null;
+const _timelinePublishedEvents: unknown[] = [];
+
 type PendingSteer = { id: string; text: string };
 let _pendingSteers: PendingSteer[] = [];
 let _lastConsumedSteerText: string | null = null;
@@ -854,6 +862,22 @@ type PwaQueuedItem = QueuedMessageItem & { editable: true };
 let _queuedItems: PwaQueuedItem[] = [];
 
 type MeshEnvelope = { id: string; from: string; re: string | null; body: unknown };
+
+function _ensureTimelineRuntime(sessionManager: SessionManager): TimelineRuntime {
+  if (_timelineRuntime === null || _timelineSessionManager !== sessionManager) {
+    _timelinePublishedEvents.length = 0;
+    _timelineRuntime = new TimelineRuntime({
+      onPublished: (event) => _timelinePublishedEvents.push(event),
+    });
+    _timelineRuntime.attach(sessionManager);
+    _timelineSessionManager = sessionManager;
+  }
+  return _timelineRuntime;
+}
+
+export function _getTimelinePublishedEventsForTest(): unknown[] {
+  return [..._timelinePublishedEvents];
+}
 let _pendingMeshMessages: MeshEnvelope[] = [];
 let _agentRunActive = false;
 let _agentRunGeneration = 0;
@@ -2172,10 +2196,16 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   pi.on("agent_start", () => {
     _agentRunActive = true;
     _agentRunGeneration += 1;
+    _timelineRuntime?.onAgentStart();
   });
 
-  pi.on("message_start", (event) => {
+  pi.on("message_start", (event, ctx) => {
     const message = event?.message as BufferMsg | undefined;
+    const sessionManager = (ctx as { sessionManager?: unknown } | undefined)?.sessionManager;
+    if (sessionManager && typeof (sessionManager as { getBranch?: unknown }).getBranch === "function") {
+      const timeline = _ensureTimelineRuntime(sessionManager as SessionManager);
+      timeline.onMessageStart(event.message, sessionManager as SessionManager);
+    }
     if (!_anyPeerActive() || message?.role !== "user") return;
     _broadcastConsumedSteerForUserContent(message.content);
   });
@@ -2222,9 +2252,13 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // turn — including turns initiated from the Pi terminal (source:"interactive")
   // or RPC. Previous impl overwrote on `agent_end` and lost everything but the
   // last turn (see diagnostics 14, 15).
-  pi.on("message_end", (event) => {
+  pi.on("message_end", (event, ctx) => {
     const m = event?.message as { role?: string; content?: unknown; stopReason?: string; errorMessage?: string } | undefined;
     if (!m) return;
+    const sessionManager = (ctx as { sessionManager?: unknown } | undefined)?.sessionManager;
+    if (sessionManager && typeof (sessionManager as { getBranch?: unknown }).getBranch === "function") {
+      _ensureTimelineRuntime(sessionManager as SessionManager).onMessageEnd(event.message, sessionManager as SessionManager);
+    }
     if (m.role === "user" && _anyPeerActive()) {
       _broadcastConsumedSteerForUserContent(m.content);
     }
@@ -2249,6 +2283,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   });
 
   pi.on("agent_end", () => {
+    _timelineRuntime?.onAgentEnd();
     // Buffer is fed by `message_end`; here we only finalize the outbound
     // turn signal to every connected owner. No buffer mutation.
     if (_anyPeerActive() && _currentTurnId) {
@@ -2340,6 +2375,12 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // bound to the current session.
   pi.on("session_start", (_event, ctx) => {
     _lastEventCtx = ctx;
+    const sessionManager = (ctx as { sessionManager?: unknown } | undefined)?.sessionManager;
+    if (sessionManager && typeof (sessionManager as { getBranch?: unknown }).getBranch === "function") {
+      const timeline = _ensureTimelineRuntime(sessionManager as SessionManager);
+      timeline.resetSession(sessionManager as SessionManager);
+      _timelinePublishedEvents.push(...timeline.recover(sessionManager as SessionManager));
+    }
     // session_shutdown disposes per-session pi-ask subscriptions. A host that
     // reuses this module instance does NOT re-run the factory, so rebind the
     // bridge here; fresh-module hosts already created theirs in the factory.
@@ -4066,6 +4107,7 @@ function _wakeAgent(
   content: Parameters<ExtensionAPI["sendUserMessage"]>[0],
   label: string,
   steeringBehavior?: SendUserMessageOptions["deliverAs"],
+  correlation?: Correlation,
 ): WakeAgentResult {
   if (!_pi) {
     const detail = "agent session not bound yet";
@@ -4076,7 +4118,12 @@ function _wakeAgent(
     const options = steeringBehavior
       ? ({ deliverAs: steeringBehavior })
       : undefined;
-    _pi.sendUserMessage(content, options);
+    const send = () => _pi!.sendUserMessage(content, options);
+    if (correlation && _timelineRuntime) {
+      _timelineRuntime.runWithCorrelation(correlation, send);
+    } else {
+      send();
+    }
     return { ok: true };
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
@@ -4453,8 +4500,11 @@ export function _routeClientMessageFrom(
       // room is already working. Tell the SDK this is steering; otherwise it
       // rejects the message as a normal busy prompt. Seed a fallback id so
       // later chunks/done have a target instead of being dropped.
+      const correlation: Correlation = shouldSteer
+        ? { origin: "unknown", delivery: "unknown" }
+        : { origin: "pwa", delivery: "normal", senderRef: sender.getPeerId() };
       if (msg.images && msg.images.length > 0) {
-        void _deliverImageUserMessage(sender, msg, shouldSteer).catch((error) => {
+        void _deliverImageUserMessage(sender, msg, shouldSteer, correlation).catch((error) => {
           const detail = error instanceof Error ? error.message : String(error);
           console.error(`[remote-pi] failed delivering image message id=${msg.id}: ${detail}`);
         });
@@ -4474,6 +4524,7 @@ export function _routeClientMessageFrom(
         msg.text,
         `app user_message id=${msg.id}`,
         "steer",
+        correlation,
       );
       if (!wake.ok) {
         if (seededTurnId) _currentTurnId = previousTurnId;
