@@ -5980,6 +5980,129 @@ describe("model meta", () => {
     }
   });
 
+  test("busy v2 user message drains after agent_end with reliable queued correlation", async () => {
+    _knownPeers.length = 0;
+    _addedPeers.length = 0;
+    _tokenStatus = "ok";
+    const sessionManager = (await import("@earendil-works/pi-coding-agent")).SessionManager.inMemory(process.cwd());
+    const harness = captureEventHarness();
+    const queuedMessage = { role: "user", content: "queued v2", timestamp: 2 };
+    const sendUserMessage = vi.fn(() => {
+      harness.handler("agent_start")({ type: "agent_start" });
+      harness.handler("message_start")(
+        { type: "message_start", message: queuedMessage },
+        { sessionManager } as never,
+      );
+    });
+    _setPiForTest({ sendUserMessage, sendMessage: vi.fn() } as never);
+    harness.handler("session_start")(
+      { type: "session_start", reason: "startup" },
+      {
+        sessionManager,
+        ui: { notify: vi.fn() },
+        abort: vi.fn(),
+        compact: vi.fn(),
+      } as never,
+    );
+    await _connectForTest(makeMockCtx());
+
+    const peer = "v2-queued-owner";
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
+      type: "pair_request",
+      id: "pair-v2-queued",
+      token: "test-token",
+      device_name: "Queued Phone",
+    }));
+    await vi.waitFor(() => expect(_hasActivePeerForTest(peer)).toBe(true));
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
+      type: "session_hello",
+      id: "hello-v2-queued",
+      channel_id: "channel-v2-queued",
+    }));
+    const ready = relayRef.current!.send.mock.calls
+      .map((call) => decodeV2Sent(call[0] as string).frame)
+      .find((frame) => frame.type === "session_ready");
+    expect(ready).toMatchObject({ type: "session_ready" });
+    const historyGeneration = (ready as Extract<typeof ready, { type: "session_ready" }>).history_generation;
+
+    harness.handler("agent_start")({ type: "agent_start" });
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
+      type: "user_message",
+      id: "wire-v2-queued",
+      channel_id: "channel-v2-queued",
+      history_generation: historyGeneration,
+      client_request_id: "request-v2-queued",
+      text: "queued v2",
+    }));
+    await vi.waitFor(() => {
+      const frames = relayRef.current!.send.mock.calls.map((call) => decodeV2Sent(call[0] as string).frame);
+      expect(frames).toContainEqual(expect.objectContaining({
+        type: "user_message_status",
+        status: "received",
+        client_request_id: "request-v2-queued",
+      }));
+    });
+    expect(sendUserMessage).not.toHaveBeenCalled();
+
+    harness.handler("agent_end")({ type: "agent_end" });
+    await vi.waitFor(() => expect(sendUserMessage).toHaveBeenCalledTimes(1));
+    expect(sendUserMessage.mock.calls[0]?.[1]).toBeUndefined();
+    const frames = relayRef.current!.send.mock.calls.map((call) => decodeV2Sent(call[0] as string).frame);
+    expect(frames).toContainEqual(expect.objectContaining({
+      type: "user_message_started",
+      target_channel_id: "channel-v2-queued",
+      message: expect.objectContaining({
+        origin: "pwa",
+        sender_ref: peer,
+        delivery: "queued",
+      }),
+    }));
+    harness.handler("agent_end")({ type: "agent_end" });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    sendUserMessage.mockImplementationOnce(() => {
+      throw new Error("queued send rejected");
+    });
+    harness.handler("agent_start")({ type: "agent_start" });
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
+      type: "user_message",
+      id: "wire-v2-queued-failed",
+      channel_id: "channel-v2-queued",
+      history_generation: historyGeneration,
+      client_request_id: "request-v2-queued-failed",
+      text: "queued v2 failed",
+    }));
+    harness.handler("agent_end")({ type: "agent_end" });
+    await vi.waitFor(() => {
+      const currentFrames = relayRef.current!.send.mock.calls.map((call) => decodeV2Sent(call[0] as string).frame);
+      expect(currentFrames).toContainEqual(expect.objectContaining({
+        type: "user_message_status",
+        client_request_id: "request-v2-queued-failed",
+        status: "unknown_delivery",
+      }));
+    });
+    expect(sendUserMessage).toHaveBeenCalledTimes(2);
+
+    harness.handler("agent_start")({ type: "agent_start" });
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
+      type: "user_message",
+      id: "wire-v2-queued-disconnected",
+      channel_id: "channel-v2-queued",
+      history_generation: historyGeneration,
+      client_request_id: "request-v2-queued-disconnected",
+      text: "must not deliver after disconnect",
+    }));
+    _onPeerDisconnect(peer);
+    harness.handler("agent_end")({ type: "agent_end" });
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    expect(sendUserMessage).toHaveBeenCalledTimes(2);
+  });
+
   test("v2 production path performs pair, hello, received, started, and committed history event", async () => {
     _knownPeers.length = 0;
     _addedPeers.length = 0;

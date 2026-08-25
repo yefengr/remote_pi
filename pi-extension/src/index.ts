@@ -912,6 +912,7 @@ function _handleTimelinePublished(event: import("./protocol/v2/index.js").Timeli
 
 function _rotateTimelineGeneration(reason: "generation_changed" | "branch_changed" | "session_replaced"): void {
   _timelineGeneration = randomUUID();
+  _resetV2QueuedUserMessages();
   for (const binding of _v2ActivePeers.values()) {
     binding.service.refreshGeneration(_timelineGeneration);
     for (const frame of binding.service.reset(reason)) binding.channel.sendV2(frame);
@@ -930,14 +931,21 @@ function _ensureV2Service(senderRef: string): TimelineV2Service | null {
     generation: _timelineGeneration,
     runtime,
     onUserMessage: (frame, correlation) => {
-      const previousTurnId = _currentTurnId;
       const steering = frame.streaming_behavior === "steer";
+      const busy = _agentRunActive || _isBusyForQueueDrain() || _v2QueuedDrainScheduled;
+      if (!steering && busy) {
+        return _enqueueV2UserMessage(senderRef, frame, correlation);
+      }
+
+      const previousTurnId = _currentTurnId;
       const seededTurnId = !steering || _currentTurnId === null;
       if (seededTurnId) _currentTurnId = frame.id;
-      const content = frame.images && frame.images.length > 0
-        ? [...frame.images.map((image) => ({ type: "image" as const, data: image.data, mimeType: image.mime })), { type: "text" as const, text: frame.text }]
-        : frame.text;
-      const wake = _wakeAgent(content, `v2 user_message id=${frame.client_request_id}`, "steer", correlation);
+      const wake = _wakeAgent(
+        _v2UserContent(frame),
+        `v2 user_message id=${frame.client_request_id}`,
+        steering ? "steer" : undefined,
+        correlation,
+      );
       if (!wake.ok) {
         if (seededTurnId) _currentTurnId = previousTurnId;
         return false;
@@ -983,6 +991,21 @@ let _lastConsumedSteerText: string | null = null;
 
 type PwaQueuedItem = QueuedMessageItem & { editable: true };
 let _queuedItems: PwaQueuedItem[] = [];
+
+const MAX_V2_QUEUED_USERS_PER_OWNER = 128;
+const MAX_V2_QUEUED_USERS = 512;
+const V2_QUEUED_USER_TTL_MS = 5 * 60 * 1000;
+
+type V2QueuedUserMessage = {
+  senderRef: string;
+  frame: Extract<ClientFrame, { type: "user_message" }>;
+  correlation: Correlation;
+  enqueuedAt: number;
+  payloadFingerprint: string;
+};
+let _v2QueuedUserMessages: V2QueuedUserMessage[] = [];
+let _v2QueuedDrainScheduled = false;
+let _v2QueuedEpoch = 0;
 
 type MeshEnvelope = { id: string; from: string; re: string | null; body: unknown };
 
@@ -1112,6 +1135,129 @@ function _maybeDrainQueuedItem(): void {
     return;
   }
   _echoUserMessage(msg, false);
+}
+
+function _v2UserContent(
+  frame: Extract<ClientFrame, { type: "user_message" }>,
+): Parameters<ExtensionAPI["sendUserMessage"]>[0] {
+  return frame.images && frame.images.length > 0
+    ? [
+        ...frame.images.map((image) => ({ type: "image" as const, data: image.data, mimeType: image.mime })),
+        { type: "text" as const, text: frame.text },
+      ]
+    : frame.text;
+}
+
+function _resetV2QueuedUserMessages(): void {
+  _v2QueuedUserMessages = [];
+  _v2QueuedDrainScheduled = false;
+  _v2QueuedEpoch += 1;
+}
+
+function _v2QueuedPayloadFingerprint(
+  frame: Extract<ClientFrame, { type: "user_message" }>,
+): string {
+  return JSON.stringify({ text: frame.text, images: frame.images ?? [] });
+}
+
+function _sendV2QueuedUnknown(item: V2QueuedUserMessage, binding: V2PeerBinding): void {
+  const serviceFrames = binding.service.unknownDelivery(item.frame.client_request_id);
+  _sendV2Frames(item.senderRef, serviceFrames.length > 0 ? serviceFrames : [{
+    protocol_version: 2,
+    type: "user_message_status",
+    target_channel_id: item.frame.channel_id,
+    in_reply_to: item.frame.id,
+    session_id: _currentSessionManager?.getSessionId() ?? "unknown",
+    history_generation: binding.service.generation,
+    client_request_id: item.frame.client_request_id,
+    status: "unknown_delivery",
+  }]);
+}
+
+function _expireV2QueuedUserMessages(now: number): void {
+  const live: V2QueuedUserMessage[] = [];
+  for (const item of _v2QueuedUserMessages) {
+    if (now - item.enqueuedAt <= V2_QUEUED_USER_TTL_MS) {
+      live.push(item);
+      continue;
+    }
+    const binding = _v2ActivePeers.get(item.senderRef);
+    if (binding && item.frame.history_generation === binding.service.generation) {
+      _sendV2QueuedUnknown(item, binding);
+    }
+  }
+  _v2QueuedUserMessages = live;
+}
+
+function _enqueueV2UserMessage(
+  senderRef: string,
+  frame: Extract<ClientFrame, { type: "user_message" }>,
+  correlation: Correlation,
+): boolean {
+  const now = Date.now();
+  _expireV2QueuedUserMessages(now);
+  const payloadFingerprint = _v2QueuedPayloadFingerprint(frame);
+  const duplicate = _v2QueuedUserMessages.find((item) =>
+    item.senderRef === senderRef && item.frame.client_request_id === frame.client_request_id);
+  if (duplicate) return duplicate.payloadFingerprint === payloadFingerprint;
+  const ownerCount = _v2QueuedUserMessages.filter((item) => item.senderRef === senderRef).length;
+  if (ownerCount >= MAX_V2_QUEUED_USERS_PER_OWNER || _v2QueuedUserMessages.length >= MAX_V2_QUEUED_USERS) {
+    return false;
+  }
+  _v2QueuedUserMessages.push({
+    senderRef,
+    frame,
+    correlation: { ...correlation, delivery: "queued" },
+    enqueuedAt: now,
+    payloadFingerprint,
+  });
+  return true;
+}
+
+function _scheduleV2QueuedUserDrain(): void {
+  if (
+    _v2QueuedDrainScheduled ||
+    _agentRunActive ||
+    _isBusyForQueueDrain() ||
+    _v2QueuedUserMessages.length === 0
+  ) return;
+  _v2QueuedDrainScheduled = true;
+  const epoch = _v2QueuedEpoch;
+  setTimeout(() => {
+    if (epoch !== _v2QueuedEpoch) return;
+    _v2QueuedDrainScheduled = false;
+    if (_agentRunActive || _isBusyForQueueDrain()) return;
+    _expireV2QueuedUserMessages(Date.now());
+
+    const item = _v2QueuedUserMessages.shift();
+    if (!item) return;
+    const binding = _v2ActivePeers.get(item.senderRef);
+    if (!binding || item.frame.history_generation !== binding.service.generation) {
+      _scheduleV2QueuedUserDrain();
+      return;
+    }
+    if (!binding.service.canDrain(item.frame.client_request_id)) {
+      _sendV2QueuedUnknown(item, binding);
+      _scheduleV2QueuedUserDrain();
+      return;
+    }
+
+    const previousTurnId = _currentTurnId;
+    _currentTurnId = item.frame.id;
+    _agentRunActive = true;
+    const wake = _wakeAgent(
+      _v2UserContent(item.frame),
+      `queued v2 PWA user_message id=${item.frame.client_request_id}`,
+      undefined,
+      item.correlation,
+    );
+    if (wake.ok) return;
+
+    _agentRunActive = false;
+    _currentTurnId = previousTurnId;
+    _sendV2QueuedUnknown(item, binding);
+    _scheduleV2QueuedUserDrain();
+  }, 0);
 }
 
 /** Test-only override of the message buffer. */
@@ -1402,6 +1548,7 @@ function _detachPeerChannel(appPeerId: string): void {
   try { v2?.channel.detach(); } catch { /* best-effort */ }
   _activePeers.delete(appPeerId);
   _v2ActivePeers.delete(appPeerId);
+  _v2QueuedUserMessages = _v2QueuedUserMessages.filter((item) => item.senderRef !== appPeerId);
   if (_peerShort === appPeerId.slice(0, 8)) {
     // Pick a different remaining peer for the UX hint, or clear when none.
     const next = _activePeers.keys().next().value ?? _v2ActivePeers.keys().next().value;
@@ -1600,6 +1747,7 @@ function _goIdle(byeReason?: import("./protocol/types.js").ByeReason): void {
   _pendingSteers = [];
   _lastConsumedSteerText = null;
   _resetQueuedItems();
+  _resetV2QueuedUserMessages();
 
   // Invalidate async producers and bridge ownership before closing the host
   // Relay. A synchronous/delayed close callback must observe stale identity.
@@ -1663,6 +1811,7 @@ function _onRelayClose(closedRelay: RelayClient): void {
   _pendingSteers = [];
   _lastConsumedSteerText = null;
   _resetQueuedItems();
+  _resetV2QueuedUserMessages();
 
   _relay = null;  // _relayUrl preserved for retry
 
@@ -2522,6 +2671,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     setTimeout(() => {
       if (_agentRunGeneration !== endedGeneration) return;
       _agentRunActive = false;
+      _scheduleV2QueuedUserDrain();
       _scheduleMeshMessageDrain();
     }, 0);
   });
@@ -2555,6 +2705,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       _relay.sendControl({ type: "room_meta_update", room_id: _myRoomId, meta: { working: false } });
     }
     _maybeDrainQueuedItem();
+    _scheduleV2QueuedUserDrain();
   });
 
   // Plan/32: compaction feedback. compact() doesn't run a turn, so bracket it
@@ -2585,6 +2736,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // (3) Working ends.
     _publishWorking(false);
     _maybeDrainQueuedItem();
+    _scheduleV2QueuedUserDrain();
   });
 
   // Re-capture the freshest base ctx on every session replacement so compact

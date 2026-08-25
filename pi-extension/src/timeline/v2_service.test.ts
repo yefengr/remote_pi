@@ -87,6 +87,7 @@ describe("TimelineV2Service", () => {
     service.handle(hello());
     const first = service.handle(user(service.generation));
     expect(first).toEqual([expect.objectContaining({ type: "user_message_status", status: "received" })]);
+    expect(service.canDrain("request-1")).toBe(true);
     const message = { role: "user", content: "hello", timestamp: 1 };
     runtime.onAgentStart();
     const started = runtime.runWithCorrelation(correlation!, () => runtime.onMessageStart(message, session));
@@ -94,6 +95,7 @@ describe("TimelineV2Service", () => {
       type: "user_message_started",
       message: { origin: "pwa", sender_ref: "owner-1", delivery: "normal" },
     });
+    expect(service.canDrain("request-1")).toBe(false);
     const replay = service.handle(user(service.generation, { id: "wire-2" }));
     expect(send).toHaveBeenCalledTimes(1);
     expect(replay[0]).toMatchObject({ type: "user_message_status", status: "accepted" });

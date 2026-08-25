@@ -161,6 +161,10 @@ export class TimelineV2Service {
     });
   }
 
+  canDrain(clientRequestId: string): boolean {
+    return this.findRecord(clientRequestId)?.status === "received";
+  }
+
   unknownDelivery(clientRequestId: string): ServerFrame[] {
     const request = this.findRecord(clientRequestId);
     if (!request) return [];
