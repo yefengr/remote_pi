@@ -1255,517 +1255,302 @@ describe("multi-channel broadcast (W2D)", () => {
     await stop("", makeMockCtx());
   });
 
-  test("two owners pair simultaneously → both attach (catch-22 fixed)", async () => {
-    await _pairForTest("ownerA__1234567890");
-    await _pairAdditionalForTest("ownerB__abcdefghij", "Android");
+  async function setupV2(peerIds: readonly string[]) {
+    const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+    const sessionManager = SessionManager.inMemory(process.cwd());
+    const harness = captureEventHarness();
+    harness.handler("session_start")(
+      { type: "session_start", reason: "startup" },
+      { sessionManager, ui: { notify: vi.fn() }, abort: vi.fn(), compact: vi.fn() } as never,
+    );
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
+    const contexts: Array<{ peer: string; channelId: string; historyGeneration: string }> = [];
+    for (const peer of peerIds) {
+      relayRef.current!.emit("message", makeV2Line(peer, {
+        protocol_version: 2,
+        type: "pair_request",
+        id: `pair-${peer}`,
+        token: "test-token",
+        device_name: peer,
+      }));
+      await vi.waitFor(() => expect(_hasActivePeerForTest(peer)).toBe(true));
+      const channelId = `channel-${peer}`;
+      relayRef.current!.emit("message", makeV2Line(peer, {
+        protocol_version: 2,
+        type: "session_hello",
+        id: `hello-${peer}`,
+        channel_id: channelId,
+      }));
+      let ready: Extract<ReturnType<typeof decodeServerFrameV2>, { type: "session_ready" }> | undefined;
+      await vi.waitFor(() => {
+        ready = relayRef.current!.send.mock.calls
+          .map((call) => decodeV2Sent(call[0] as string).frame)
+          .find((frame): frame is Extract<ReturnType<typeof decodeServerFrameV2>, { type: "session_ready" }> =>
+            frame.type === "session_ready" && frame.target_channel_id === channelId);
+        expect(ready).toBeDefined();
+      });
+      contexts.push({ peer, channelId, historyGeneration: ready!.history_generation });
+    }
+    return { sessionManager, harness, contexts };
+  }
+
+  function sentV2(sendsBefore = 0) {
+    return relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((call) => decodeV2Sent(call[0] as string));
+  }
+
+  test("two owners establish independent v2 logical channels", async () => {
+    const { contexts } = await setupV2(["owner-a", "owner-b"]);
     expect(_getActivePeerCountForTest()).toBe(2);
-    expect(_hasActivePeerForTest("ownerA__1234567890")).toBe(true);
-    expect(_hasActivePeerForTest("ownerB__abcdefghij")).toBe(true);
+    expect(contexts).toEqual([
+      expect.objectContaining({ peer: "owner-a", channelId: "channel-owner-a" }),
+      expect.objectContaining({ peer: "owner-b", channelId: "channel-owner-b" }),
+    ]);
+    expect(new Set(contexts.map((context) => context.historyGeneration)).size).toBe(1);
   });
 
-  test("/remote-pi pair without config (idle, first-time) → warns + no QR", async () => {
-    // Isolated empty cwd → no local config on every OS, so we expect the
-    // focused first-time message instead of an auto-bootstrap. (Fresh tmpdir —
-    // see the "pair without start" test for the cross-platform rationale.)
+  test("/remote-pi pair without config stays idle and does not issue a QR", async () => {
     expect(_getState()).toBe("idle");
     const cwd = mkdtempSync(join(tmpdir(), "pi-ext-cwd-"));
     const pair = captureHandler("remote-pi pair");
     const ctx = makeMockCtx(cwd);
     await pair("", ctx);
-
-    const calls = ctx.ui.notify.mock.calls.map((c) => c[0] as string);
-    expect(calls.some((m) => m.includes("First-time setup needed"))).toBe(true);
-    expect(calls.every((m) => !m.includes("QR ready"))).toBe(true);
+    const calls = ctx.ui.notify.mock.calls.map((call) => call[0] as string);
+    expect(calls.some((message) => message.includes("First-time setup needed"))).toBe(true);
+    expect(calls.every((message) => !message.includes("QR ready"))).toBe(true);
     rmSync(cwd, { recursive: true, force: true });
   });
 
-  test("/remote-pi pair generates QR even when an owner is already attached", async () => {
-    await _pairForTest("ownerA__1234567890");
-    expect(_getActivePeerCountForTest()).toBe(1);
-
-    // QR generation must succeed (no "Already paired" rejection).
+  test("/remote-pi pair still issues a QR while a v2 owner is attached", async () => {
+    await setupV2(["owner-qr"]);
     const pair = captureHandler("remote-pi pair");
     const ctx = makeMockCtx();
     await pair("", ctx);
-
-    // Should have notified about a QR being ready, not warned about
-    // an existing pairing.
-    const calls = ctx.ui.notify.mock.calls.map((c) => c[0] as string);
-    expect(calls.some((m) => m.includes("QR ready"))).toBe(true);
-    expect(calls.every((m) => !m.includes("Already paired"))).toBe(true);
+    const calls = ctx.ui.notify.mock.calls.map((call) => call[0] as string);
+    expect(calls.some((message) => message.includes("QR ready"))).toBe(true);
+    expect(calls.every((message) => !message.includes("Already paired"))).toBe(true);
   });
 
-  test("agent_chunk broadcasts to every attached owner", async () => {
-    await _pairForTest("ownerA__1234567890");
-    await _pairAdditionalForTest("ownerB__abcdefghij", "Android");
+  test("ping and session_sync reply only to their requesting logical channel", async () => {
+    const { sessionManager, harness, contexts } = await setupV2(["owner-a", "owner-b"]);
+    const [first, second] = contexts;
+    if (!first || !second) throw new Error("missing v2 channels");
+    const message = { role: "user", content: "history for both", timestamp: Date.now() };
+    harness.handler("agent_start")({ type: "agent_start" });
+    harness.handler("message_start")({ type: "message_start", message }, { sessionManager } as never);
+    harness.handler("message_end")({ type: "message_end", message }, { sessionManager } as never);
+    sessionManager.appendMessage(message as never);
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
-    // Trigger an agent_chunk via the SDK message_update hook. The captured
-    // handlers expect `AnyEvent`; cast since we control the test payload.
-    const onUpdate = captureEventHandler("message_update");
-    const onInput = captureEventHandler("input");
-    // Seed _currentTurnId by simulating a terminal input first.
-    onInput({ source: "terminal", text: "hello" } as unknown as Parameters<typeof onInput>[0]);
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-    onUpdate({ assistantMessageEvent: { type: "text_delta", delta: "hi" } } as unknown as Parameters<typeof onUpdate>[0]);
-
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string).map(decodeSentCt);
-    const chunks = sent.filter((d) => d.inner.type === "agent_chunk");
-    // One for each attached owner.
-    expect(chunks).toHaveLength(2);
-    const recipients = new Set(chunks.map((d) => d.peer));
-    expect(recipients).toEqual(new Set(["ownerA__1234567890", "ownerB__abcdefghij"]));
-  });
-
-  test("session_sync from owner A → session_history reply only to A", async () => {
-    await _pairForTest("ownerA__1234567890");
-    await _pairAdditionalForTest("ownerB__abcdefghij", "Android");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    // Owner A asks for history.
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "ownerA__1234567890",
-      ct: Buffer.from(JSON.stringify({
-        type: "session_sync", id: "sync-1", limit: 50,
-      })).toString("base64"),
+    const pingBefore = relayRef.current!.send.mock.calls.length;
+    relayRef.current!.emit("message", makeV2Line(first.peer, {
+      protocol_version: 2,
+      type: "ping",
+      id: "ping-owner-a",
+      channel_id: first.channelId,
+      history_generation: first.historyGeneration,
     }));
-    // Let the handler run.
-    await new Promise<void>((r) => setImmediate(r));
-
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string).map(decodeSentCt);
-    const histories = sent.filter((d) => d.inner.type === "session_history");
-    expect(histories).toHaveLength(1);
-    expect(histories[0]!.peer).toBe("ownerA__1234567890");
-  });
-
-  test("revoke of owner A → A's channel closed, B keeps running", async () => {
-    await _pairForTest(OWNER_STANDARD_FIXTURE);
-    await _pairAdditionalForTest(OTHER_OWNER_STANDARD_FIXTURE, "Android");
-
-    const revoke = captureHandler("remote-pi revoke");
-    await revoke(OWNER_STANDARD_FIXTURE.slice(0, 8), makeMockCtx());
-
-    expect(_hasActivePeerForTest(OWNER_STANDARD_FIXTURE)).toBe(false);
-    expect(_hasActivePeerForTest(OTHER_OWNER_STANDARD_FIXTURE)).toBe(true);
-    expect(_getState()).toBe("paired");  // derived: at least one owner still on
-  });
-
-  // ── Source-of-truth rebroadcast (plan/24 W2D fix) ──────────────────────────
-  //
-  // When app A sends a user_message, the Pi must echo it to every
-  // _activePeers entry (A included) after the SDK accepts the handoff.
-  // App side renders from the echo, not from local optimistic state — keeps
-  // every paired device's session view bit-identical.
-
-  test("user_message from A → rebroadcast reaches both A and B (with id preserved)", async () => {
-    await _pairForTest("ownerA__1234567890");
-    await _pairAdditionalForTest("ownerB__abcdefghij", "Android");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    // Owner A sends user_message with a stable id.
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "ownerA__1234567890",
-      ct: Buffer.from(JSON.stringify({
-        type: "user_message", id: "msg-123", text: "oi",
-      })).toString("base64"),
-    }));
-    // Flush microtasks so the route handler runs.
-    await new Promise<void>((r) => setImmediate(r));
-
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string).map(decodeSentCt);
-    const echoes = sent.filter((d) => d.inner.type === "user_message");
-    expect(echoes).toHaveLength(2);
-    // id must be the sender's verbatim — Pi must not re-generate.
-    for (const e of echoes) {
-      expect(e.inner).toMatchObject({ type: "user_message", id: "msg-123", text: "oi" });
-    }
-    // Both owners received the echo (sender included).
-    const recipients = new Set(echoes.map((d) => d.peer));
-    expect(recipients).toEqual(new Set(["ownerA__1234567890", "ownerB__abcdefghij"]));
-  });
-
-  test("queued_message_set while working broadcasts editable queue and targeted clear", async () => {
-    await _pairForTest("ownerA__1234567890");
-    await _pairAdditionalForTest("ownerB__abcdefghij", "Android");
-    const harness = captureEventHarness();
-    const onInput = harness.handler("input");
-    onInput({ type: "input", text: "primary", source: "interactive" });
-    await new Promise<void>((r) => setImmediate(r));
-
-    const sendUserMessage = vi.fn();
-    _setPiForTest({ sendUserMessage, sendMessage: () => undefined });
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "ownerA__1234567890",
-      ct: Buffer.from(JSON.stringify({
-        type: "queued_message_set", id: "q1", text: " next ",
-      })).toString("base64"),
-    }));
-    await new Promise<void>((r) => setImmediate(r));
-
-    expect(sendUserMessage).not.toHaveBeenCalled();
-    let sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string).map(decodeSentCt);
-    const states = sent.filter((d) => d.inner.type === "queued_message_state");
-    expect(states).toHaveLength(2);
-    expect(new Set(states.map((d) => d.peer))).toEqual(new Set(["ownerA__1234567890", "ownerB__abcdefghij"]));
-    for (const state of states) {
-      expect(state.inner).toMatchObject({
-        type: "queued_message_state",
-        id: "q1",
-        text: "next",
-        items: [expect.objectContaining({ id: "q1", text: "next", editable: true })],
-      });
-    }
+    await vi.waitFor(() => expect(sentV2(pingBefore)).toContainEqual(expect.objectContaining({
+      peer: first.peer,
+      frame: expect.objectContaining({ type: "pong", target_channel_id: first.channelId, in_reply_to: "ping-owner-a" }),
+    })));
+    expect(sentV2(pingBefore).every((item) => item.peer === first.peer)).toBe(true);
 
     const syncBefore = relayRef.current!.send.mock.calls.length;
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "ownerA__1234567890",
-      ct: Buffer.from(JSON.stringify({ type: "session_sync", id: "sync-q", limit: 50 })).toString("base64"),
+    relayRef.current!.emit("message", makeV2Line(second.peer, {
+      protocol_version: 2,
+      type: "session_sync",
+      id: "sync-owner-b",
+      channel_id: second.channelId,
+      history_generation: second.historyGeneration,
+      before: null,
     }));
-    await new Promise<void>((r) => setImmediate(r));
-    sent = relayRef.current!.send.mock.calls.slice(syncBefore)
-      .map((c) => c[0] as string).map(decodeSentCt);
-    expect(sent[0]?.inner.type).toBe("queued_message_state");
-    expect(sent[1]?.inner.type).toBe("session_history");
-
-    const clearBefore = relayRef.current!.send.mock.calls.length;
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "ownerA__1234567890",
-      ct: Buffer.from(JSON.stringify({
-        type: "queued_message_clear", id: "clear-q", target_id: "q1",
-      })).toString("base64"),
-    }));
-    await new Promise<void>((r) => setImmediate(r));
-    sent = relayRef.current!.send.mock.calls.slice(clearBefore)
-      .map((c) => c[0] as string).map(decodeSentCt);
-    expect(sent.filter((d) => d.inner.type === "queued_message_state").every((d) => (
-      Array.isArray(d.inner.items) && d.inner.items.length === 0
-    ))).toBe(true);
+    await vi.waitFor(() => expect(sentV2(syncBefore)).toContainEqual(expect.objectContaining({
+      peer: second.peer,
+      frame: expect.objectContaining({
+        type: "session_history_chunk",
+        target_channel_id: second.channelId,
+        in_reply_to: "sync-owner-b",
+        events: [expect.objectContaining({ kind: "user" })],
+      }),
+    })));
+    expect(sentV2(syncBefore).every((item) => item.peer === second.peer)).toBe(true);
   });
 
-  test("queued_message_set while idle drains immediately as a normal user turn", async () => {
-    await _pairForTest("ownerA__1234567890");
-    await _pairAdditionalForTest("ownerB__abcdefghij", "Android");
-    const sendUserMessage = vi.fn();
-    _setPiForTest({ sendUserMessage, sendMessage: () => undefined });
+  test("timeline partials and committed events broadcast to both v2 owners", async () => {
+    const { sessionManager, harness, contexts } = await setupV2(["owner-a", "owner-b"]);
+    const message = { role: "user", content: "local turn", timestamp: Date.now() };
+    harness.handler("input")({ type: "input", text: "local turn", source: "interactive" });
+    harness.handler("agent_start")({ type: "agent_start" });
+    harness.handler("message_start")({ type: "message_start", message }, { sessionManager } as never);
     const sendsBefore = relayRef.current!.send.mock.calls.length;
+    harness.handler("message_update")({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "stream", contentIndex: 0, partial: {} },
+    });
+    harness.handler("message_end")({ type: "message_end", message }, { sessionManager } as never);
+    sessionManager.appendMessage(message as never);
+    harness.handler("agent_end")({ type: "agent_end" });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "ownerA__1234567890",
-      ct: Buffer.from(JSON.stringify({
-        type: "queued_message_set", id: "q-idle", text: "after this",
-      })).toString("base64"),
+    const sent = sentV2(sendsBefore);
+    const partials = sent.filter((item) => item.frame.type === "timeline_partial");
+    const events = sent.filter((item) => item.frame.type === "timeline_event");
+    expect(new Set(partials.map((item) => item.peer))).toEqual(new Set(contexts.map((context) => context.peer)));
+    expect(partials.every((item) => item.frame.kind === "assistant" && item.frame.delta === "stream")).toBe(true);
+    expect(new Set(events.map((item) => item.peer))).toEqual(new Set(contexts.map((context) => context.peer)));
+    expect(events.every((item) => item.frame.event.kind === "user" && item.frame.event.status === "committed")).toBe(true);
+  });
+
+  test("normal v2 user input is received, started, committed, and formally broadcast", async () => {
+    const { sessionManager, harness, contexts } = await setupV2(["owner-a", "owner-b"]);
+    const first = contexts[0]!;
+    const message = { role: "user", content: "from owner a", timestamp: Date.now() };
+    const sendUserMessage = vi.fn(() => {
+      harness.handler("agent_start")({ type: "agent_start" });
+      harness.handler("message_start")({ type: "message_start", message }, { sessionManager } as never);
+    });
+    _setPiForTest({ sendUserMessage, sendMessage: vi.fn() } as never);
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+    relayRef.current!.emit("message", makeV2Line(first.peer, {
+      protocol_version: 2,
+      type: "user_message",
+      id: "wire-owner-a",
+      channel_id: first.channelId,
+      history_generation: first.historyGeneration,
+      client_request_id: "request-owner-a",
+      text: "from owner a",
     }));
-    await new Promise<void>((r) => setImmediate(r));
+    await vi.waitFor(() => expect(sendUserMessage).toHaveBeenCalledWith("from owner a", undefined));
+    harness.handler("message_end")({ type: "message_end", message }, { sessionManager } as never);
+    sessionManager.appendMessage(message as never);
+    harness.handler("agent_end")({ type: "agent_end" });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-    expect(sendUserMessage).toHaveBeenCalledWith("after this", { deliverAs: "steer" });
-    expect(_getCurrentTurnIdForTest()).toBe("q-idle");
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string).map(decodeSentCt);
-    const lastState = sent.filter((d) => d.inner.type === "queued_message_state").at(-1);
-    expect(lastState?.inner.items).toEqual([]);
-    const echoes = sent.filter((d) => d.inner.type === "user_message");
-    expect(echoes).toHaveLength(2);
-    for (const echo of echoes) {
-      expect(echo.inner).toMatchObject({ type: "user_message", id: "q-idle", text: "after this" });
-      expect(echo.inner).not.toHaveProperty("streaming_behavior");
+    const sent = sentV2(sendsBefore);
+    expect(sent).toContainEqual(expect.objectContaining({
+      peer: first.peer,
+      frame: expect.objectContaining({ type: "user_message_status", status: "received", client_request_id: "request-owner-a", target_channel_id: first.channelId }),
+    }));
+    expect(sent).toContainEqual(expect.objectContaining({
+      peer: first.peer,
+      frame: expect.objectContaining({ type: "user_message_started", target_channel_id: first.channelId, message: expect.objectContaining({ origin: "pwa", sender_ref: first.peer, delivery: "normal" }) }),
+    }));
+    expect(sent).toContainEqual(expect.objectContaining({
+      peer: first.peer,
+      frame: expect.objectContaining({ type: "user_message_status", status: "committed", client_request_id: "request-owner-a", target_channel_id: first.channelId }),
+    }));
+    const events = sent.filter((item) => item.frame.type === "timeline_event");
+    expect(new Set(events.map((item) => item.peer))).toEqual(new Set(contexts.map((context) => context.peer)));
+    expect(events.every((item) => item.frame.event.kind === "user" && item.frame.event.origin === "pwa")).toBe(true);
+  });
+
+  test("revoking one v2 owner leaves the other attached", async () => {
+    const { contexts } = await setupV2([OWNER_STANDARD_FIXTURE, OTHER_OWNER_STANDARD_FIXTURE]);
+    const revoke = captureHandler("remote-pi revoke");
+    await revoke(OWNER_STANDARD_FIXTURE.slice(0, 8), makeMockCtx());
+    expect(_hasActivePeerForTest(OWNER_STANDARD_FIXTURE)).toBe(false);
+    expect(_hasActivePeerForTest(OTHER_OWNER_STANDARD_FIXTURE)).toBe(true);
+    expect(_getState()).toBe("paired");
+    expect(contexts).toHaveLength(2);
+  });
+
+  test("queued v2 controls return directed unsupported_type errors", async () => {
+    const { contexts } = await setupV2(["owner-queue"]);
+    const context = contexts[0]!;
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+    for (const frame of [
+      { protocol_version: 2 as const, type: "queued_message_set" as const, id: "queue-set", channel_id: context.channelId, history_generation: context.historyGeneration, text: "later" },
+      { protocol_version: 2 as const, type: "queued_message_clear" as const, id: "queue-clear", channel_id: context.channelId, history_generation: context.historyGeneration, target_id: "queue-set" },
+    ]) relayRef.current!.emit("message", makeV2Line(context.peer, frame));
+    await vi.waitFor(() => expect(sentV2(sendsBefore).filter((item) => item.frame.type === "protocol_error")).toHaveLength(2));
+    for (const item of sentV2(sendsBefore)) {
+      expect(item.peer).toBe(context.peer);
+      expect(item.frame).toMatchObject({ type: "protocol_error", code: "unsupported_type", target_channel_id: context.channelId });
     }
   });
 
-  test("queued drain waits for both agent_end and turn_end regardless of ordering", async () => {
-    await _pairForTest("ownerA__1234567890");
-    const harness = captureEventHarness();
+  test("v2 steering reports unknown delivery and does not publish a formal event", async () => {
+    const { contexts } = await setupV2(["owner-steer"]);
+    const context = contexts[0]!;
     const sendUserMessage = vi.fn();
-    _setPiForTest({ sendUserMessage, sendMessage: () => undefined });
-
-    harness.handler("input")({ type: "input", text: "primary", source: "interactive" });
-    harness.handler("turn_start")({ type: "turn_start", turnIndex: 0, timestamp: 0 });
-    await new Promise<void>((r) => setImmediate(r));
-    const sendsBeforeA = relayRef.current!.send.mock.calls.length;
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "ownerA__1234567890",
-      ct: Buffer.from(JSON.stringify({ type: "queued_message_set", id: "q-order-a", text: "after A" })).toString("base64"),
+    _setPiForTest({ sendUserMessage, sendMessage: vi.fn() } as never);
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+    relayRef.current!.emit("message", makeV2Line(context.peer, {
+      protocol_version: 2,
+      type: "user_message",
+      id: "wire-steer",
+      channel_id: context.channelId,
+      history_generation: context.historyGeneration,
+      client_request_id: "request-steer",
+      text: "refine this",
+      streaming_behavior: "steer",
     }));
-    await new Promise<void>((r) => setImmediate(r));
-    expect(sendUserMessage).not.toHaveBeenCalledWith("after A", undefined);
-
-    harness.handler("agent_end")({ type: "agent_end" });
-    expect(sendUserMessage).not.toHaveBeenCalledWith("after A", { deliverAs: "steer" });
-    harness.handler("turn_end")({ type: "turn_end", turnIndex: 0, timestamp: 0 });
-    expect(sendUserMessage).toHaveBeenCalledWith("after A", { deliverAs: "steer" });
-    const statesA = relayRef.current!.send.mock.calls.slice(sendsBeforeA)
-      .map((c) => c[0] as string).map(decodeSentCt)
-      .filter((d) => d.inner.type === "queued_message_state");
-    expect(statesA.at(-1)?.inner.items).toEqual([]);
-
-    sendUserMessage.mockClear();
-    harness.handler("input")({ type: "input", text: "primary 2", source: "interactive" });
-    harness.handler("turn_start")({ type: "turn_start", turnIndex: 1, timestamp: 1 });
-    await new Promise<void>((r) => setImmediate(r));
-    const sendsBeforeB = relayRef.current!.send.mock.calls.length;
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "ownerA__1234567890",
-      ct: Buffer.from(JSON.stringify({ type: "queued_message_set", id: "q-order-b", text: "after B" })).toString("base64"),
+    await vi.waitFor(() => expect(sendUserMessage).toHaveBeenCalledWith("refine this", { deliverAs: "steer" }));
+    const sent = sentV2(sendsBefore);
+    expect(sent).toContainEqual(expect.objectContaining({
+      peer: context.peer,
+      frame: expect.objectContaining({ type: "user_message_status", status: "unknown_delivery", client_request_id: "request-steer", target_channel_id: context.channelId }),
     }));
-    await new Promise<void>((r) => setImmediate(r));
-    harness.handler("turn_end")({ type: "turn_end", turnIndex: 1, timestamp: 1 });
-    expect(sendUserMessage).not.toHaveBeenCalledWith("after B", { deliverAs: "steer" });
-    harness.handler("agent_end")({ type: "agent_end" });
-    expect(sendUserMessage).toHaveBeenCalledWith("after B", { deliverAs: "steer" });
-    const statesB = relayRef.current!.send.mock.calls.slice(sendsBeforeB)
-      .map((c) => c[0] as string).map(decodeSentCt)
-      .filter((d) => d.inner.type === "queued_message_state");
-    expect(statesB.at(-1)?.inner.items).toEqual([]);
+    expect(sent.some((item) => item.frame.type === "timeline_event")).toBe(false);
   });
 
-  test("queued drain restores item on synchronous sendUserMessage rejection", async () => {
-    await _pairForTest("ownerA__1234567890");
-    _setPiForTest({
-      sendUserMessage: vi.fn(() => { throw new Error("queue rejected"); }),
-      sendMessage: () => undefined,
-    });
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "ownerA__1234567890",
-      ct: Buffer.from(JSON.stringify({
-        type: "queued_message_set", id: "q-fail", text: "after fail",
-      })).toString("base64"),
+  test("v2 image user input reaches the SDK as image and text blocks", async () => {
+    const { contexts } = await setupV2(["owner-image"]);
+    const context = contexts[0]!;
+    const sendUserMessage = vi.fn();
+    _setPiForTest({ sendUserMessage, sendMessage: vi.fn() } as never);
+    relayRef.current!.emit("message", makeV2Line(context.peer, {
+      protocol_version: 2,
+      type: "user_message",
+      id: "wire-image",
+      channel_id: context.channelId,
+      history_generation: context.historyGeneration,
+      client_request_id: "request-image",
+      text: "what is this?",
+      images: [{ data: "QUJD", mime: "image/png" }],
     }));
-    await new Promise<void>((r) => setImmediate(r));
-
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string).map(decodeSentCt);
-    expect(sent.some((d) => d.inner.type === "user_message" && d.inner.id === "q-fail")).toBe(false);
-    expect(sent.find((d) => d.inner.type === "error")?.inner).toMatchObject({
-      type: "error",
-      code: "internal_error",
-      in_reply_to: "q-fail",
-    });
-    const lastState = sent.filter((d) => d.inner.type === "queued_message_state").at(-1);
-    expect(lastState?.inner).toMatchObject({
-      type: "queued_message_state",
-      id: "q-fail",
-      text: "after fail",
-      items: [expect.objectContaining({ id: "q-fail", text: "after fail" })],
-    });
-  });
-
-  test("plan/30: user_message with an image → save preview + send metadata-only custom message", async () => {
-    await _pairForTest("ownerA__1234567890");
-    // Override _pi with a spy to capture the multimodal content sent to the SDK.
-    const sentToAgent: unknown[] = [];
-    const sentMessages: Array<[unknown, ...unknown[]]> = [];
-    const timeline: string[] = [];
-    const messageId = "msg with spaces/and##symbols";
-    _setPiForTest({
-      sendUserMessage: (c: unknown) => { timeline.push("agent"); sentToAgent.push(c); },
-      sendMessage: (...messageArgs) => { timeline.push("preview"); sentMessages.push(messageArgs); },
-    });
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "ownerA__1234567890",
-      ct: Buffer.from(JSON.stringify({
-        type: "user_message",
-        id: messageId,
-        text: "what is this?",
-        images: [{ data: "QUJD", mime: "image/png" }],
-      })).toString("base64"),
-    }));
-    await new Promise<void>((r) => setImmediate(r));
-
-    // Preview is appended before SDK handoff so it cannot steer this turn.
-    expect(timeline).toEqual(["preview", "agent"]);
-    expect(sentToAgent).toHaveLength(1);
-    expect(sentToAgent[0]).toEqual([
+    await vi.waitFor(() => expect(sendUserMessage).toHaveBeenCalledWith([
       { type: "image", data: "QUJD", mimeType: "image/png" },
       { type: "text", text: "what is this?" },
-    ]);
-
-    const previewCall = sentMessages.find((message) => {
-      const current = message[0] as { customType?: unknown };
-      return current.customType === "remote-pi:received-image";
-    });
-    const preview = previewCall?.[0] as { content?: string; display?: boolean; details?: { messageId?: string; mime?: string; path?: string; size?: number; index?: number; text?: string; error?: string; reason?: string } } | undefined;
-    expect(preview).toBeDefined();
-    expect(previewCall?.[1]).toBeUndefined();
-    expect(preview?.content).toBe("");
-    expect(preview?.display).toBe(true);
-    expect(preview?.details).toMatchObject({
-      messageId,
-      index: 0,
-      mime: "image/png",
-      size: 3,
-      text: "what is this?",
-    });
-    expect(preview?.details).not.toHaveProperty("data");
-    expect(preview?.details?.error).toBeUndefined();
-    expect(preview?.details?.reason).toBeUndefined();
-
-    const expectedBasename = "msg-with-spaces-and-symbols-0.png";
-    expect(preview?.details?.path).toContain(tmpdir());
-    expect(preview?.details?.path).toContain("pi-app-");
-    expect(readFileSync(preview!.details!.path!, "utf8")).toBe("ABC");
-    expect(basename(preview?.details?.path ?? "")).toBe(expectedBasename);
-    if (preview?.details?.path && process.platform !== "win32") {
-      const st = statSync(preview.details.path);
-      expect(st.mode & 0o777).toBe(0o600);
-      const stDir = statSync(dirname(preview.details.path));
-      expect(stDir.mode & 0o777).toBe(0o700);
-    }
-
-    // The echo carries `images` so other owners render the bubble.
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string).map(decodeSentCt);
-    const echo = sent.find((d) => d.inner.type === "user_message");
-    expect(echo?.inner).toMatchObject({
-      type: "user_message", id: messageId, text: "what is this?",
-      images: [{ data: "QUJD", mime: "image/png" }],
-    });
+    ], undefined));
   });
 
-  test("JPEG user_message generates optional private PNG preview when converter is available", async () => {
-    _convertToPngMock.mockResolvedValueOnce({ data: "iVBORw0KGgo=", mimeType: "image/png" });
-
-    await _pairForTest("ownerA__1234567890");
-    const sentMessages: Array<[unknown, ...unknown[]]> = [];
-    _setPiForTest({
-      sendUserMessage: () => undefined,
-      sendMessage: (...messageArgs) => { sentMessages.push(messageArgs); },
+  test("compaction publishes a formal v2 system event to every owner", async () => {
+    const { harness, contexts } = await setupV2(["owner-a", "owner-b"]);
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+    harness.handler("session_compact")({
+      type: "session_compact",
+      compactionEntry: {
+        type: "compaction",
+        id: "compaction-entry",
+        summary: "compacted turns",
+        tokensBefore: 123,
+        firstKeptEntryId: "first-kept",
+        timestamp: new Date().toISOString(),
+      },
+      fromExtension: false,
     });
-
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "ownerA__1234567890",
-      ct: Buffer.from(JSON.stringify({
-        type: "user_message",
-        id: "jpeg-msg",
-        text: "jpeg caption",
-        images: [{ data: "QUJD", mime: "image/jpeg" }],
-      })).toString("base64"),
-    }));
-    await new Promise<void>((r) => setImmediate(r));
-
-    const previewCall = sentMessages.find((message) => {
-      const current = message[0] as { customType?: unknown };
-      return current.customType === "remote-pi:received-image";
-    });
-    const preview = previewCall?.[0] as { details?: { path?: string; previewPath?: string } } | undefined;
-    const previewPath = preview?.details?.previewPath;
-    expect(preview?.details?.path).toContain("jpeg-msg-0.jpg");
-    expect(previewPath).toContain("jpeg-msg-0.preview.png");
-    expect(readFileSync(previewPath!)).toEqual(Buffer.from("89504e470d0a1a0a", "hex"));
-    if (process.platform !== "win32") {
-      expect(statSync(previewPath!).mode & 0o777).toBe(0o600);
-    }
+    const events = sentV2(sendsBefore).filter((item) => item.frame.type === "timeline_event");
+    expect(new Set(events.map((item) => item.peer))).toEqual(new Set(contexts.map((context) => context.peer)));
+    expect(events.every((item) => item.frame.event.kind === "compaction" && item.frame.event.payload.summary === "compacted turns")).toBe(true);
   });
 
-  test("converted preview output over 10 MiB falls back to saved original only", async () => {
-    _convertToPngMock.mockResolvedValueOnce({
-      data: Buffer.alloc(10 * 1024 * 1024 + 1).toString("base64"),
-      mimeType: "image/png",
-    });
-
-    await _pairForTest("ownerA__1234567890");
-    const sentMessages: Array<[unknown, ...unknown[]]> = [];
-    _setPiForTest({
-      sendUserMessage: () => undefined,
-      sendMessage: (...messageArgs) => { sentMessages.push(messageArgs); },
-    });
-
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "ownerA__1234567890",
-      ct: Buffer.from(JSON.stringify({
-        type: "user_message",
-        id: "jpeg-big-preview",
-        text: "jpeg caption",
-        images: [{ data: "QUJD", mime: "image/jpeg" }],
-      })).toString("base64"),
-    }));
-    await new Promise<void>((r) => setImmediate(r));
-
-    const previewCall = sentMessages.find((message) => {
-      const current = message[0] as { customType?: unknown };
-      return current.customType === "remote-pi:received-image";
-    });
-    const preview = previewCall?.[0] as { details?: { path?: string; previewPath?: string } } | undefined;
-    expect(preview?.details?.path).toContain("jpeg-big-preview-0.jpg");
-    expect(preview?.details?.previewPath).toBeUndefined();
+  test("provider failures publish formal v2 provider_error events", async () => {
+    const { sessionManager, harness, contexts } = await setupV2(["owner-a", "owner-b"]);
+    const message = { role: "assistant", stopReason: "error", errorMessage: "provider failed", content: [], timestamp: Date.now() };
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+    harness.handler("agent_start")({ type: "agent_start" });
+    harness.handler("message_start")({ type: "message_start", message }, { sessionManager } as never);
+    harness.handler("message_end")({ type: "message_end", message }, { sessionManager } as never);
+    sessionManager.appendMessage(message as never);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const events = sentV2(sendsBefore).filter((item) => item.frame.type === "timeline_event");
+    expect(new Set(events.map((item) => item.peer))).toEqual(new Set(contexts.map((context) => context.peer)));
+    expect(events.every((item) => item.frame.event.kind === "provider_error" && item.frame.event.message === "provider failed")).toBe(true);
   });
 
-  test("active image steering defers local preview until agent_end", async () => {
-    await _pairForTest("ownerA__1234567890");
-    const onInput = captureEventHandler("input");
-    const onAgentEnd = captureEventHandler("agent_end");
-    onInput({ type: "input", text: "already running", source: "interactive" });
-
-    const sentToAgent: unknown[] = [];
-    const sentMessages: Array<[unknown, ...unknown[]]> = [];
-    _setPiForTest({
-      sendUserMessage: (content: unknown) => { sentToAgent.push(content); },
-      sendMessage: (...messageArgs) => { sentMessages.push(messageArgs); },
-    });
-
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "ownerA__1234567890",
-      ct: Buffer.from(JSON.stringify({
-        type: "user_message",
-        id: "steer-image",
-        text: "extra photo",
-        streaming_behavior: "steer",
-        images: [{ data: "QUJD", mime: "image/png" }],
-      })).toString("base64"),
-    }));
-    await new Promise<void>((r) => setImmediate(r));
-
-    expect(sentToAgent).toHaveLength(1);
-    expect(sentMessages).toHaveLength(0);
-
-    onAgentEnd({ type: "agent_end", messages: [] });
-    expect(sentMessages).toHaveLength(1);
-    expect((sentMessages[0][0] as { customType?: unknown }).customType).toBe("remote-pi:received-image");
-  });
-
-  test("slow idle JPEG conversion defers preview if another turn starts first", async () => {
-    let resolveConversion: ((value: { data: string; mimeType: string }) => void) | undefined;
-    _convertToPngMock.mockReturnValueOnce(new Promise((resolve) => {
-      resolveConversion = resolve;
-    }));
-
-    await _pairForTest("ownerA__1234567890");
-    const onInput = captureEventHandler("input");
-    const onAgentEnd = captureEventHandler("agent_end");
-    const sentMessages: Array<[unknown, ...unknown[]]> = [];
-    _setPiForTest({
-      sendUserMessage: () => undefined,
-      sendMessage: (...messageArgs) => { sentMessages.push(messageArgs); },
-    });
-
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "ownerA__1234567890",
-      ct: Buffer.from(JSON.stringify({
-        type: "user_message",
-        id: "slow-jpeg",
-        text: "slow photo",
-        images: [{ data: "QUJD", mime: "image/jpeg" }],
-      })).toString("base64"),
-    }));
-    await vi.waitFor(() => expect(_convertToPngMock).toHaveBeenCalled());
-
-    onInput({ type: "input", text: "overtaking local turn", source: "interactive" });
-    resolveConversion?.({ data: "iVBORw0KGgo=", mimeType: "image/png" });
-    await new Promise<void>((r) => setImmediate(r));
-
-    expect(sentMessages).toHaveLength(0);
-
-    onAgentEnd({ type: "agent_end", messages: [] });
-    expect(sentMessages).toHaveLength(1);
-    expect((sentMessages[0][0] as { customType?: unknown }).customType).toBe("remote-pi:received-image");
-  });
 
   test("received-image preview messages are filtered out of provider and compaction context", () => {
     const previewMessage = { role: "custom", customType: "remote-pi:received-image", content: "", display: true, details: { path: "/tmp/photo.png" } };
@@ -1907,464 +1692,6 @@ describe("multi-channel broadcast (W2D)", () => {
     }
   });
 
-  test("plan/30: user_message without images → no `images` key on the echo (text path unchanged)", async () => {
-    await _pairForTest("ownerA__1234567890");
-    const sendUserMessage = vi.fn();
-    _setPiForTest({
-      sendUserMessage,
-      sendMessage: () => undefined,
-    });
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "ownerA__1234567890",
-      ct: Buffer.from(JSON.stringify({
-        type: "user_message", id: "msg-txt", text: "hi",
-      })).toString("base64"),
-    }));
-    await new Promise<void>((r) => setImmediate(r));
-    expect(sendUserMessage).toHaveBeenCalledWith("hi", { deliverAs: "steer" });
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string).map(decodeSentCt);
-    const echo = sent.find((d) => d.inner.type === "user_message");
-    expect(echo?.inner).toMatchObject({ type: "user_message", id: "msg-txt", text: "hi" });
-    expect(echo?.inner).not.toHaveProperty("images");
-    expect(echo?.inner).not.toHaveProperty("streaming_behavior");
-  });
-
-  test(
-    "plan/43: active steering calls sendUserMessage(deliverAs='steer')",
-    async () => {
-      await _pairForTest("ownerA__1234567890");
-      const onInput = captureEventHandler("input");
-      onInput({ type: "input", text: "primary", source: "interactive" });
-      await new Promise<void>((r) => setImmediate(r));
-
-      const sendUserMessage = vi.fn();
-      _setPiForTest({
-        sendUserMessage,
-        sendMessage: () => undefined,
-      });
-      const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-      relayRef.current!.emit("message", JSON.stringify({
-        peer: "ownerA__1234567890",
-        ct: Buffer.from(JSON.stringify({
-          type: "user_message",
-          id: "msg-steer",
-          text: "refine this",
-          streaming_behavior: "steer",
-        })).toString("base64"),
-      }));
-      await new Promise<void>((r) => setImmediate(r));
-
-      expect(sendUserMessage).toHaveBeenCalledTimes(1);
-      expect(sendUserMessage).toHaveBeenCalledWith("refine this", { deliverAs: "steer" });
-      const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
-        .map((c) => c[0] as string).map(decodeSentCt);
-      const echo = sent.find((d) => d.inner.type === "user_message");
-      expect(echo?.inner).toMatchObject({
-        type: "user_message",
-        id: "msg-steer",
-        text: "refine this",
-        streaming_behavior: "steer",
-      });
-    },
-  );
-
-  test("plan/43: persisted user message clears the oldest pending steer", async () => {
-    await _pairForTest("ownerA__1234567890");
-    const sendUserMessage = vi.fn();
-    _setPiForTest({
-      sendUserMessage,
-      sendMessage: () => undefined,
-    });
-    const onMessageEnd = captureEventHandler("message_end");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "ownerA__1234567890",
-      ct: Buffer.from(JSON.stringify({
-        type: "user_message",
-        id: "msg-steer-end-consumed",
-        text: "consume this persisted steer",
-        streaming_behavior: "steer",
-      })).toString("base64"),
-    }));
-    await new Promise<void>((r) => setImmediate(r));
-    expect(_getPendingSteerIdsForTest("consume this persisted steer")).toEqual(["msg-steer-end-consumed"]);
-
-    onMessageEnd({
-      type: "message_end",
-      message: {
-        role: "user",
-        content: [{ type: "text", text: "consume this persisted steer" }],
-        timestamp: Date.now(),
-      },
-    });
-    await new Promise<void>((r) => setImmediate(r));
-    expect(_getPendingSteerIdsForTest("consume this persisted steer")).toEqual([]);
-
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string).map(decodeSentCt);
-    expect(sent.some((d) => (
-      d.inner.type === "steer_consumed" && d.inner.id === "msg-steer-end-consumed"
-    ))).toBe(true);
-  });
-
-  test("plan/43: started user message clears the oldest pending steer", async () => {
-    await _pairForTest("ownerA__1234567890");
-    const sendUserMessage = vi.fn();
-    _setPiForTest({
-      sendUserMessage,
-      sendMessage: () => undefined,
-    });
-    const onMessageStart = captureEventHandler("message_start");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "ownerA__1234567890",
-      ct: Buffer.from(JSON.stringify({
-        type: "user_message",
-        id: "msg-steer-consumed",
-        text: "consume this exact steer",
-        streaming_behavior: "steer",
-      })).toString("base64"),
-    }));
-    await new Promise<void>((r) => setImmediate(r));
-    expect(_getPendingSteerIdsForTest("consume this exact steer")).toEqual(["msg-steer-consumed"]);
-
-    onMessageStart({
-      type: "message_start",
-      message: {
-        role: "user",
-        content: [{ type: "text", text: "SDK-rendered text differed" }],
-        timestamp: Date.now(),
-      },
-    });
-    await new Promise<void>((r) => setImmediate(r));
-    expect(_getPendingSteerIdsForTest("consume this exact steer")).toEqual([]);
-    expect(_getActivePeerCountForTest()).toBe(1);
-
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string).map(decodeSentCt);
-    expect(sent.some((d) => (
-      d.inner.type === "steer_consumed" && d.inner.id === "msg-steer-consumed"
-    ))).toBe(true);
-  });
-
-  test("plan/43: message_start plus message_end consumes one steer only", async () => {
-    await _pairForTest("ownerA__1234567890");
-    _setPiForTest({
-      sendUserMessage: vi.fn(),
-      sendMessage: () => undefined,
-    });
-    const onMessageStart = captureEventHandler("message_start");
-    const onMessageEnd = captureEventHandler("message_end");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    for (const [id, text] of [["steer-1", "1"], ["steer-2", "2"]]) {
-      relayRef.current!.emit("message", JSON.stringify({
-        peer: "ownerA__1234567890",
-        ct: Buffer.from(JSON.stringify({
-          type: "user_message",
-          id,
-          text,
-          streaming_behavior: "steer",
-        })).toString("base64"),
-      }));
-    }
-    await new Promise<void>((r) => setImmediate(r));
-
-    const event = {
-      type: "message_start",
-      message: {
-        role: "user",
-        content: [{ type: "text", text: "1" }],
-        timestamp: Date.now(),
-      },
-    };
-    onMessageStart(event);
-    onMessageEnd({ ...event, type: "message_end" });
-    await new Promise<void>((r) => setImmediate(r));
-
-    expect(_getPendingSteerIdsForTest("1")).toEqual([]);
-    expect(_getPendingSteerIdsForTest("2")).toEqual(["steer-2"]);
-    const consumed = relayRef.current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt)
-      .filter((d) => d.inner.type === "steer_consumed");
-    expect(consumed.map((d) => (d.inner as { id: string }).id)).toEqual(["steer-1"]);
-  });
-
-  test("plan/43: steering without a known turn id still reaches SDK as steer", async () => {
-    await _pairForTest("ownerA__1234567890");
-    expect(_getCurrentTurnIdForTest()).toBeNull();
-    const sendUserMessage = vi.fn();
-    _setPiForTest({
-      sendUserMessage,
-      sendMessage: () => undefined,
-    });
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "ownerA__1234567890",
-      ct: Buffer.from(JSON.stringify({
-        type: "user_message",
-        id: "msg-stale-steer",
-        text: "refine while stale",
-        streaming_behavior: "steer",
-      })).toString("base64"),
-    }));
-    await new Promise<void>((r) => setImmediate(r));
-
-    expect(sendUserMessage).toHaveBeenCalledTimes(1);
-    expect(sendUserMessage).toHaveBeenCalledWith("refine while stale", { deliverAs: "steer" });
-    expect(_getCurrentTurnIdForTest()).toBe("msg-stale-steer");
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string).map(decodeSentCt);
-    const echo = sent.find((d) => d.inner.type === "user_message");
-    expect(echo?.inner).toMatchObject({
-      type: "user_message",
-      id: "msg-stale-steer",
-      text: "refine while stale",
-      streaming_behavior: "steer",
-    });
-  });
-
-  test("plan/43: busy app message without wire behavior is defensively steered", async () => {
-    await _pairForTest("ownerA__1234567890");
-    const onTurnStart = captureEventHandler("turn_start");
-    onTurnStart({ type: "turn_start", turnIndex: 0, timestamp: 0 });
-    expect(_getCurrentTurnIdForTest()).toBeNull();
-    const sendUserMessage = vi.fn();
-    _setPiForTest({
-      sendUserMessage,
-      sendMessage: () => undefined,
-    });
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "ownerA__1234567890",
-      ct: Buffer.from(JSON.stringify({
-        type: "user_message",
-        id: "msg-busy-no-mode",
-        text: "late correction",
-      })).toString("base64"),
-    }));
-    await new Promise<void>((r) => setImmediate(r));
-
-    expect(sendUserMessage).toHaveBeenCalledTimes(1);
-    expect(sendUserMessage).toHaveBeenCalledWith("late correction", { deliverAs: "steer" });
-    expect(_getCurrentTurnIdForTest()).toBe("msg-busy-no-mode");
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string).map(decodeSentCt);
-    const echo = sent.find((d) => d.inner.type === "user_message");
-    expect(echo?.inner).toMatchObject({
-      type: "user_message",
-      id: "msg-busy-no-mode",
-      text: "late correction",
-      streaming_behavior: "steer",
-    });
-  });
-
-  test("plan/43: steering sendUserMessage throw returns correlated error and no echo", async () => {
-    await _pairForTest("ownerA__1234567890");
-    const onInput = captureEventHandler("input");
-    onInput({ type: "input", text: "primary", source: "interactive" });
-    await new Promise<void>((r) => setImmediate(r));
-    const priorTurn = _getCurrentTurnIdForTest();
-    expect(priorTurn).toMatch(/^local_/);
-
-    _setPiForTest({
-      sendUserMessage: vi.fn(() => { throw new Error("steer rejected"); }),
-      sendMessage: () => undefined,
-    });
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "ownerA__1234567890",
-      ct: Buffer.from(JSON.stringify({
-        type: "user_message",
-        id: "msg-steer-fail",
-        text: "bad steer",
-        streaming_behavior: "steer",
-      })).toString("base64"),
-    }));
-    await new Promise<void>((r) => setImmediate(r));
-
-    expect(_getCurrentTurnIdForTest()).toBe(priorTurn);
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string).map(decodeSentCt);
-    expect(sent.some((d) => d.inner.type === "user_message" && d.inner.id === "msg-steer-fail")).toBe(false);
-    const error = sent.find((d) => d.inner.type === "error");
-    expect(error?.inner).toMatchObject({
-      type: "error",
-      in_reply_to: "msg-steer-fail",
-      code: "internal_error",
-    });
-    expect((error?.inner as { message?: string } | undefined)?.message).toContain("steer rejected");
-  });
-
-  test("plan/43: steering does not overwrite current turn id", async () => {
-    await _pairForTest("ownerA__1234567890");
-    // Seed by terminal input (local user turn) so _currentTurnId exists.
-    const onInput = captureEventHandler("input");
-    onInput({ type: "input", text: "primary", source: "interactive" });
-
-    // Wait for async input handler effects.
-    await new Promise<void>((r) => setImmediate(r));
-    expect(_getCurrentTurnIdForTest()).toMatch(/^local_/);
-    const priorTurn = _getCurrentTurnIdForTest();
-    expect(priorTurn).toBeTruthy();
-
-    _setPiForTest({
-      sendUserMessage: () => undefined,
-      sendMessage: () => undefined,
-    });
-
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "ownerA__1234567890",
-      ct: Buffer.from(JSON.stringify({
-        type: "user_message",
-        id: "msg-steer",
-        text: "steer this",
-        streaming_behavior: "steer",
-      })).toString("base64"),
-    }));
-    await new Promise<void>((r) => setImmediate(r));
-
-    expect(_getCurrentTurnIdForTest()).toBe(priorTurn);
-  });
-
-  test("plan/32: session_compact → broadcasts compaction, working=false, buffers a marker", async () => {
-    await _pairForTest("ownerA__1234567890");
-    _setMessageBufferForTest([]);
-    const onCompact = captureEventHandler("session_compact");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-    const ctrlBefore = relayRef.current!.sendControl.mock.calls.length;
-
-    onCompact({
-      type: "session_compact",
-      compactionEntry: {
-        type: "compaction", summary: "compacted 10 turns", tokensBefore: 12345,
-        firstKeptEntryId: "e1", timestamp: "2026-05-31T00:00:00Z",
-      },
-      fromExtension: false,
-    });
-
-    // (1) compaction broadcast reaches the owner
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string).map(decodeSentCt);
-    const compaction = sent.find((d) => d.inner.type === "compaction");
-    expect(compaction?.inner).toMatchObject({
-      type: "compaction", summary: "compacted 10 turns", tokens_before: 12345,
-    });
-
-    // (3) working=false via room_meta_update
-    const ctrls = relayRef.current!.sendControl.mock.calls.slice(ctrlBefore)
-      .map((c) => c[0] as { type: string; meta?: { working?: boolean } })
-      .filter((f) => f.type === "room_meta_update");
-    expect(ctrls.some((f) => f.meta?.working === false)).toBe(true);
-
-    // (2) a compaction marker landed in _messageBuffer (survives session_sync)
-    const buf = _getMessageBufferForTest() as Array<{ role?: string; content?: unknown; tokensBefore?: number }>;
-    expect(buf.some((m) =>
-      m.role === "compaction" && m.content === "compacted 10 turns" && m.tokensBefore === 12345,
-    )).toBe(true);
-  });
-
-  test("provider error (assistant stopReason:error) → forwards `error` to owners (was silent)", async () => {
-    await _pairForTest("ownerA__1234567890");
-    const onMsgEnd = captureEventHandler("message_end");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    onMsgEnd({
-      type: "message_end",
-      message: {
-        role: "assistant", stopReason: "error",
-        errorMessage: "Provider finish_reason: error", content: [],
-      },
-    });
-
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string).map(decodeSentCt);
-    const err = sent.find((d) => d.inner.type === "error");
-    expect(err?.inner).toMatchObject({
-      type: "error", code: "provider_error", message: "Provider finish_reason: error",
-    });
-  });
-
-  test("normal assistant turn (stopReason:stop) → no error forwarded", async () => {
-    await _pairForTest("ownerA__1234567890");
-    const onMsgEnd = captureEventHandler("message_end");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    onMsgEnd({
-      type: "message_end",
-      message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "done" }] },
-    });
-
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string).map(decodeSentCt);
-    expect(sent.some((d) => d.inner.type === "error")).toBe(false);
-  });
-
-  test("rebroadcast happens BEFORE the agent processes the message", async () => {
-    // We can't observe SDK ordering directly with the standard mockPi, but
-    // we can verify the echo fires synchronously after the inner is
-    // received — i.e., it's queued onto `relay.send` before any async
-    // SDK work resolves. The test asserts at least the order in
-    // `relay.send.mock.calls`: user_message echoes precede any reply
-    // generated downstream (none expected here since SDK is mocked).
-    await _pairForTest("ownerA__1234567890");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "ownerA__1234567890",
-      ct: Buffer.from(JSON.stringify({
-        type: "user_message", id: "msg-order-1", text: "order check",
-      })).toString("base64"),
-    }));
-    await new Promise<void>((r) => setImmediate(r));
-
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string).map(decodeSentCt);
-    // First outbound after the user_message arrives must be the echo.
-    expect(sent[0]?.inner).toMatchObject({
-      type: "user_message", id: "msg-order-1", text: "order check",
-    });
-  });
-
-  test("user_message lands in _messageBuffer → session_sync returns it as user_input", async () => {
-    // The SDK side normally pushes role="user" entries to the buffer on
-    // its `message_end` event. We simulate that effect with the test
-    // helper so we can verify session_sync replays correctly.
-    await _pairForTest("ownerA__1234567890");
-
-    // Simulate the SDK persisting the user turn.
-    _setMessageBufferForTest([
-      { role: "user", content: "oi", timestamp: 1700000000000 },
-    ]);
-    _setSessionStartedAtForTest(1699999999000);
-
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "ownerA__1234567890",
-      ct: Buffer.from(JSON.stringify({
-        type: "session_sync", id: "sync-buffer-1", limit: 50,
-      })).toString("base64"),
-    }));
-    await new Promise<void>((r) => setImmediate(r));
-
-    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string).map(decodeSentCt);
-    const histories = sent.filter((d) => d.inner.type === "session_history");
-    expect(histories).toHaveLength(1);
-    const events = (histories[0]!.inner as unknown as { events: unknown[] }).events;
-    expect(events).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: "user_input", text: "oi" }),
-    ]));
-  });
 });
 
 describe("user_input mirroring", () => {
