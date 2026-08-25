@@ -424,7 +424,6 @@ describe("state machine + pair_request flow", () => {
     _consumeCalls.length = 0;
     _tokenStatus = "ok";
     relayRef.current = null;
-    // Restore default consumeToken behavior — earlier tests can override it.
     const qr = await import("./pairing/qr.js");
     (qr.qrSession.consumeToken as unknown as ReturnType<typeof vi.fn>).mockImplementation(
       (token: string) => {
@@ -432,9 +431,20 @@ describe("state machine + pair_request flow", () => {
         return _tokenStatus;
       },
     );
-    // Force idle via stop
     const stop = captureHandler("remote-pi stop");
     await stop("", makeMockCtx());
+
+    const sessionManager = (await import("@earendil-works/pi-coding-agent")).SessionManager.inMemory(process.cwd());
+    const harness = captureEventHarness();
+    harness.handler("session_start")(
+      { type: "session_start", reason: "startup" },
+      {
+        sessionManager,
+        ui: { notify: vi.fn() },
+        abort: vi.fn(),
+        compact: vi.fn(),
+      } as never,
+    );
   });
 
   test("start: idle → started", async () => {
@@ -445,10 +455,6 @@ describe("state machine + pair_request flow", () => {
 
   test("pair without start → warning, state stays idle", async () => {
     expect(_getState()).toBe("idle");
-    // Isolated empty cwd so `localConfigExists` is deterministically false on
-    // every OS. The old fake path (`/home/user/...`) is non-writable on macOS
-    // (config never exists → first-time path) but writable on Windows (a config
-    // could exist → wrong auto-bootstrap path, slow real-socket work).
     const cwd = mkdtempSync(join(tmpdir(), "pi-ext-cwd-"));
     const pair = captureHandler("remote-pi pair");
     const ctx = makeMockCtx(cwd);
@@ -458,15 +464,13 @@ describe("state machine + pair_request flow", () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
-  test("valid pair_request → pair_ok + state paired + peer persisted", async () => {
-    _tokenStatus = "ok";
-    const APP_PEER_ID = "valid-app-peer-base64";
-
+  test("valid v2 pair_request → pair_ok + state paired + peer persisted", async () => {
+    const peer = "valid-app-peer-base64";
     captureHandler("remote-pi");
     await _connectForTest(makeMockCtx());
-    expect(_getState()).toBe("started");
 
-    relayRef.current!.emit("message", makeInnerLine(APP_PEER_ID, {
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
       type: "pair_request",
       id: "req-1",
       token: "test-token",
@@ -474,237 +478,224 @@ describe("state machine + pair_request flow", () => {
     }));
 
     await vi.waitFor(() => expect(_getState()).toBe("paired"), { timeout: 2000 });
-
-    // pair_ok must have been sent back to the app peer
-    const sent = relayRef.current!.send.mock.calls.map((c) => c[0] as string);
-    const pairOks = sent.map(decodeSentCt).filter((d) => d.inner.type === "pair_ok");
+    const pairOks = relayRef.current!.send.mock.calls
+      .map((call) => decodeV2Sent(call[0] as string))
+      .filter((sent) => sent.frame.type === "pair_ok");
     expect(pairOks).toHaveLength(1);
-    expect(pairOks[0]!.peer).toBe(APP_PEER_ID);
-    expect(pairOks[0]!.inner).toMatchObject({
-      type: "pair_ok",
-      in_reply_to: "req-1",
+    expect(pairOks[0]).toMatchObject({
+      peer,
+      frame: {
+        protocol_version: 2,
+        type: "pair_ok",
+        in_reply_to: "req-1",
+        harness: { name: "Pi coding agent" },
+      },
     });
-
-    // Plan/27 Wave A: pair_ok carries harness + hostname so the app can
-    // render a meaningful device row. Both are required in every NEW
-    // pairing emitted by this code path (wire type still has them
-    // optional for backward-compat with older Pi builds).
-    const inner = pairOks[0]!.inner as {
-      harness?: { name: string; version: string };
-      hostname?: string;
-    };
-    expect(inner.harness).toBeDefined();
-    expect(inner.harness!.name).toBe("Pi coding agent");
-    expect(typeof inner.harness!.version).toBe("string");
-    expect(inner.harness!.version.length).toBeGreaterThan(0);
-    expect(typeof inner.hostname).toBe("string");
-    expect(inner.hostname!.length).toBeGreaterThan(0);
-
-    // Peer must have been persisted
-    expect(_addedPeers).toHaveLength(1);
-    expect(_addedPeers[0]).toMatchObject({
-      name: "iPhone do Jacob",
-      remote_epk: APP_PEER_ID,
-    });
+    const pairOk = pairOks[0]!.frame as Extract<ReturnType<typeof decodeServerFrameV2>, { type: "pair_ok" }>;
+    expect(pairOk.harness?.version.length).toBeGreaterThan(0);
+    expect(pairOk.hostname?.length).toBeGreaterThan(0);
+    expect(_addedPeers).toEqual([
+      expect.objectContaining({ name: "iPhone do Jacob", remote_epk: peer }),
+    ]);
   });
 
-  test("expired token → pair_error{token_expired} + state stays started", async () => {
+  test("expired token → v2 pair_error{token_expired} + state stays started", async () => {
     _tokenStatus = "expired";
-    const APP_PEER_ID = "stale-token-peer";
-
     captureHandler("remote-pi");
     await _connectForTest(makeMockCtx());
 
-    relayRef.current!.emit("message", makeInnerLine(APP_PEER_ID, {
+    relayRef.current!.emit("message", makeV2Line("stale-token-peer", {
+      protocol_version: 2,
       type: "pair_request",
       id: "req-x",
       token: "test-token",
       device_name: "iPhone",
     }));
 
-    await new Promise((r) => setTimeout(r, 50));
-
+    await vi.waitFor(() => {
+      const frames = relayRef.current!.send.mock.calls.map((call) => decodeV2Sent(call[0] as string).frame);
+      expect(frames).toContainEqual(expect.objectContaining({
+        type: "pair_error",
+        in_reply_to: "req-x",
+        code: "token_expired",
+      }));
+    });
     expect(_getState()).toBe("started");
     expect(_addedPeers).toHaveLength(0);
-
-    const sent = relayRef.current!.send.mock.calls.map((c) => c[0] as string);
-    const errs = sent.map(decodeSentCt).filter((d) => d.inner.type === "pair_error");
-    expect(errs).toHaveLength(1);
-    expect(errs[0]!.inner).toMatchObject({
-      type: "pair_error",
-      in_reply_to: "req-x",
-      code: "token_expired",
-    });
   });
 
-  test("consumed token → pair_error{token_consumed} on second pair_request", async () => {
-    // First call returns ok (consumes); second returns consumed.
+  test("consumed token → v2 pair_error{token_consumed} on second pair_request", async () => {
     let calls = 0;
-    _tokenStatus = "ok";
-    // override consumeToken to return ok once, then consumed
     const qr = await import("./pairing/qr.js");
     (qr.qrSession.consumeToken as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-      () => {
-        calls += 1;
-        return calls === 1 ? "ok" : "consumed";
-      },
+      () => ++calls === 1 ? "ok" : "consumed",
     );
-
-    const APP_PEER_A = "peer-a";
-    const APP_PEER_B = "peer-b";
-
     captureHandler("remote-pi");
     await _connectForTest(makeMockCtx());
 
-    // First pair_request from peer A → ok
-    relayRef.current!.emit("message", makeInnerLine(APP_PEER_A, {
-      type: "pair_request", id: "req-a", token: "test-token", device_name: "Phone A",
+    relayRef.current!.emit("message", makeV2Line("peer-a", {
+      protocol_version: 2,
+      type: "pair_request",
+      id: "req-a",
+      token: "test-token",
+      device_name: "Phone A",
     }));
     await vi.waitFor(() => expect(_getState()).toBe("paired"), { timeout: 2000 });
-
-    // Disconnect so we're back in started state for the second attempt
-    _onPeerDisconnect();
+    _onPeerDisconnect("peer-a");
     expect(_getState()).toBe("started");
 
-    // Second pair_request from peer B with same token → consumed
-    relayRef.current!.emit("message", makeInnerLine(APP_PEER_B, {
-      type: "pair_request", id: "req-b", token: "test-token", device_name: "Phone B",
+    relayRef.current!.emit("message", makeV2Line("peer-b", {
+      protocol_version: 2,
+      type: "pair_request",
+      id: "req-b",
+      token: "test-token",
+      device_name: "Phone B",
     }));
-    await new Promise((r) => setTimeout(r, 50));
-
-    expect(_getState()).toBe("started");  // didn't transition
-    const sent = relayRef.current!.send.mock.calls.map((c) => c[0] as string);
-    const errs = sent.map(decodeSentCt).filter((d) =>
-      d.inner.type === "pair_error" && d.inner["in_reply_to"] === "req-b",
-    );
-    expect(errs).toHaveLength(1);
-    expect(errs[0]!.inner).toMatchObject({ code: "token_consumed" });
+    await vi.waitFor(() => {
+      const frames = relayRef.current!.send.mock.calls.map((call) => decodeV2Sent(call[0] as string).frame);
+      expect(frames).toContainEqual(expect.objectContaining({
+        type: "pair_error",
+        in_reply_to: "req-b",
+        code: "token_consumed",
+      }));
+    });
+    expect(_getState()).toBe("started");
   });
 
-  test("paired peer ignores subsequent pair_request (idempotent)", async () => {
-    _tokenStatus = "ok";
-    const APP_PEER_ID = "already-paired";
-
+  test("paired v2 peer rejects a subsequent pair_request through the service", async () => {
+    const peer = "already-paired";
     captureHandler("remote-pi");
     await _connectForTest(makeMockCtx());
-
-    // First pair_request → paired
-    relayRef.current!.emit("message", makeInnerLine(APP_PEER_ID, {
-      type: "pair_request", id: "req-1", token: "test-token", device_name: "Phone",
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
+      type: "pair_request",
+      id: "req-1",
+      token: "test-token",
+      device_name: "Phone",
     }));
     await vi.waitFor(() => expect(_getState()).toBe("paired"), { timeout: 2000 });
-
     const sendsBefore = relayRef.current!.send.mock.calls.length;
 
-    // Second pair_request from same peer while paired → routed through
-    // PlainPeerChannel.onMessage → routeClientMessage which ignores it.
-    relayRef.current!.emit("message", makeInnerLine(APP_PEER_ID, {
-      type: "pair_request", id: "req-2", token: "test-token", device_name: "Phone",
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
+      type: "pair_request",
+      id: "req-2",
+      token: "test-token",
+      device_name: "Phone",
     }));
-    await new Promise((r) => setTimeout(r, 50));
-
-    expect(_getState()).toBe("paired");
-    // No additional outbound messages from this second pair_request
-    expect(relayRef.current!.send.mock.calls.length).toBe(sendsBefore);
+    await vi.waitFor(() => {
+      const frames = relayRef.current!.send.mock.calls
+        .slice(sendsBefore)
+        .map((call) => decodeV2Sent(call[0] as string).frame);
+      expect(frames).toContainEqual(expect.objectContaining({
+        type: "protocol_error",
+        in_reply_to: "req-2",
+        code: "protocol_upgrade_required",
+      }));
+    });
   });
 
-  test("known peer reconnect: any non-pair message from peers.json → paired", async () => {
-    const APP_PEER_ID = OWNER_STANDARD_FIXTURE;
-    _knownPeers.push({
-      name: "Known App",
-      remote_epk: APP_PEER_ID,
-      paired_at: new Date().toISOString(),
-    });
-
+  test("known peer reconnects with session_hello and receives directed session_ready", async () => {
+    const peer = OWNER_STANDARD_FIXTURE;
+    _knownPeers.push({ name: "Known App", remote_epk: peer, paired_at: new Date().toISOString() });
     captureHandler("remote-pi");
     await _connectForTest(makeMockCtx());
-    expect(_getState()).toBe("started");
 
-    relayRef.current!.emit("message", makeInnerLine(APP_PEER_ID, {
-      type: "ping", id: "ping-reconnect",
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
+      type: "session_hello",
+      id: "hello-reconnect",
+      channel_id: "channel-reconnect",
     }));
 
     await vi.waitFor(() => expect(_getState()).toBe("paired"), { timeout: 2000 });
+    const ready = relayRef.current!.send.mock.calls
+      .map((call) => decodeV2Sent(call[0] as string).frame)
+      .find((frame) => frame.type === "session_ready");
+    expect(ready).toMatchObject({
+      type: "session_ready",
+      in_reply_to: "hello-reconnect",
+      target_channel_id: "channel-reconnect",
+    });
   });
 
-  test("unknown peer non-pair message → state stays started, no peer added", async () => {
+  test("unknown peer non-pair v2 message → state stays started, no peer added", async () => {
     captureHandler("remote-pi");
     await _connectForTest(makeMockCtx());
-
-    relayRef.current!.emit("message", makeInnerLine("unknown-peer", {
-      type: "ping", id: "ping-x",
+    relayRef.current!.emit("message", makeV2Line("unknown-peer", {
+      protocol_version: 2,
+      type: "ping",
+      id: "ping-x",
+      channel_id: "unknown-channel",
+      history_generation: "unknown-generation",
     }));
-    await new Promise((r) => setTimeout(r, 50));
+    await vi.waitFor(() => expect(relayRef.current!.send).toHaveBeenCalled());
 
     expect(_getState()).toBe("started");
     expect(_addedPeers).toHaveLength(0);
-  });
-
-  test("unknown peer + user_message → relay receives error{unknown_peer}", async () => {
-    captureHandler("remote-pi");
-    await _connectForTest(makeMockCtx());
-
-    relayRef.current!.emit("message", makeInnerLine("revoked-peer", {
-      type: "user_message", id: "msg-x", text: "are you there",
-    }));
-    await new Promise((r) => setTimeout(r, 50));
-
-    expect(_getState()).toBe("started");
-    const sent = relayRef.current!.send.mock.calls.map((c) => c[0] as string);
-    const errors = sent.map(decodeSentCt).filter((d) =>
-      d.inner.type === "error" && d.inner["code"] === "unknown_peer",
-    );
-    expect(errors).toHaveLength(1);
-    expect(errors[0]!.peer).toBe("revoked-peer");
-    expect(errors[0]!.inner).toMatchObject({
-      type: "error",
-      code: "unknown_peer",
+    expect(decodeV2Sent(relayRef.current!.send.mock.calls[0]![0] as string).frame).toMatchObject({
+      type: "protocol_error",
+      code: "invalid_channel",
     });
   });
 
-  test("unknown peer + pair_request → NOT replied with error{unknown_peer}", async () => {
-    // Pair_request is the legitimate path for unknown peers — handler must
-    // respond with pair_ok or pair_error, never with the generic
-    // error{unknown_peer}. Use token_unknown to keep peer unknown afterwards.
+  test("unknown peer + user_message → v2 protocol_error{invalid_channel}", async () => {
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
+    relayRef.current!.emit("message", makeV2Line("revoked-peer", {
+      protocol_version: 2,
+      type: "user_message",
+      id: "msg-x",
+      channel_id: "revoked-channel",
+      history_generation: "revoked-generation",
+      client_request_id: "request-x",
+      text: "are you there",
+    }));
+    await vi.waitFor(() => expect(relayRef.current!.send).toHaveBeenCalled());
+
+    const sent = decodeV2Sent(relayRef.current!.send.mock.calls[0]![0] as string);
+    expect(sent.peer).toBe("revoked-peer");
+    expect(sent.frame).toMatchObject({ type: "protocol_error", code: "invalid_channel" });
+  });
+
+  test("unknown peer + v2 pair_request receives pair_error, not invalid_channel", async () => {
     _tokenStatus = "unknown";
     captureHandler("remote-pi");
     await _connectForTest(makeMockCtx());
-
-    relayRef.current!.emit("message", makeInnerLine("stranger", {
-      type: "pair_request", id: "req-stranger", token: "test-token", device_name: "Stranger",
+    relayRef.current!.emit("message", makeV2Line("stranger", {
+      protocol_version: 2,
+      type: "pair_request",
+      id: "req-stranger",
+      token: "test-token",
+      device_name: "Stranger",
     }));
-    await new Promise((r) => setTimeout(r, 50));
+    await vi.waitFor(() => expect(relayRef.current!.send).toHaveBeenCalled());
 
-    const sent = relayRef.current!.send.mock.calls.map((c) => c[0] as string);
-    const unknownPeerErrs = sent.map(decodeSentCt).filter((d) =>
-      d.inner.type === "error" && d.inner["code"] === "unknown_peer",
-    );
-    expect(unknownPeerErrs).toHaveLength(0);
-
-    // Sanity: a pair_error{token_unknown} should have been sent instead.
-    const pairErrs = sent.map(decodeSentCt).filter((d) => d.inner.type === "pair_error");
-    expect(pairErrs).toHaveLength(1);
-    expect(pairErrs[0]!.inner).toMatchObject({ code: "token_unknown" });
+    const frames = relayRef.current!.send.mock.calls.map((call) => decodeV2Sent(call[0] as string).frame);
+    expect(frames).toContainEqual(expect.objectContaining({ type: "pair_error", code: "token_unknown" }));
+    expect(frames).not.toContainEqual(expect.objectContaining({ type: "protocol_error", code: "invalid_channel" }));
   });
 
-  test("_onPeerDisconnect: paired → started, listener re-installed", async () => {
-    _tokenStatus = "ok";
-    const APP_PEER_ID = OWNER_STANDARD_FIXTURE;
-
+  test("_onPeerDisconnect: paired → started, session_hello reconnects known peer", async () => {
+    const peer = OWNER_STANDARD_FIXTURE;
     captureHandler("remote-pi");
     await _connectForTest(makeMockCtx());
-
-    relayRef.current!.emit("message", makeInnerLine(APP_PEER_ID, {
-      type: "pair_request", id: "req-1", token: "test-token", device_name: "Phone",
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
+      type: "pair_request",
+      id: "req-1",
+      token: "test-token",
+      device_name: "Phone",
     }));
     await vi.waitFor(() => expect(_getState()).toBe("paired"), { timeout: 2000 });
 
-    _onPeerDisconnect();
+    _onPeerDisconnect(peer);
     expect(_getState()).toBe("started");
-
-    // Reconnect via a ping (known peer now) → paired again
-    relayRef.current!.emit("message", makeInnerLine(APP_PEER_ID, {
-      type: "ping", id: "ping-reconnect",
+    relayRef.current!.emit("message", makeV2Line(peer, {
+      protocol_version: 2,
+      type: "session_hello",
+      id: "hello-reconnect",
+      channel_id: "channel-reconnect",
     }));
     await vi.waitFor(() => expect(_getState()).toBe("paired"), { timeout: 2000 });
   });
