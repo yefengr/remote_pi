@@ -251,14 +251,19 @@ export class TimelineV2Service {
   private handleCancel(frame: Extract<ClientFrame, { type: "cancel" }>): ServerFrame[] {
     const error = this.ensureReady(frame);
     if (error) return [error];
-    if (!(this.onCancel?.(frame.target_id) ?? false)) {
-      return [this.error(frame.id, "internal_error", "no active request to cancel", frame.channel_id)];
+    try {
+      if (!(this.onCancel?.(frame.target_id) ?? false)) {
+        return [this.error(frame.id, "internal_error", "no active request to cancel", frame.channel_id)];
+      }
+      return this.direct(frame.channel_id, {
+        type: "cancelled",
+        in_reply_to: frame.id,
+        target_id: frame.target_id,
+      });
+    } catch (cancelError) {
+      const detail = cancelError instanceof Error ? cancelError.message : String(cancelError);
+      return [this.error(frame.id, "internal_error", `cancel failed: ${detail}`, frame.channel_id)];
     }
-    return this.direct(frame.channel_id, {
-      type: "cancelled",
-      in_reply_to: frame.id,
-      target_id: frame.target_id,
-    });
   }
 
   private handleObserved(frame: Extract<ClientFrame, { type: "user_message_observed" }>): ServerFrame[] {

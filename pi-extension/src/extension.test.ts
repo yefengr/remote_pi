@@ -1185,19 +1185,46 @@ async function _pairAdditionalForTest(appPeerId: string, deviceName: string): Pr
   );
 }
 
+type V2PairContext = {
+  peer: string;
+  channelId: string;
+  historyGeneration: string;
+};
+
 async function _pairForTestWithCtx(
   appPeerId: string,
   connectCtx: { ui: { notify: ReturnType<typeof vi.fn> }; cwd?: string; abort?: ReturnType<typeof vi.fn> },
-): Promise<void> {
+): Promise<V2PairContext> {
+  await initializeV2SessionForTest();
   captureHandler("remote-pi");
   await _connectForTest(connectCtx);
-  relayRef.current!.emit("message", JSON.stringify({
-    peer: appPeerId,
-    ct: Buffer.from(JSON.stringify({
-      type: "pair_request", id: "req-1", token: "test-token", device_name: "Phone",
-    })).toString("base64"),
+  relayRef.current!.emit("message", makeV2Line(appPeerId, {
+    protocol_version: 2,
+    type: "pair_request",
+    id: "req-1",
+    token: "test-token",
+    device_name: "Phone",
   }));
   await vi.waitFor(() => expect(_getState()).toBe("paired"), { timeout: 2000 });
+
+  const channelId = `channel-${appPeerId}`;
+  const sendsBeforeHello = relayRef.current!.send.mock.calls.length;
+  relayRef.current!.emit("message", makeV2Line(appPeerId, {
+    protocol_version: 2,
+    type: "session_hello",
+    id: `hello-${appPeerId}`,
+    channel_id: channelId,
+  }));
+  let ready: Extract<ReturnType<typeof decodeServerFrameV2>, { type: "session_ready" }> | undefined;
+  await vi.waitFor(() => {
+    ready = relayRef.current!.send.mock.calls
+      .slice(sendsBeforeHello)
+      .map((call) => decodeV2Sent(call[0] as string).frame)
+      .find((frame): frame is Extract<ReturnType<typeof decodeServerFrameV2>, { type: "session_ready" }> =>
+        frame.type === "session_ready");
+    expect(ready).toMatchObject({ target_channel_id: channelId });
+  });
+  return { peer: appPeerId, channelId, historyGeneration: ready!.history_generation };
 }
 
 // ── Multi-channel (plan/24 W2D) ──────────────────────────────────────────────
@@ -2961,7 +2988,7 @@ describe("routeClientMessage cancel handling", () => {
     const staleAbort = vi.fn();
     const freshAbort = vi.fn();
 
-    await _pairForTestWithCtx("owner-cancel-1", {
+    const pair = await _pairForTestWithCtx("owner-cancel-1", {
       ui: { notify: vi.fn() },
       cwd: "/tmp/remote-pi-cancel-stale",
     });
@@ -2980,23 +3007,24 @@ describe("routeClientMessage cancel handling", () => {
     });
 
     const sendsBefore = relayRef.current!.send.mock.calls.length;
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "owner-cancel-1",
-      ct: Buffer.from(JSON.stringify({
-        type: "cancel", id: "cancel-stale", target_id: "msg-stale",
-      })).toString("base64"),
+    relayRef.current!.emit("message", makeV2Line(pair.peer, {
+      protocol_version: 2,
+      type: "cancel",
+      id: "cancel-stale",
+      channel_id: pair.channelId,
+      history_generation: pair.historyGeneration,
+      target_id: "msg-stale",
     }));
 
     await new Promise<void>((r) => setImmediate(r));
 
     const sent = relayRef.current!.send.mock.calls
       .slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt)
-      .filter((d) => d.peer === "owner-cancel-1");
-    const cancelled = sent.filter((d) => d.inner.type === "cancelled");
+      .map((c) => decodeV2Sent(c[0] as string))
+      .filter((d) => d.peer === pair.peer);
+    const cancelled = sent.filter((d) => d.frame.type === "cancelled");
     expect(cancelled).toHaveLength(1);
-    expect(cancelled[0]!.inner).toMatchObject({
+    expect(cancelled[0]!.frame).toMatchObject({
       type: "cancelled",
       in_reply_to: "cancel-stale",
       target_id: "msg-stale",
@@ -3014,7 +3042,7 @@ describe("routeClientMessage cancel handling", () => {
     const freshSetTitle = vi.fn();
 
     const owner = OWNER_STANDARD_FIXTURE;
-    await _pairForTestWithCtx(owner, {
+    const pair = await _pairForTestWithCtx(owner, {
       ui: { notify: vi.fn(), setStatus: vi.fn(), setTitle: vi.fn() },
       cwd: "/tmp/remote-pi-stale-ui",
     });
@@ -3047,9 +3075,11 @@ describe("routeClientMessage cancel handling", () => {
     _onPeerDisconnect(owner);
     expect(_hasActivePeerForTest(owner)).toBe(false);
 
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: owner,
-      ct: Buffer.from(JSON.stringify({ type: "ping", id: "ping-stale-ui" })).toString("base64"),
+    relayRef.current!.emit("message", makeV2Line(owner, {
+      protocol_version: 2,
+      type: "session_hello",
+      id: "hello-stale-ui",
+      channel_id: pair.channelId,
     }));
     await new Promise<void>((r) => setImmediate(r));
 
@@ -3062,7 +3092,7 @@ describe("routeClientMessage cancel handling", () => {
   test("cancel is handled before the strict pi binding guard", async () => {
     const freshAbort = vi.fn();
 
-    await _pairForTestWithCtx("owner-cancel-nopi", {
+    const pair = await _pairForTestWithCtx("owner-cancel-nopi", {
       ui: { notify: vi.fn() },
       cwd: "/tmp/remote-pi-cancel-nopi",
     });
@@ -3075,23 +3105,24 @@ describe("routeClientMessage cancel handling", () => {
     _setPiForTest(null);
 
     const sendsBefore = relayRef.current!.send.mock.calls.length;
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "owner-cancel-nopi",
-      ct: Buffer.from(JSON.stringify({
-        type: "cancel", id: "cancel-nopi", target_id: "msg-nopi",
-      })).toString("base64"),
+    relayRef.current!.emit("message", makeV2Line(pair.peer, {
+      protocol_version: 2,
+      type: "cancel",
+      id: "cancel-nopi",
+      channel_id: pair.channelId,
+      history_generation: pair.historyGeneration,
+      target_id: "msg-nopi",
     }));
 
     await new Promise<void>((r) => setImmediate(r));
 
     const sent = relayRef.current!.send.mock.calls
       .slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt)
-      .filter((d) => d.peer === "owner-cancel-nopi");
-    const cancelled = sent.filter((d) => d.inner.type === "cancelled");
+      .map((c) => decodeV2Sent(c[0] as string))
+      .filter((d) => d.peer === pair.peer);
+    const cancelled = sent.filter((d) => d.frame.type === "cancelled");
     expect(cancelled).toHaveLength(1);
-    expect(cancelled[0]!.inner).toMatchObject({
+    expect(cancelled[0]!.frame).toMatchObject({
       type: "cancelled",
       in_reply_to: "cancel-nopi",
       target_id: "msg-nopi",
@@ -3100,7 +3131,7 @@ describe("routeClientMessage cancel handling", () => {
   });
 
   test("cancel with no real abort context returns error and does not send cancelled", async () => {
-    await _pairForTestWithCtx("owner-cancel-2", {
+    const pair = await _pairForTestWithCtx("owner-cancel-2", {
       ui: { notify: vi.fn() },
       cwd: "/tmp/remote-pi-cancel-nonreal",
       // Intentionally omit abort: the router must not claim success.
@@ -3112,25 +3143,26 @@ describe("routeClientMessage cancel handling", () => {
     });
 
     const sendsBefore = relayRef.current!.send.mock.calls.length;
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "owner-cancel-2",
-      ct: Buffer.from(JSON.stringify({
-        type: "cancel", id: "cancel-nonreal", target_id: "msg-nonreal",
-      })).toString("base64"),
+    relayRef.current!.emit("message", makeV2Line(pair.peer, {
+      protocol_version: 2,
+      type: "cancel",
+      id: "cancel-nonreal",
+      channel_id: pair.channelId,
+      history_generation: pair.historyGeneration,
+      target_id: "msg-nonreal",
     }));
 
     await new Promise<void>((r) => setImmediate(r));
 
     const sent = relayRef.current!.send.mock.calls
       .slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt)
-      .filter((d) => d.peer === "owner-cancel-2");
-    const errors = sent.filter((d) => d.inner.type === "error");
-    const cancelled = sent.filter((d) => d.inner.type === "cancelled");
+      .map((c) => decodeV2Sent(c[0] as string))
+      .filter((d) => d.peer === pair.peer);
+    const errors = sent.filter((d) => d.frame.type === "protocol_error");
+    const cancelled = sent.filter((d) => d.frame.type === "cancelled");
     expect(errors).toHaveLength(1);
-    expect(errors[0]!.inner).toMatchObject({
-      type: "error",
+    expect(errors[0]!.frame).toMatchObject({
+      type: "protocol_error",
       in_reply_to: "cancel-nonreal",
       code: "internal_error",
     });
@@ -3140,7 +3172,7 @@ describe("routeClientMessage cancel handling", () => {
   test("abort throw sends error, and the router still handles a later ping", async () => {
     const aborting = vi.fn(() => { throw new Error("abort boom"); });
 
-    await _pairForTestWithCtx("owner-cancel-3", {
+    const pair = await _pairForTestWithCtx("owner-cancel-3", {
       ui: { notify: vi.fn() },
       cwd: "/tmp/remote-pi-cancel-throw",
       abort: aborting,
@@ -3153,39 +3185,43 @@ describe("routeClientMessage cancel handling", () => {
     });
 
     const sendsBefore = relayRef.current!.send.mock.calls.length;
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "owner-cancel-3",
-      ct: Buffer.from(JSON.stringify({
-        type: "cancel", id: "cancel-throw", target_id: "msg-throw",
-      })).toString("base64"),
+    relayRef.current!.emit("message", makeV2Line(pair.peer, {
+      protocol_version: 2,
+      type: "cancel",
+      id: "cancel-throw",
+      channel_id: pair.channelId,
+      history_generation: pair.historyGeneration,
+      target_id: "msg-throw",
     }));
 
     await new Promise<void>((r) => setImmediate(r));
 
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "owner-cancel-3",
-      ct: Buffer.from(JSON.stringify({ type: "ping", id: "ping-after-cancel" })).toString("base64"),
+    relayRef.current!.emit("message", makeV2Line(pair.peer, {
+      protocol_version: 2,
+      type: "ping",
+      id: "ping-after-cancel",
+      channel_id: pair.channelId,
+      history_generation: pair.historyGeneration,
     }));
     await new Promise<void>((r) => setImmediate(r));
 
     const sent = relayRef.current!.send.mock.calls
       .slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt)
-      .filter((d) => d.peer === "owner-cancel-3");
+      .map((c) => decodeV2Sent(c[0] as string))
+      .filter((d) => d.peer === pair.peer);
 
-    const errors = sent.filter((d) => d.inner.type === "error");
-    const pongs = sent.filter((d) => d.inner.type === "pong");
+    const errors = sent.filter((d) => d.frame.type === "protocol_error");
+    const pongs = sent.filter((d) => d.frame.type === "pong");
 
     expect(aborting).toHaveBeenCalledTimes(1);
     expect(errors).toHaveLength(1);
-    expect(errors[0]!.inner).toMatchObject({
-      type: "error",
+    expect(errors[0]!.frame).toMatchObject({
+      type: "protocol_error",
       in_reply_to: "cancel-throw",
       code: "internal_error",
     });
     expect(pongs).toHaveLength(1);
-    expect(pongs[0]!.inner).toMatchObject({ type: "pong", in_reply_to: "ping-after-cancel" });
+    expect(pongs[0]!.frame).toMatchObject({ type: "pong", in_reply_to: "ping-after-cancel" });
   });
 });
 

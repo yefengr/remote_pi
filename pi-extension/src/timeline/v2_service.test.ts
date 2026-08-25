@@ -121,6 +121,32 @@ describe("TimelineV2Service", () => {
     expect(service.handle(user(service.generation, { id: "wire-2", text: "different", streaming_behavior: "steer" }))[0]).toMatchObject({ type: "protocol_error", code: "invalid_message" });
   });
 
+  test("cancel callback failures remain direct internal errors", () => {
+    const session = SessionManager.inMemory(process.cwd());
+    const service = new TimelineV2Service({
+      sessionManager: session,
+      senderRef: "owner-1",
+      runtime: new TimelineRuntime(),
+      onUserMessage: () => false,
+      onCancel: () => { throw new Error("abort failed"); },
+    });
+    service.handle(hello());
+    expect(service.handle({
+      protocol_version: 2,
+      type: "cancel",
+      id: "cancel-1",
+      channel_id: "channel-1",
+      history_generation: service.generation,
+      target_id: "request-1",
+    })[0]).toMatchObject({
+      type: "protocol_error",
+      target_channel_id: "channel-1",
+      in_reply_to: "cancel-1",
+      code: "internal_error",
+      message: expect.stringContaining("abort failed"),
+    });
+  });
+
   test("observed clears the idempotency record after commit", () => {
     const session = SessionManager.inMemory(process.cwd());
     const service = new TimelineV2Service({ sessionManager: session, senderRef: "owner-1", runtime: new TimelineRuntime(), onUserMessage: () => true });
