@@ -7,7 +7,9 @@
 - 阶段 1（协议、类型与入口边界）：**已完成（2026-08-25）**
 - 阶段 2（Extension 最小永久提交链路）：**已完成（2026-08-25）**
 - 阶段 3（v2 逻辑 channel 与权威历史）：**已完成（2026-08-25，Extension 侧）**
-- Protocol v2 schema、codec、fixture：已冻结；Extension 时间线生产提交链路已接入，v2 wire 尚未切换
+- 阶段 4（Site pending、时间线与 IndexedDB）：**已完成**
+- 阶段 5（Extension/Site Protocol v2 自动化跨项目联调）：**自动化已完成，待真实 Relay/Pi/PWA 手工联调**
+- Protocol v2 schema、codec、fixture：已冻结；Extension/Site 生产入口已切换为 v2 strict wire
 - Relay：无代码改动
 
 本计划以 Protocol v2 消除 PWA 实时消息与 SessionManager 历史消息的重复。当前 Pi SessionManager branch 是正式历史真源；PWA IndexedDB 仅缓存最近 5 个回合组；PWA pending 和实时 partial 仅存在于内存。
@@ -567,6 +569,23 @@ git diff --check
 
 已完成 Site Protocol v2 生产接线、session hello/ready 与 channel/generation 门禁、pending/accepted/committed/unknown delivery、正式事件与 observed、history/fragment 窗口重组、同步期 realtime journal 合并、最近 5 个完整 group 的 Dexie v6 缓存、reset/bye 重握手、早页内存分页以及 TimelineEvent/partial UI。Site 定向测试 30/30、TypeScript、定向 ESLint、Next build 和 `git diff --check` 均通过；真实 Relay/Pi 同窗联调留在阶段 5。
 
-### 阶段 5：跨项目联调
+### 阶段 5：跨项目联调（自动化已完成，待真实手工联调）
 
-以同一 v2 窗口联调 Extension 与 Site，覆盖多 PWA、可靠 queued、未知输入、工具/thinking、重启、branch 切换、分页和大内容；完成自动化验证、构建与手工回归后再更新计划状态。
+已完成测试专用 in-memory Relay/Pi/PWA harness，并将 Extension 历史 v1 集成断言迁移为严格 v2。自动化覆盖：
+
+1. 多 PWA logical channel、hello/ready、direct target 隔离与 Owner broadcast。
+2. 普通 user `received → started/accepted → committed`、永久事件、observed 幂等。
+3. Remote Pi reliable queued：busy 入队、agent_end 后下一 macrotask idle 排出、`delivery: queued`、同步失败/断连/generation 清理、容量/TTL/幂等门禁。
+4. steer/unknown delivery、terminal/RPC unknown 来源、图片 `[image,text]` 输入。
+5. assistant/thinking/tool partial、正式 assistant/tool、provider error、compaction、metadata custom 和 branch summary system event。
+6. history snapshot、realtime journal、5 个原子 group 分页、opaque cursor、branch/generation reset、fragment 和 32 MiB/512 KiB 边界。
+7. Pi v2 Owner 在线状态、revoke/bye、session shutdown、重连生命周期和 stale direct frame。
+
+验证证据：
+
+- Extension 全量：46 files，848 passed，3 skipped，0 failed。
+- Site Protocol/PWA 相关测试：52 passed，0 failed。
+- Extension typecheck/build、Site typecheck、定向 ESLint 和 `git diff --check` 通过。
+- Relay Rust 生产代码未修改；Protocol v1 fallback 未恢复。
+
+仍待真实环境手工联调：启动真实 Relay、Pi Extension 和浏览器 PWA，验证 WebSocket/outer envelope、真实 Pi SDK 调度、Pi 进程重启后的 JSONL 恢复、真实 branch/tree navigation、断线重连以及双 PWA 浏览器 tab。完成该手工回归后再将阶段 5 标记为已完成。
