@@ -1,3 +1,3 @@
-export * from "./schema.js";
-export * from "./frames.js";
-export * from "./codec.js";
+export * from "./schema";
+export * from "./frames";
+export * from "./codec";

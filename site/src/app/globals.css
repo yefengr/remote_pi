@@ -2034,6 +2034,11 @@ a {
 .pwa-message p { margin: 0; color: var(--pwa-ink); font-size: 15px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
 .pwa-message time { display: block; margin-top: 8px; color: #56656b; font: 10px var(--ff-mono); }
 .pwa-message.user time { text-align: right; }
+.pwa-user-blocks { display: grid; gap: 10px; justify-items: end; }
+.pwa-message-image { display: block; width: min(420px, 100%); max-height: 360px; object-fit: contain; border: 1px solid var(--pwa-line); border-radius: 10px; background: #040606; }
+.pwa-image-omitted { padding: 10px 12px; border: 1px dashed var(--pwa-line-strong); border-radius: 8px; color: var(--pwa-dim); font: 10px/1.5 var(--ff-mono); }
+.pwa-message-toggle { margin-left: 8px; padding: 0; border: 0; color: var(--pwa-dim); background: transparent; cursor: pointer; vertical-align: middle; }
+.pwa-earlier-button { justify-self: center; }
 .pwa-markdown { color: var(--pwa-ink); font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
 .pwa-markdown > :first-child { margin-top: 0; }
 .pwa-markdown > :last-child { margin-bottom: 0; }

@@ -20,7 +20,7 @@ test("rejects malformed or wrong-length QR values", () => {
 
 test("creates pair requests and detects relay mismatch", () => {
   const request = createPairRequest("token", "Browser", "request-1");
-  assert.deepEqual(request, { type: "pair_request", token: "token", device_name: "Browser", id: "request-1" });
+  assert.deepEqual(request, { protocol_version: 2, type: "pair_request", token: "token", device_name: "Browser", id: "request-1" });
   assert.equal(relayMismatch("https://relay.example.test", "wss://relay.example.test/"), false);
   assert.equal(relayMismatch("https://other.example.test", "wss://relay.example.test"), true);
 });

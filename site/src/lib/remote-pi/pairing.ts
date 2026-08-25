@@ -1,5 +1,6 @@
 import { decodeBase64, encodeBase64, toWebSocketUrl } from "./encoding";
-import type { PairPayload, PairRequest } from "./types";
+import type { PairPayload } from "./types";
+import type { ClientFrame } from "./protocol-v2/frames";
 
 const TOKEN_BYTES = 16;
 const EPK_BYTES = 32;
@@ -27,9 +28,9 @@ export function parsePairUri(raw: string): PairPayload | undefined {
   }
 }
 
-export function createPairRequest(token: string, deviceName: string, id: string): PairRequest {
+export function createPairRequest(token: string, deviceName: string, id: string): Extract<ClientFrame, { type: "pair_request" }> {
   if (!token || !deviceName || !id) throw new Error("Pair request requires token, device name, and id");
-  return { type: "pair_request", id, token, device_name: deviceName };
+  return { protocol_version: 2, type: "pair_request", id, token, device_name: deviceName };
 }
 
 export function relayMismatch(qrRelayUrl: string | undefined, configuredRelayUrl: string): boolean {

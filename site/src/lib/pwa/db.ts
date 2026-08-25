@@ -1,4 +1,5 @@
 import Dexie, { type Table } from "dexie";
+import type { TimelineEvent } from "../remote-pi/protocol-v2/schema";
 
 const DATABASE_NAME = "remote-pi-pwa";
 const DATABASE_OPEN_TIMEOUT_MS = 10000;
@@ -54,6 +55,18 @@ export type PwaSyncStateRecord = {
   lastSyncedAt?: number;
 };
 
+export type PwaTimelineEventRecord = {
+  id: string;
+  peerEpk: string;
+  roomId: string;
+  sessionId: string;
+  historyGeneration: string;
+  eventId: string;
+  groupId?: string;
+  timestamp: number;
+  event: TimelineEvent;
+};
+
 export type PwaIdentityRecord = {
   id: "owner";
   publicKey: string;
@@ -88,9 +101,8 @@ export class PwaDatabase extends Dexie {
   }
   peers!: Table<PwaPeerRecord, string>;
   pairings!: Table<PwaPeerRecord, string>;
-  messages!: Table<PwaMessageRecord, string>;
   rooms!: Table<PwaRoomRecord, string>;
-  syncState!: Table<PwaSyncStateRecord, string>;
+  timelineEvents!: Table<PwaTimelineEventRecord, string>;
   settings!: Table<PwaSettingRecord, string>;
 
   constructor() {
@@ -151,6 +163,18 @@ export class PwaDatabase extends Dexie {
       syncState: "id, [peerEpk+roomId], lastSyncedAt",
       settings: "key",
     });
+    this.version(6)
+      .stores({
+        identities: "id, publicKey",
+        peers: "remoteEpk, relayUrl, pairedAt",
+        pairings: "id, remoteEpk, [remoteEpk+roomId], relayUrl, pairedAt",
+        rooms: "id, peerEpk, [peerEpk+roomId], online, updatedAt",
+        timelineEvents: "id, [peerEpk+roomId+sessionId+historyGeneration], timestamp, eventId",
+        settings: "key",
+      })
+      .upgrade(() => {
+        // v6 intentionally omits the legacy messages/syncState stores; Dexie removes them during schema upgrade.
+      });
   }
 }
 
@@ -205,32 +229,18 @@ export async function listPwaRooms(peerEpk: string): Promise<PwaRoomRecord[]> {
   return getPwaDatabase().rooms.where("peerEpk").equals(peerEpk).sortBy("updatedAt");
 }
 
-export async function listPwaMessages(
-  peerEpk: string,
-  roomId: string,
-): Promise<PwaMessageRecord[]> {
-  return getPwaDatabase()
-    .messages.where("[peerEpk+roomId]")
-    .equals([peerEpk, roomId])
-    .sortBy("createdAt");
-}
-
-export async function getPwaSyncState(peerEpk: string, roomId: string): Promise<PwaSyncStateRecord | undefined> {
-  return getPwaDatabase().syncState.get(makePwaSyncStateId(peerEpk, roomId));
-}
-
-export async function markPwaHistorySynced(peerEpk: string, roomId: string, lastSyncedAt = Date.now()): Promise<void> {
-  await getPwaDatabase().syncState.put({ id: makePwaSyncStateId(peerEpk, roomId), peerEpk, roomId, lastSyncedAt });
-}
-
 export async function removePwaPairingData(peerEpk: string, roomId: string, pairingId: string, activeRoomSettingKey?: string): Promise<void> {
   const db = getPwaDatabase();
-  await db.transaction("rw", [db.pairings, db.messages, db.rooms, db.syncState, db.settings], async () => {
+  await db.transaction("rw", [db.pairings, db.rooms, db.timelineEvents, db.settings], async () => {
     await Promise.all([
       db.pairings.delete(pairingId),
-      db.messages.where("[peerEpk+roomId]").equals([peerEpk, roomId]).delete(),
       db.rooms.where("[peerEpk+roomId]").equals([peerEpk, roomId]).delete(),
-      db.syncState.delete(makePwaSyncStateId(peerEpk, roomId)),
+      db.timelineEvents.where("[peerEpk+roomId+sessionId+historyGeneration]").between(
+        [peerEpk, roomId, "", ""],
+        [peerEpk, roomId, "\uffff", "\uffff"],
+        true,
+        true,
+      ).delete(),
       activeRoomSettingKey ? db.settings.delete(activeRoomSettingKey) : Promise.resolve(),
     ]);
   });
@@ -239,15 +249,14 @@ export async function removePwaPairingData(peerEpk: string, roomId: string, pair
 export async function clearPwaData(): Promise<void> {
   await getPwaDatabase().transaction(
     "rw",
-    [getPwaDatabase().identities, getPwaDatabase().peers, getPwaDatabase().pairings, getPwaDatabase().messages, getPwaDatabase().rooms, getPwaDatabase().syncState, getPwaDatabase().settings],
+    [getPwaDatabase().identities, getPwaDatabase().peers, getPwaDatabase().pairings, getPwaDatabase().rooms, getPwaDatabase().timelineEvents, getPwaDatabase().settings],
     async () => {
       await Promise.all([
         getPwaDatabase().identities.clear(),
         getPwaDatabase().peers.clear(),
         getPwaDatabase().pairings.clear(),
-        getPwaDatabase().messages.clear(),
         getPwaDatabase().rooms.clear(),
-        getPwaDatabase().syncState.clear(),
+        getPwaDatabase().timelineEvents.clear(),
         getPwaDatabase().settings.clear(),
       ]);
     },

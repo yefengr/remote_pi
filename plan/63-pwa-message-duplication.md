@@ -563,9 +563,9 @@ git diff --check
 
 阶段 4 继续负责 Site pending/history/Dexie/UI；阶段 5 再完成跨项目 v2 联调。
 
-### 阶段 4：Site pending、时间线与 IndexedDB
+### 阶段 4：Site pending、时间线与 IndexedDB（已完成，待阶段 5 联调）
 
-实现 pending/accepted/送达未知、严格 TimelineEvent UI、partial 内存渲染、最近 5 组 Dexie 事务替换和内存早页。
+已完成 Site Protocol v2 生产接线、session hello/ready 与 channel/generation 门禁、pending/accepted/committed/unknown delivery、正式事件与 observed、history/fragment 窗口重组、同步期 realtime journal 合并、最近 5 个完整 group 的 Dexie v6 缓存、reset/bye 重握手、早页内存分页以及 TimelineEvent/partial UI。Site 定向测试 30/30、TypeScript、定向 ESLint、Next build 和 `git diff --check` 均通过；真实 Relay/Pi 同窗联调留在阶段 5。
 
 ### 阶段 5：跨项目联调
 

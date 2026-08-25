@@ -12,21 +12,22 @@ import { RelayClient } from "@/lib/remote-pi/relay-client";
 import { RelayConnectionLock } from "@/lib/pwa/connection-lock";
 import { normalizePeerId } from "@/lib/remote-pi/encoding";
 import { generateOwnerKeyPair } from "@/lib/remote-pi/crypto";
-import { assertBrowserCapabilities, browserName, fromStoredKey, markStreamingMessagesInterrupted, mergeMessages, mergeRooms, migrateLegacyDefaultRelay, toStoredKey, upsertMessage, type ConnectionContext } from "@/lib/pwa/runtime";
+import { assertBrowserCapabilities, browserName, fromStoredKey, mergeRooms, migrateLegacyDefaultRelay, toStoredKey, type ConnectionContext } from "@/lib/pwa/runtime";
+import { TimelineRuntime, type TimelineScope, type TimelineViewItem } from "@/lib/pwa/timeline-runtime";
+import { HistoryWindowAssembler, TimelineEventFragmentAssembler } from "@/lib/pwa/timeline-transfer";
+import { commitRealtime, loadRecent, replaceRecentWindow, TimelineStoreConflictError } from "@/lib/pwa/timeline-store";
+import type { TimelineEvent } from "@/lib/remote-pi/protocol-v2/schema";
 import { refreshPwaApp } from "@/lib/pwa/service-worker-update";
-import type { ControlFrame, OwnerKeyPair, ServerMessage, SessionHistoryEvent } from "@/lib/remote-pi/types";
+import type { ControlFrame, OwnerKeyPair } from "@/lib/remote-pi/types";
+import type { ServerFrame } from "@/lib/remote-pi/protocol-v2/frames";
 import {
   clearPwaData,
   getPwaDatabase,
-  getPwaSyncState,
-  listPwaMessages,
-  markPwaHistorySynced,
   openPwaDatabase,
   listPwaPeers,
   listPwaRooms,
   makePwaPeerId,
   removePwaPairingData,
-  type PwaMessageRecord,
   type PwaPeerRecord,
   type PwaRoomRecord,
 } from "@/lib/pwa/db";
@@ -55,8 +56,10 @@ export function PwaApp() {
   const [rooms, setRooms] = useState<PwaRoomRecord[]>([]);
   const [activePeerId, setActivePeerId] = useState<string | null>(null);
   const [roomId, setRoomId] = useState("main");
-  const [messages, setMessages] = useState<PwaMessageRecord[]>([]);
+  const [timelineItems, setTimelineItems] = useState<TimelineViewItem[]>([]);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | undefined>();
+  const [nextBefore, setNextBefore] = useState<string | null>(null);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [connection, setConnection] = useState<ConnectionViewState>("offline");
   const [retryAttempt, setRetryAttempt] = useState(0);
   const [relayUrl, setRelayUrl] = useState(DEFAULT_RELAY);
@@ -80,14 +83,21 @@ export function PwaApp() {
   const retryAttemptRef = useRef(0);
   const scheduleReconnectRef = useRef<(() => void) | null>(null);
   const selectionGenerationRef = useRef(0);
-  const messageRevisionRef = useRef(0);
   const roomRevisionRef = useRef(0);
   const activeRoomSnapshotRef = useRef<Set<string> | null>(null);
   const activePeerIdRef = useRef<string | null>(null);
   const activePeerRef = useRef<PwaPeerRecord | null>(null);
   const connectionRef = useRef(connection);
   // Stream handlers update this synchronously; React state only mirrors it for rendering.
-  const messagesRef = useRef(messages);
+  const timelineItemsRef = useRef<TimelineViewItem[]>([]);
+  const timelineRuntimeRef = useRef(new TimelineRuntime());
+  const historyAssemblerRef = useRef<HistoryWindowAssembler | null>(null);
+  const historyModeRef = useRef<"recent" | "earlier">("recent");
+  const fragmentAssemblerRef = useRef<TimelineEventFragmentAssembler | null>(null);
+  const realtimeJournalRef = useRef(new Map<string, TimelineEvent>());
+  const helloRequestRef = useRef<string | null>(null);
+  const sessionEpochRef = useRef(0);
+  const networkSnapshotAppliedEpochRef = useRef(0);
   const roomsRef = useRef(rooms);
   const pendingWritesRef = useRef(new Set<Promise<unknown>>());
   const roomIdRef = useRef(roomId);
@@ -129,20 +139,29 @@ export function PwaApp() {
     while (pendingWritesRef.current.size) await Promise.allSettled(Array.from(pendingWritesRef.current));
   }, []);
 
-  const persistMessage = useCallback((message: PwaMessageRecord) => {
-    const write = trackWrite(getPwaDatabase().messages.put(message));
-    void write.catch(() => {});
-    return write;
+  const applyTimelineChange = useCallback((change: ReturnType<TimelineRuntime["receive"]>) => {
+    timelineItemsRef.current = change.items;
+    setTimelineItems(change.items);
+    const channel = channelRef.current;
+    for (const frame of change.observed) channel?.send(frame);
+  }, []);
+
+  const reportTimelineWrite = useCallback((write: Promise<unknown>) => {
+    void trackWrite(write).catch((writeError) => {
+      setError(writeError instanceof TimelineStoreConflictError ? "Local timeline changed unexpectedly. Resyncing…" : "Could not update local history.");
+      if (writeError instanceof TimelineStoreConflictError) scheduleReconnectRef.current?.();
+    });
   }, [trackWrite]);
 
-  const interruptStreamingOutput = useCallback((peerEpk: string, selectedRoom: string) => {
-    const interrupted = markStreamingMessagesInterrupted(messagesRef.current, peerEpk, selectedRoom);
-    if (interrupted.every((message, index) => message === messagesRef.current[index])) return;
-    messagesRef.current = interrupted;
-    messageRevisionRef.current += 1;
-    setMessages(interrupted);
-    void trackWrite(getPwaDatabase().messages.bulkPut(interrupted.filter((message) => message.peerEpk === peerEpk && message.roomId === selectedRoom && message.status === "interrupted"))).catch(() => {});
-  }, [trackWrite]);
+  const interruptStreamingOutput = useCallback(() => {
+    historyAssemblerRef.current = null;
+    fragmentAssemblerRef.current?.reset();
+    fragmentAssemblerRef.current = null;
+    realtimeJournalRef.current.clear();
+    setNextBefore(null);
+    setLoadingEarlier(false);
+    applyTimelineChange(timelineRuntimeRef.current.markDisconnected());
+  }, [applyTimelineChange]);
 
   const markPeerRoomsOffline = useCallback(async (peerEpk: string) => {
     if (suppressRoomPersistenceRef.current.has(makePwaPeerId(peerEpk, roomIdRef.current))) return;
@@ -154,15 +173,6 @@ export function PwaApp() {
     await trackWrite(getPwaDatabase().rooms.bulkPut(updated.filter((room) => room.peerEpk === peerEpk)));
   }, [trackWrite]);
 
-  const addOrUpdateMessage = useCallback((next: PwaMessageRecord) => {
-    const current = messagesRef.current;
-    const index = current.findIndex((message) => message.id === next.id);
-    const updated = upsertMessage(current, next);
-    messagesRef.current = updated;
-    messageRevisionRef.current += 1;
-    setMessages(updated);
-    if (next.status !== "streaming") void persistMessage(index < 0 ? next : updated[index]);
-  }, [persistMessage]);
 
   const upsertRooms = useCallback(async (peerEpk: string, nextRooms: PwaRoomRecord[], generation: number) => {
     roomRevisionRef.current += 1;
@@ -214,60 +224,116 @@ export function PwaApp() {
       return;
     }
     if (followOutputRef.current) scrollToLatest(false);
-  }, [messages, scrollToLatest]);
+  }, [scrollToLatest, timelineItems]);
 
-  const applySessionHistory = useCallback(async (context: ConnectionContext, events: SessionHistoryEvent[], syncComplete: boolean) => {
+  const handleServerFrame = useCallback((frame: ServerFrame, context: ConnectionContext) => {
     if (!isCurrentSelection(context.generation, context.peerId, context.peerEpk, context.roomId, context.channel, context.relay)) return;
-    const requestRevision = messageRevisionRef.current;
-    const records: PwaMessageRecord[] = [];
-    for (const event of events) {
-      if (event.type === "user_input") records.push({ id: event.id, peerEpk: context.peerEpk, roomId: context.roomId, kind: "user", text: event.text, createdAt: event.ts, status: "complete" });
-      if (event.type === "agent_message") records.push({ id: `assistant-${event.in_reply_to}`, peerEpk: context.peerEpk, roomId: context.roomId, kind: "assistant", text: event.text, createdAt: event.ts, replyTo: event.in_reply_to, status: "complete" });
-      if (event.type === "compaction") records.push({ id: `compaction-${event.ts}`, peerEpk: context.peerEpk, roomId: context.roomId, kind: "system", text: `Context compacted: ${event.summary}`, createdAt: event.ts, status: "complete" });
+    if (frame.type === "session_ready") {
+      if (frame.in_reply_to !== helloRequestRef.current) return;
+      helloRequestRef.current = null;
+      const scope: TimelineScope = { peerEpk: context.peerEpk, roomId: context.roomId, sessionId: frame.session_id, historyGeneration: frame.history_generation, selfSenderRef: frame.self_sender_ref, channelId: context.channel.channelId };
+      applyTimelineChange(timelineRuntimeRef.current.setScope(scope));
+      realtimeJournalRef.current.clear();
+      sessionEpochRef.current += 1;
+      networkSnapshotAppliedEpochRef.current = 0;
+      fragmentAssemblerRef.current = new TimelineEventFragmentAssembler({ session_id: scope.sessionId, history_generation: scope.historyGeneration });
+      setNextBefore(null);
+      const requestId = id();
+      historyModeRef.current = "recent";
+      historyAssemblerRef.current = new HistoryWindowAssembler(requestId, { session_id: scope.sessionId, history_generation: scope.historyGeneration });
+      const cacheEpoch = sessionEpochRef.current;
+      void loadRecent(scope).then((cached) => {
+        if (cacheEpoch === sessionEpochRef.current && networkSnapshotAppliedEpochRef.current !== cacheEpoch && timelineRuntimeRef.current.currentScope?.sessionId === scope.sessionId && timelineRuntimeRef.current.currentScope.historyGeneration === scope.historyGeneration) applyTimelineChange(timelineRuntimeRef.current.replaceHistory(cached));
+      }).catch(() => setError("Could not read local history."));
+      context.channel.send({ protocol_version: 2, type: "session_sync", id: requestId, channel_id: context.channel.channelId, history_generation: frame.history_generation, before: null, limit: 5 });
+      setConnection("online");
+      return;
     }
-    const uniqueRecords = Array.from(new Map(records.map((record) => [record.id, record])).values())
-      .sort((a, b) => a.createdAt - b.createdAt);
-    if (uniqueRecords.length) await trackWrite(getPwaDatabase().messages.bulkPut(uniqueRecords));
-    if (!isCurrentSelection(context.generation, context.peerId, context.peerEpk, context.roomId, context.channel, context.relay)) return;
-    const merged = requestRevision === messageRevisionRef.current
-      ? mergeMessages(messagesRef.current, uniqueRecords)
-      : mergeMessages(uniqueRecords, messagesRef.current);
-    messagesRef.current = merged;
-    messageRevisionRef.current += 1;
-    scheduleScrollToLatest();
-    setMessages(merged);
-    if (syncComplete) {
-      const syncedAt = Date.now();
-      await trackWrite(markPwaHistorySynced(context.peerEpk, context.roomId, syncedAt));
-      if (isCurrentSelection(context.generation, context.peerId, context.peerEpk, context.roomId, context.channel, context.relay)) setLastSyncedAt(syncedAt);
+    if (frame.type === "reset" || frame.type === "bye") {
+      historyAssemblerRef.current = null;
+      fragmentAssemblerRef.current?.reset();
+      fragmentAssemblerRef.current = null;
+      realtimeJournalRef.current.clear();
+      setNextBefore(null);
+      setLoadingEarlier(false);
+      applyTimelineChange(timelineRuntimeRef.current.invalidateScope());
+      sessionEpochRef.current += 1;
+      networkSnapshotAppliedEpochRef.current = 0;
+      setConnection("connecting");
+      const helloId = id();
+      helloRequestRef.current = helloId;
+      context.channel.send({ protocol_version: 2, type: "session_hello", id: helloId, channel_id: context.channel.channelId });
+      return;
     }
-  }, [isCurrentSelection, scheduleScrollToLatest, trackWrite]);
+    const changed = timelineRuntimeRef.current.receive(frame);
+    if (frame.type === "timeline_event_fragment") {
+      const scope = timelineRuntimeRef.current.currentScope;
+      if (!scope) return;
+      fragmentAssemblerRef.current ??= new TimelineEventFragmentAssembler({ session_id: scope.sessionId, history_generation: scope.historyGeneration });
+      const result = fragmentAssemblerRef.current.accept(frame);
+      if (result.status === "complete") {
+        realtimeJournalRef.current.set(result.event.event_id, result.event);
+        applyTimelineChange(timelineRuntimeRef.current.commit(result.event));
+        reportTimelineWrite(commitRealtime(scope, [result.event]));
+      }
+      return;
+    }
+    if (frame.type === "timeline_event") {
+      noteIncomingOutput();
+      const scope = timelineRuntimeRef.current.currentScope;
+      if (scope) {
+        realtimeJournalRef.current.set(frame.event.event_id, frame.event);
+        reportTimelineWrite(commitRealtime(scope, [frame.event]));
+      }
+    }
+    if (frame.type === "session_history_chunk") {
+      const result = historyAssemblerRef.current?.accept(frame);
+      if (result?.status === "discarded" && result.reason === "history_scope_mismatch") {
+        historyAssemblerRef.current = null;
+        fragmentAssemblerRef.current?.reset();
+        applyTimelineChange(timelineRuntimeRef.current.invalidateScope());
+        setConnection("connecting");
+        const helloId = id();
+        helloRequestRef.current = helloId;
+        context.channel.send({ protocol_version: 2, type: "session_hello", id: helloId, channel_id: context.channel.channelId });
+        return;
+      }
+      if (result?.status === "complete") {
+        const scope = timelineRuntimeRef.current.currentScope;
+        if (!scope) return;
+        if (historyModeRef.current === "earlier") {
+          applyTimelineChange(timelineRuntimeRef.current.prependHistory(result.events));
+          setLoadingEarlier(false);
+        } else {
+          const journal = [...realtimeJournalRef.current.values()];
+          applyTimelineChange(timelineRuntimeRef.current.replaceHistory([...result.events, ...journal]));
+          networkSnapshotAppliedEpochRef.current = sessionEpochRef.current;
+          reportTimelineWrite(replaceRecentWindow(scope, result.events, journal));
+          realtimeJournalRef.current.clear();
+        }
+        setNextBefore(result.eos ? null : result.next_before ?? null);
+        setLastSyncedAt(Date.now());
+        historyAssemblerRef.current = null;
+      }
+      return;
+    }
+    applyTimelineChange(changed);
+  }, [applyTimelineChange, isCurrentSelection, noteIncomingOutput, reportTimelineWrite]);
 
-  const handleServerMessage = useCallback((message: ServerMessage, context: ConnectionContext) => {
-    if (!isCurrentSelection(context.generation, context.peerId, context.peerEpk, context.roomId, context.channel, context.relay)) return;
-    const now = Date.now();
-    if (message.type === "agent_chunk") {
-      const existing = messagesRef.current.find((item) => item.replyTo === message.in_reply_to && item.kind === "assistant");
-      if (existing?.status === "interrupted") return;
-      if (!existing) noteIncomingOutput();
-      addOrUpdateMessage({ id: existing?.id ?? `assistant-${message.in_reply_to}`, peerEpk: context.peerEpk, roomId: context.roomId, kind: "assistant", text: `${existing?.text ?? ""}${message.delta}`, createdAt: existing?.createdAt ?? now, replyTo: message.in_reply_to, status: "streaming" });
-    } else if (message.type === "agent_done") {
-      const existing = messagesRef.current.find((item) => item.replyTo === message.in_reply_to && item.kind === "assistant");
-      if (existing?.status === "streaming") addOrUpdateMessage({ ...existing, status: "complete" });
-    } else if (message.type === "agent_message") {
-      const existing = messagesRef.current.find((item) => item.replyTo === message.in_reply_to && item.kind === "assistant");
-      if (!existing) noteIncomingOutput();
-      addOrUpdateMessage({ id: existing?.id ?? `assistant-${message.in_reply_to}`, peerEpk: context.peerEpk, roomId: context.roomId, kind: "assistant", text: message.text, createdAt: existing?.createdAt ?? now, replyTo: message.in_reply_to, status: "complete" });
-    } else if (message.type === "user_input" || message.type === "user_message") {
-      if (!messagesRef.current.some((item) => item.id === message.id)) addOrUpdateMessage({ id: message.id, peerEpk: context.peerEpk, roomId: context.roomId, kind: "user", text: message.text, createdAt: now, status: "complete" });
-    } else if (message.type === "session_history") {
-      void applySessionHistory(context, message.events, message.eos);
-    } else if (message.type === "compaction") {
-      addOrUpdateMessage({ id: `compaction-${message.ts ?? now}`, peerEpk: context.peerEpk, roomId: context.roomId, kind: "system", text: `Context compacted: ${message.summary}`, createdAt: message.ts ?? now, status: "complete" });
-    } else if (message.type === "error") {
-      addOrUpdateMessage({ id: `error-${message.in_reply_to ?? id()}-${now}`, peerEpk: context.peerEpk, roomId: context.roomId, kind: "system", text: message.message, createdAt: now, status: "error" });
+  const loadEarlier = useCallback(() => {
+    const scope = timelineRuntimeRef.current.currentScope;
+    const channel = channelRef.current;
+    if (!scope || !channel || !nextBefore || loadingEarlier || connectionRef.current !== "online") return;
+    const requestId = id();
+    historyModeRef.current = "earlier";
+    historyAssemblerRef.current = new HistoryWindowAssembler(requestId, { session_id: scope.sessionId, history_generation: scope.historyGeneration });
+    setLoadingEarlier(true);
+    if (!channel.send({ protocol_version: 2, type: "session_sync", id: requestId, channel_id: scope.channelId, history_generation: scope.historyGeneration, before: nextBefore, limit: 5 })) {
+      historyAssemblerRef.current = null;
+      setLoadingEarlier(false);
+      setError("Relay is not connected.");
     }
-  }, [addOrUpdateMessage, applySessionHistory, isCurrentSelection, noteIncomingOutput]);
+  }, [loadingEarlier, nextBefore]);
 
   const handleControlFrame = useCallback((frame: ControlFrame, generation: number, peer: PwaPeerRecord, relay: RelayClient) => {
     if (frame.type === "presence" || !isCurrentSelection(generation, peer.id, peer.remoteEpk, roomIdRef.current, undefined, relay)) return;
@@ -309,7 +375,7 @@ export function PwaApp() {
       relay,
       remotePeer: peer.remoteEpk,
       roomId: selectedRoom,
-      onMessage: (message) => { const current = context(); if (current) handleServerMessage(message, current); },
+      onFrame: (frame) => { const current = context(); if (current) handleServerFrame(frame, current); },
       onMalformed: (reason) => { if (channel && isCurrentSelection(generation, peer.id, peer.remoteEpk, selectedRoom, channel, relay)) setError(reason); },
     });
     channelRef.current = channel;
@@ -320,11 +386,11 @@ export function PwaApp() {
       if (state === "open") {
         retryAttemptRef.current = 0;
         setRetryAttempt(0);
-        setConnection("online");
+        setConnection("connecting");
       }
       if (state === "connecting" || state === "authenticating") setConnection("connecting");
       if (state === "closed") {
-        interruptStreamingOutput(peer.remoteEpk, selectedRoom);
+        interruptStreamingOutput();
         void markPeerRoomsOffline(peer.remoteEpk);
         setConnection("offline");
         scheduleReconnectRef.current?.();
@@ -349,7 +415,9 @@ export function PwaApp() {
       retryAttemptRef.current = 0;
       relay.subscribeRooms([peer.remoteEpk]);
       relay.checkRooms();
-      channel.send({ type: "session_sync", id: id(), limit: 200 });
+      const helloId = id();
+      helloRequestRef.current = helloId;
+      channel.send({ protocol_version: 2, type: "session_hello", id: helloId, channel_id: channel.channelId });
     } catch (connectError) {
       if (channel && isCurrentSelection(generation, peer.id, peer.remoteEpk, selectedRoom, channel, relay)) {
         setError(connectError instanceof Error ? connectError.message : "Relay connection failed");
@@ -357,13 +425,12 @@ export function PwaApp() {
       }
     }
     return dispose;
-  }, [handleControlFrame, handleServerMessage, identity, interruptStreamingOutput, isCurrentSelection, markPeerRoomsOffline, relayUrl]);
+  }, [handleControlFrame, handleServerFrame, identity, interruptStreamingOutput, isCurrentSelection, markPeerRoomsOffline, relayUrl]);
 
   const invalidateConnection = useCallback((resetRetries = true) => {
     const previousPeer = activePeerRef.current;
-    const previousRoom = roomIdRef.current;
     if (previousPeer) {
-      interruptStreamingOutput(previousPeer.remoteEpk, previousRoom);
+      interruptStreamingOutput();
       void markPeerRoomsOffline(previousPeer.remoteEpk);
     }
     const generation = selectionGenerationRef.current + 1;
@@ -462,16 +529,14 @@ export function PwaApp() {
     roomsRef.current = [];
     activeRoomSnapshotRef.current = null;
     roomRevisionRef.current += 1;
-    messagesRef.current = [];
-    messageRevisionRef.current += 1;
-    setMessages([]);
+    applyTimelineChange(timelineRuntimeRef.current.clear());
     setLastSyncedAt(undefined);
     setDraft("");
     setUnreadOutput(0);
     scheduleScrollToLatest();
     setConnection(peerId ? (typeof navigator !== "undefined" && navigator.onLine ? "connecting" : "no_network") : "offline");
     setError(null);
-  }, [invalidateConnection, peers, scheduleScrollToLatest]);
+  }, [applyTimelineChange, invalidateConnection, peers, scheduleScrollToLatest]);
 
   const selectRoom = useCallback((nextRoom: string) => {
     const peer = activePeerRef.current;
@@ -480,16 +545,14 @@ export function PwaApp() {
     roomIdRef.current = nextRoom;
     setRoomId(nextRoom);
     setSelectionReady(true);
-    messagesRef.current = [];
-    messageRevisionRef.current += 1;
-    setMessages([]);
+    applyTimelineChange(timelineRuntimeRef.current.clear());
     setLastSyncedAt(undefined);
     setDraft("");
     setUnreadOutput(0);
     scheduleScrollToLatest();
     setConnection(typeof navigator !== "undefined" && navigator.onLine ? "connecting" : "no_network");
     void getPwaDatabase().settings.put({ key: `${ACTIVE_ROOM_SETTING}${peer.id}`, value: nextRoom });
-  }, [invalidateConnection, scheduleScrollToLatest]);
+  }, [applyTimelineChange, invalidateConnection, scheduleScrollToLatest]);
 
   useEffect(() => {
     let cancelled = false;
@@ -553,9 +616,7 @@ export function PwaApp() {
     if (!activePeerId || !peer) {
       setSelectionReady(false);
       setLastSyncedAt(undefined);
-      messagesRef.current = [];
-      messageRevisionRef.current += 1;
-      setMessages([]);
+      applyTimelineChange(timelineRuntimeRef.current.clear());
       return;
     }
     setLastSyncedAt(undefined);
@@ -588,24 +649,7 @@ export function PwaApp() {
       }
     })();
     void getPwaDatabase().settings.put({ key: ACTIVE_PEER_SETTING, value: peer.id });
-  }, [activePeerId]);
-
-  useEffect(() => {
-    const peer = activePeerRef.current;
-    const generation = selectionGenerationRef.current;
-    const selectedRoom = roomIdRef.current;
-    const requestRevision = messageRevisionRef.current;
-    if (!selectionReady || !activePeerId || !peer) return;
-    void Promise.all([listPwaMessages(peer.remoteEpk, selectedRoom), getPwaSyncState(peer.remoteEpk, selectedRoom)]).then(([storedMessages, syncState]) => {
-      if (!isCurrentSelection(generation, peer.id, peer.remoteEpk, selectedRoom)) return;
-      setLastSyncedAt(syncState?.lastSyncedAt);
-      const merged = requestRevision === messageRevisionRef.current ? storedMessages : mergeMessages(storedMessages, messagesRef.current);
-      messagesRef.current = merged;
-      messageRevisionRef.current += 1;
-      scheduleScrollToLatest();
-      setMessages(merged);
-    }).catch(() => { if (isCurrentSelection(generation, peer.id, peer.remoteEpk, selectedRoom)) setError("Could not read local history."); });
-  }, [activePeerId, isCurrentSelection, roomId, scheduleScrollToLatest, selectionReady]);
+  }, [activePeerId, applyTimelineChange]);
 
   useEffect(() => {
     if (!selectionReady || startupState !== "ready" || pairState !== "idle" || !activePeerId || !identity) return;
@@ -623,7 +667,7 @@ export function PwaApp() {
       const latestDispose = connectionDisposeRef.current;
       connectionDisposeRef.current = null;
       latestDispose?.();
-      interruptStreamingOutput(peer.remoteEpk, selectedRoom);
+      interruptStreamingOutput();
       void markPeerRoomsOffline(peer.remoteEpk);
       cleanup = undefined;
       setConnection("tab_in_use");
@@ -664,7 +708,7 @@ export function PwaApp() {
       const latestDispose = connectionDisposeRef.current;
       connectionDisposeRef.current = null;
       latestDispose?.();
-      interruptStreamingOutput(peer.remoteEpk, selectedRoom);
+      interruptStreamingOutput();
       void markPeerRoomsOffline(peer.remoteEpk);
       if (cleanup && cleanup !== latestDispose) cleanup();
       lock.release();
@@ -704,12 +748,12 @@ export function PwaApp() {
     const generation = selectionGenerationRef.current;
     const selectedRoom = roomIdRef.current;
     if (!text || !peer || !channel || connectionRef.current !== "online" || !isCurrentSelection(generation, peer.id, peer.remoteEpk, selectedRoom, channel, relayRef.current || undefined)) return;
-    const messageId = id();
-    if (!channel.send({ type: "user_message", id: messageId, text })) { setError("Relay is not connected."); return; }
-    addOrUpdateMessage({ id: messageId, peerEpk: peer.remoteEpk, roomId: selectedRoom, kind: "user", text, createdAt: Date.now(), status: "complete" });
+    const prepared = timelineRuntimeRef.current.sendUser(text);
+    if (!prepared || !channel.send(prepared.frame)) { setError("Relay is not connected."); return; }
+    applyTimelineChange(prepared.change);
     scheduleScrollToLatest();
     setDraft("");
-  }, [addOrUpdateMessage, draft, isCurrentSelection, scheduleScrollToLatest]);
+  }, [applyTimelineChange, draft, isCurrentSelection, scheduleScrollToLatest]);
 
   const pairFromQr = useCallback(async (raw: string) => {
     if (!identity) return;
@@ -843,7 +887,7 @@ export function PwaApp() {
         <main className="pwa-main">
           {activePeer ? <>
             <div className="pwa-chat-head"><div><span className="pwa-kicker">Active session</span><h2>{displayPeer(activePeer)}</h2><span className="pwa-chat-meta"><span className={connection === "online" ? "pwa-status-dot online" : "pwa-status-dot"} />{connection === "online" ? "Live" : connection === "tab_in_use" ? "Local history / another tab" : "Local history"} <span className="pwa-separator">/</span> room <code>{roomId}</code> <span className="pwa-separator">/</span> last synced <time dateTime={lastSyncedAt ? new Date(lastSyncedAt).toISOString() : undefined}>{formatSyncTime(lastSyncedAt)}</time></span></div><div className="pwa-room-control"><label htmlFor="room-id">Room</label><select id="room-id" value={roomId} disabled={connection !== "online"} onChange={(event) => selectRoom(event.target.value)}><option value={roomId}>{roomId}</option>{activeRooms.filter((room) => room.roomId !== roomId).map((room) => <option key={room.roomId} value={room.roomId}>{room.name || room.cwd || room.roomId}</option>)}</select></div></div>
-            <MessageList messages={messages} listRef={messageListRef} bottomSentinelRef={bottomSentinelRef} onScroll={handleMessageListScroll} />
+            <MessageList items={timelineItems} hasEarlier={nextBefore !== null} loadingEarlier={loadingEarlier} onLoadEarlier={loadEarlier} listRef={messageListRef} bottomSentinelRef={bottomSentinelRef} onScroll={handleMessageListScroll} />
             {((connection !== "no_network" && (connection === "retrying" || connection === "offline")) || !followingOutput || unreadOutput > 0) ? <div className="pwa-message-actions">
               {connection !== "no_network" && (connection === "retrying" || connection === "offline") ? <button className="pwa-latest-button" type="button" onClick={() => restartActiveConnection(true)}><RefreshCw size={16} />Try again</button> : null}
               {!followingOutput || unreadOutput > 0 ? <button className="pwa-latest-button" type="button" onClick={() => { scrollToLatest(true); resumeFollowingOutput(); }}><ArrowDownToLine size={16} />{unreadOutput > 0 ? `${unreadOutput} new output` : "Latest"}</button> : null}

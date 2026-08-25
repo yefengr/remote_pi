@@ -23,8 +23,8 @@ import {
   SERVER_FRAME_TYPES,
   strictObject,
   textSchema,
-} from "./schema.js";
-import type { TimelineEvent, TimelinePartial } from "./schema.js";
+} from "./schema";
+import type { TimelineEvent, TimelinePartial } from "./schema";
 
 const protocol = { protocol_version: protocolVersionSchema };
 const channelRequest = {

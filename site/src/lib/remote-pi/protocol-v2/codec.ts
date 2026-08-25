@@ -6,21 +6,21 @@ import {
   serverFrameTypes,
   sessionHistoryChunkFrameSchema,
   timelineEventFragmentFrameSchema,
-} from "./frames.js";
+} from "./frames";
 import {
   historyFragmentSchema,
   timelineEventFragmentSchema,
   timelineEventSchema,
   timelinePartialSchema,
-} from "./schema.js";
+} from "./schema";
 import {
   MAX_FRAGMENT_BYTES,
   MAX_FRAME_BYTES,
   MAX_HISTORY_CHUNK_BYTES,
   MAX_WINDOW_BYTES,
-} from "./schema.js";
-import type { ClientFrame, ServerFrame } from "./frames.js";
-import type { TimelineEvent, TimelinePartial } from "./schema.js";
+} from "./schema";
+import type { ClientFrame, ServerFrame } from "./frames";
+import type { TimelineEvent, TimelinePartial } from "./schema";
 
 export const DECODE_ERROR_CODES = {
   invalid: "invalid",
