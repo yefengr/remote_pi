@@ -4118,9 +4118,12 @@ describe("session_start auto-init skips relay in print/-p mode (#44)", () => {
     await stop("", makeMockCtx());
     _resetAutoInitedForTest();
   });
-  afterEach(() => {
+  afterEach(async () => {
     process.argv = savedArgv;
     delete process.env["REMOTE_PI_DIRECT_CONFIG"];
+    const stop = captureHandler("remote-pi stop");
+    await stop("", makeMockCtx());
+    _resetAutoInitedForTest();
     _resetCwdLockForTest();
   });
 
@@ -4173,6 +4176,9 @@ describe("relay reconnect", () => {
     relayRef.current = null;
     relayInstances.length = 0;
     _defaultConnectImpl = async () => undefined;
+    _setDisposedForTest(false);
+    _resetAutoInitedForTest();
+    _resetCwdLockForTest();
     const qr = await import("./pairing/qr.js");
     (qr.qrSession.consumeToken as unknown as ReturnType<typeof vi.fn>).mockImplementation(
       (token: string) => {
