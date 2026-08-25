@@ -3355,21 +3355,18 @@ describe("rooms wiring", () => {
   });
 
   test("PeerChannel outer envelope omits `room` field (defensive, until W1.A/C ready)", async () => {
-    captureHandler("remote-pi");
-    await _connectForTest(makeMockCtx("/tmp/remote-pi-room-test"));
-
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "peer-room-test",
-      ct: Buffer.from(JSON.stringify({
-        type: "pair_request", id: "req-1", token: "test-token", device_name: "Phone",
-      })).toString("base64"),
-    }));
-    await vi.waitFor(() => expect(_getState()).toBe("paired"), { timeout: 2000 });
+    const pair = await _pairForTestWithCtx(
+      "peer-room-test",
+      makeMockCtx("/tmp/remote-pi-room-test"),
+    );
 
     // Trigger a channel-sent frame via ping (post-pair).
-    relayRef.current!.emit("message", JSON.stringify({
-      peer: "peer-room-test",
-      ct: Buffer.from(JSON.stringify({ type: "ping", id: "p1" })).toString("base64"),
+    relayRef.current!.emit("message", makeV2Line(pair.peer, {
+      protocol_version: 2,
+      type: "ping",
+      id: "p1",
+      channel_id: pair.channelId,
+      history_generation: pair.historyGeneration,
     }));
     await new Promise((r) => setTimeout(r, 30));
 
@@ -5185,6 +5182,7 @@ describe("relay reconnect", () => {
         remote_epk: OWNER_STANDARD_FIXTURE,
         paired_at: "now",
       });
+      await initializeV2SessionForTest();
       captureHandler("remote-pi");
       await _connectForTest(makeMockCtx());
       const originalRelay = relayInstances[0]!;
@@ -5228,17 +5226,27 @@ describe("relay reconnect", () => {
         ([options]) => options.relay === staleRelay,
       )).toBe(false);
 
-      staleRelay.emit("message", makeInnerLine(OWNER_STANDARD_FIXTURE, {
-        type: "ping", id: "stale-route",
+      staleRelay.emit("message", makeV2Line(OWNER_STANDARD_FIXTURE, {
+        protocol_version: 2,
+        type: "session_hello",
+        id: "stale-route",
+        channel_id: "stale-channel",
       }));
-      replacementRelay.emit("message", makeInnerLine(OWNER_STANDARD_FIXTURE, {
-        type: "ping", id: "replacement-route",
+      replacementRelay.emit("message", makeV2Line(OWNER_STANDARD_FIXTURE, {
+        protocol_version: 2,
+        type: "session_hello",
+        id: "replacement-route",
+        channel_id: "replacement-channel",
       }));
       await vi.waitFor(() => expect(replacementRelay.send).toHaveBeenCalled());
       const replacementMessages = replacementRelay.send.mock.calls
-        .map((call) => decodeSentCt(call[0] as string).inner);
+        .map((call) => decodeV2Sent(call[0] as string).frame);
       expect(replacementMessages).toContainEqual(
-        expect.objectContaining({ type: "pong", in_reply_to: "replacement-route" }),
+        expect.objectContaining({
+          type: "session_ready",
+          in_reply_to: "replacement-route",
+          target_channel_id: "replacement-channel",
+        }),
       );
       expect(staleRelay.send).not.toHaveBeenCalled();
       expect(_hasPendingReconnect()).toBe(false);
