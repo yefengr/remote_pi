@@ -3158,7 +3158,7 @@ describe("bye on teardown", () => {
     expect(_getState()).toBe("idle");
   });
 
-  test("revoke of attached owner → channel sees bye{session_replaced}, relay stays started", async () => {
+  test("revoke of attached owner → channel sees bye{peer_stop}, relay stays started", async () => {
     _tokenStatus = "ok";
     const ACTIVE = OWNER_STANDARD_FIXTURE;
     // Attach the peer through the production v2 channel.
@@ -3171,7 +3171,7 @@ describe("bye on teardown", () => {
     const sent = relayRef.current!.send.mock.calls.slice(sendsBefore).map((c) => c[0] as string);
     const byes = sent.map(decodeV2Sent).filter((d) => d.frame.type === "bye");
     expect(byes).toHaveLength(1);
-    expect(byes[0]!.frame).toMatchObject({ type: "bye", reason: "session_replaced" });
+    expect(byes[0]!.frame).toMatchObject({ type: "bye", reason: "peer_stop" });
     // Multi-channel (W2D): only this owner's channel is closed; the relay
     // stays up, ready for new pairings. Pre-W2D this dropped to idle.
     expect(_hasActivePeerForTest(ACTIVE)).toBe(false);
@@ -3197,6 +3197,16 @@ describe("session_shutdown teardown", () => {
     _setDisposedForTest(false); // shared module — clear the per-instance flag
     const stop = captureHandler("remote-pi stop");
     await stop("", makeMockCtx());
+  });
+
+  afterEach(async () => {
+    const stop = captureHandler("remote-pi stop");
+    await stop("", makeMockCtx());
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    delete process.env["REMOTE_PI_DIRECT_CONFIG"];
+    _setDisposedForTest(false);
+    _resetAutoInitedForTest();
+    _resetCwdLockForTest();
   });
 
   // Regression: the Pi SDK re-evaluates this module FRESH on every session
@@ -3255,19 +3265,26 @@ describe("session_shutdown teardown", () => {
     expect(_getState()).toBe("idle");
   });
 
-  test("session_shutdown invalidates without bye before a deferred mesh leave", async () => {
+  test("session_shutdown sends bye{session_replaced} before relay close and deferred mesh leave", async () => {
     await _pairForTestWithCtx(OWNER_STANDARD_FIXTURE, makeMockCtx());
     const relay = relayRef.current!;
     const sendsBefore = relay.send.mock.calls.length;
     const peerModule = await import("./session/peer.js");
+    const channelModule = await import("./transport/peer_channel.js");
     const originalLeave = peerModule.SessionPeer.prototype.leave;
     const leaveGate = deferred<void>();
     let stateAtLeave: string | undefined;
     let relayClosedAtLeave = false;
+    let byeCountAtLeave = 0;
+    const detachSpy = vi.spyOn(channelModule.V2PeerChannel.prototype, "detach");
     const leaveSpy = vi.spyOn(peerModule.SessionPeer.prototype, "leave")
       .mockImplementation(function (this: InstanceType<typeof peerModule.SessionPeer>) {
         stateAtLeave = _getState();
         relayClosedAtLeave = relay.close.mock.calls.length > 0;
+        byeCountAtLeave = relay.send.mock.calls
+          .slice(sendsBefore)
+          .map((call) => decodeV2Sent(call[0] as string))
+          .filter(({ frame }) => frame.type === "bye").length;
         const actualLeave = originalLeave.call(this);
         return Promise.all([actualLeave, leaveGate.promise]).then(() => undefined);
       });
@@ -3281,16 +3298,72 @@ describe("session_shutdown teardown", () => {
       }));
       expect(stateAtLeave).toBe("idle");
       expect(relayClosedAtLeave).toBe(true);
+      expect(byeCountAtLeave).toBe(1);
       expect(_hasMeshNodeForTest()).toBe(false);
       const sent = relay.send.mock.calls
         .slice(sendsBefore)
         .map((call) => decodeV2Sent(call[0] as string));
-      expect(sent.filter(({ frame }) => frame.type === "bye")).toEqual([]);
+      const byeIndex = sent.findIndex(({ frame }) => frame.type === "bye");
+      expect(byeIndex).toBeGreaterThanOrEqual(0);
+      const byes = sent.filter(({ frame }) => frame.type === "bye");
+      expect(byes).toHaveLength(1);
+      expect(byes[0]!.frame).toMatchObject({ type: "bye", reason: "session_replaced" });
+      const byeCallOrder = relay.send.mock.invocationCallOrder[sendsBefore + byeIndex]!;
+      expect(detachSpy).toHaveBeenCalledTimes(1);
+      expect(byeCallOrder).toBeLessThan(detachSpy.mock.invocationCallOrder[0]!);
+      expect(byeCallOrder).toBeLessThan(relay.close.mock.invocationCallOrder[0]!);
     } finally {
       leaveGate.resolve(undefined);
       await shuttingDown;
       leaveSpy.mockRestore();
+      detachSpy.mockRestore();
     }
+  });
+
+  test("session_shutdown quit sends bye{shutdown} to a connected owner", async () => {
+    await _pairForTestWithCtx(OWNER_STANDARD_FIXTURE, makeMockCtx());
+    const relay = relayRef.current!;
+    const sendsBefore = relay.send.mock.calls.length;
+
+    const shutdown = captureEventHandler("session_shutdown");
+    await shutdown({ type: "session_shutdown", reason: "quit" });
+
+    const byes = relay.send.mock.calls
+      .slice(sendsBefore)
+      .map((call) => decodeV2Sent(call[0] as string))
+      .filter(({ frame }) => frame.type === "bye");
+    expect(byes).toHaveLength(1);
+    expect(byes[0]!.frame).toMatchObject({ type: "bye", reason: "shutdown" });
+    expect(relay.close).toHaveBeenCalledOnce();
+    expect(_getState()).toBe("idle");
+  });
+
+  test("session_shutdown replacement sends one bye{session_replaced} to each v2 owner", async () => {
+    await _pairForTestWithCtx(OWNER_STANDARD_FIXTURE, makeMockCtx());
+    const relay = relayRef.current!;
+    relay.emit("message", makeV2Line(OTHER_OWNER_STANDARD_FIXTURE, {
+      protocol_version: 2,
+      type: "pair_request",
+      id: "pair-second-owner",
+      token: "test-token",
+      device_name: "Second owner",
+    }));
+    await vi.waitFor(() => expect(_getActivePeerCountForTest()).toBe(2));
+    const sendsBefore = relay.send.mock.calls.length;
+
+    const shutdown = captureEventHandler("session_shutdown");
+    await shutdown({ type: "session_shutdown", reason: "fork" });
+
+    const byes = relay.send.mock.calls
+      .slice(sendsBefore)
+      .map((call) => decodeV2Sent(call[0] as string))
+      .filter(({ frame }) => frame.type === "bye");
+    expect(byes).toHaveLength(2);
+    expect(byes.map(({ peer }) => peer)).toEqual(expect.arrayContaining([
+      OWNER_STANDARD_FIXTURE,
+      OTHER_OWNER_STANDARD_FIXTURE,
+    ]));
+    expect(byes.every(({ frame }) => frame.reason === "session_replaced")).toBe(true);
   });
 
   test("firing session_shutdown while idle is a no-op (no throw)", async () => {

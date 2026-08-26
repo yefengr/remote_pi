@@ -2857,7 +2857,9 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // up exactly ONE connection bound to the restored session. Idempotent +
   // best-effort: every step is guarded so a partially-initialised instance
   // (e.g. shutdown lands mid-`_cmdRoot`) tears down without throwing.
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async (event) => {
+    // Session replacement needs a fresh v2 handshake; process exit is final.
+    const byeReason = event.reason === "quit" ? "shutdown" : "session_replaced";
     // Revoke async authority synchronously, before any teardown await. `_disposed`
     // blocks the outgoing continuation immediately; the root and candidate
     // generations keep queued work stale even if a same-module session_start
@@ -2878,12 +2880,11 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // (issue #55). session_start re-binds `_lastEventCtx` for the new session.
     _lastCtx = null;
     _lastEventCtx = null;
-    // No bye reason: the process keeps running and the fresh instance re-joins
-    // the SAME relay room, so an explicit offline→online flap would be wrong.
+    // Send bye before detaching its channel or closing the shared relay room.
     // Revoke producer/Relay/bridge authority while the global node is still
     // visible, before close() can begin its asynchronous UDS leave.
     if (_state !== "idle") {
-      _goIdle();
+      _goIdle(byeReason);
     } else {
       _meshNode?.detachBridge();
     }
@@ -3737,14 +3738,14 @@ async function _cmdRevoke(arg: string, ctx: Pick<ExtensionContext, "ui" | "cwd">
   if (peer.runtimeKey !== null && _isPeerActive(peer.runtimeKey)) {
     const legacyChannel = _activePeers.get(peer.runtimeKey);
     const v2Binding = _v2ActivePeers.get(peer.runtimeKey);
-    try { legacyChannel?.send({ type: "bye", reason: "session_replaced" }); } catch { /* best-effort */ }
+    try { legacyChannel?.send({ type: "bye", reason: "peer_stop" }); } catch { /* best-effort */ }
     try {
       v2Binding?.channel.sendV2({
         protocol_version: 2,
         type: "bye",
         session_id: _currentSessionManager?.getSessionId() ?? "unknown",
         history_generation: v2Binding.service.generation,
-        reason: "session_replaced",
+        reason: "peer_stop",
       });
     } catch { /* best-effort */ }
     _detachPeerChannel(peer.runtimeKey);

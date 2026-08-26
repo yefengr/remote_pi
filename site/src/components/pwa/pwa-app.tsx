@@ -14,6 +14,8 @@ import { normalizePeerId } from "@/lib/remote-pi/encoding";
 import { generateOwnerKeyPair } from "@/lib/remote-pi/crypto";
 import { assertBrowserCapabilities, browserName, fromStoredKey, mergeRooms, migrateLegacyDefaultRelay, toStoredKey, type ConnectionContext } from "@/lib/pwa/runtime";
 import { TimelineRuntime, type TimelineScope, type TimelineViewItem } from "@/lib/pwa/timeline-runtime";
+import { recoverServerFrame } from "@/lib/pwa/server-frame-recovery";
+import { ReconnectState, type ReconnectTrigger } from "@/lib/pwa/reconnect-state";
 import { HistoryWindowAssembler, TimelineEventFragmentAssembler } from "@/lib/pwa/timeline-transfer";
 import { commitRealtime, loadRecent, replaceRecentWindow, TimelineStoreConflictError } from "@/lib/pwa/timeline-store";
 import type { TimelineEvent } from "@/lib/remote-pi/protocol-v2/schema";
@@ -82,6 +84,10 @@ export function PwaApp() {
   const suppressRoomPersistenceRef = useRef(new Set<string>());
   const retryAttemptRef = useRef(0);
   const scheduleReconnectRef = useRef<(() => void) | null>(null);
+  const reconnectStateRef = useRef(new ReconnectState());
+  const requestReconnect = useCallback((trigger: ReconnectTrigger, token?: number) => {
+    reconnectStateRef.current.request(trigger, () => scheduleReconnectRef.current?.(), token);
+  }, []);
   const selectionGenerationRef = useRef(0);
   const roomRevisionRef = useRef(0);
   const activeRoomSnapshotRef = useRef<Set<string> | null>(null);
@@ -149,9 +155,9 @@ export function PwaApp() {
   const reportTimelineWrite = useCallback((write: Promise<unknown>) => {
     void trackWrite(write).catch((writeError) => {
       setError(writeError instanceof TimelineStoreConflictError ? "Local timeline changed unexpectedly. Resyncing…" : "Could not update local history.");
-      if (writeError instanceof TimelineStoreConflictError) scheduleReconnectRef.current?.();
+      if (writeError instanceof TimelineStoreConflictError) requestReconnect("error");
     });
-  }, [trackWrite]);
+  }, [requestReconnect, trackWrite]);
 
   const interruptStreamingOutput = useCallback(() => {
     historyAssemblerRef.current = null;
@@ -249,22 +255,44 @@ export function PwaApp() {
       setConnection("online");
       return;
     }
-    if (frame.type === "reset" || frame.type === "bye") {
-      historyAssemblerRef.current = null;
-      fragmentAssemblerRef.current?.reset();
-      fragmentAssemblerRef.current = null;
-      realtimeJournalRef.current.clear();
-      setNextBefore(null);
-      setLoadingEarlier(false);
-      applyTimelineChange(timelineRuntimeRef.current.invalidateScope());
-      sessionEpochRef.current += 1;
-      networkSnapshotAppliedEpochRef.current = 0;
-      setConnection("connecting");
-      const helloId = id();
-      helloRequestRef.current = helloId;
-      context.channel.send({ protocol_version: 2, type: "session_hello", id: helloId, channel_id: context.channel.channelId });
-      return;
-    }
+    const recoveryAction = recoverServerFrame(frame, {
+      invalidateScope: () => {
+        historyAssemblerRef.current = null;
+        fragmentAssemblerRef.current?.reset();
+        fragmentAssemblerRef.current = null;
+        realtimeJournalRef.current.clear();
+        setNextBefore(null);
+        setLoadingEarlier(false);
+        applyTimelineChange(timelineRuntimeRef.current.invalidateScope());
+        sessionEpochRef.current += 1;
+        networkSnapshotAppliedEpochRef.current = 0;
+        helloRequestRef.current = null;
+      },
+      rehello: () => {
+        setConnection("connecting");
+        const helloId = id();
+        helloRequestRef.current = helloId;
+        context.channel.send({ protocol_version: 2, type: "session_hello", id: helloId, channel_id: context.channel.channelId });
+      },
+      reconnect: () => {
+        reconnectStateRef.current.replacementBye();
+        context.channel.close();
+        context.relay.close();
+      },
+      disconnect: () => {
+        reconnectStateRef.current.terminalBye();
+        if (reconnectRef.current) {
+          clearTimeout(reconnectRef.current);
+          reconnectRef.current = null;
+        }
+        retryAttemptRef.current = 0;
+        setRetryAttempt(0);
+        setConnection("offline");
+        context.channel.close();
+        context.relay.close();
+      },
+    });
+    if (recoveryAction !== "ignore") return;
     const changed = timelineRuntimeRef.current.receive(frame);
     if (frame.type === "timeline_event_fragment") {
       const scope = timelineRuntimeRef.current.currentScope;
@@ -368,6 +396,7 @@ export function PwaApp() {
       setConnection("no_network");
       return;
     }
+    const connectionToken = reconnectStateRef.current.beginConnection();
     const relay = new RelayClient({ relayUrl: peer.relayUrl || relayUrl, identity });
     let channel: PeerChannel | null = null;
     const context = () => channel ? { generation, peerId: peer.id, peerEpk: peer.remoteEpk, roomId: selectedRoom, channel, relay } : null;
@@ -393,13 +422,13 @@ export function PwaApp() {
         interruptStreamingOutput();
         void markPeerRoomsOffline(peer.remoteEpk);
         setConnection("offline");
-        scheduleReconnectRef.current?.();
+        requestReconnect("closed", connectionToken);
       }
     });
     const removeError = relay.on("error", (eventError) => {
       if (!channel || !isCurrentSelection(generation, peer.id, peer.remoteEpk, selectedRoom, channel, relay)) return;
       setError(eventError.message);
-      scheduleReconnectRef.current?.();
+      requestReconnect("error", connectionToken);
     });
     const removeControl = relay.on("control", (frame) => handleControlFrame(frame, generation, peer, relay));
     const dispose = () => {
@@ -421,11 +450,11 @@ export function PwaApp() {
     } catch (connectError) {
       if (channel && isCurrentSelection(generation, peer.id, peer.remoteEpk, selectedRoom, channel, relay)) {
         setError(connectError instanceof Error ? connectError.message : "Relay connection failed");
-        scheduleReconnectRef.current?.();
+        requestReconnect("connect_rejected", connectionToken);
       }
     }
     return dispose;
-  }, [handleControlFrame, handleServerFrame, identity, interruptStreamingOutput, isCurrentSelection, markPeerRoomsOffline, relayUrl]);
+  }, [handleControlFrame, handleServerFrame, identity, interruptStreamingOutput, isCurrentSelection, markPeerRoomsOffline, relayUrl, requestReconnect]);
 
   const invalidateConnection = useCallback((resetRetries = true) => {
     const previousPeer = activePeerRef.current;
@@ -468,6 +497,7 @@ export function PwaApp() {
       return;
     }
     const selectedRoom = roomIdRef.current;
+    reconnectStateRef.current.userRecover();
     const generation = invalidateConnection(resetRetries);
     if (resetRetries) {
       retryAttemptRef.current = 1;
@@ -491,7 +521,7 @@ export function PwaApp() {
       setConnection("no_network");
       return;
     }
-    if (reconnectRef.current || retryAttemptRef.current >= MAX_RETRY_ATTEMPTS) {
+    if (reconnectStateRef.current.isTerminal || reconnectRef.current || retryAttemptRef.current >= MAX_RETRY_ATTEMPTS) {
       if (retryAttemptRef.current >= MAX_RETRY_ATTEMPTS) setConnection("offline");
       return;
     }
@@ -502,7 +532,7 @@ export function PwaApp() {
     setConnection("retrying");
     reconnectRef.current = setTimeout(() => {
       reconnectRef.current = null;
-      if (selectionGenerationRef.current !== generation) return;
+      if (selectionGenerationRef.current !== generation || reconnectStateRef.current.isTerminal) return;
       restartActiveConnection(false);
     }, RETRY_DELAYS_MS[attempt - 1]);
   }, [restartActiveConnection, selectionReady]);
@@ -516,6 +546,7 @@ export function PwaApp() {
 
   const selectPeer = useCallback((peerId: string | null) => {
     if (peerId === activePeerIdRef.current) return;
+    reconnectStateRef.current.userRecover();
     invalidateConnection();
     const selectedPeer = peers.find((peer) => peer.id === peerId) ?? null;
     const selectedRoom = selectedPeer?.roomId || "main";
@@ -541,6 +572,7 @@ export function PwaApp() {
   const selectRoom = useCallback((nextRoom: string) => {
     const peer = activePeerRef.current;
     if (!peer || !nextRoom || nextRoom === roomIdRef.current) return;
+    reconnectStateRef.current.userRecover();
     invalidateConnection();
     roomIdRef.current = nextRoom;
     setRoomId(nextRoom);
@@ -673,7 +705,7 @@ export function PwaApp() {
       setConnection("tab_in_use");
     });
     const tryConnect = async () => {
-      if (disposed || attemptInFlight || cleanup) return;
+      if (disposed || reconnectStateRef.current.isTerminal || attemptInFlight || cleanup) return;
       attemptInFlight = true;
       const acquired = await lock.acquire();
       attemptInFlight = false;
@@ -717,10 +749,10 @@ export function PwaApp() {
       channelRef.current = null;
       relayRef.current = null;
     };
-  }, [activePeerId, connectActivePeer, identity, interruptStreamingOutput, isCurrentSelection, markPeerRoomsOffline, pairState, roomId, selectionReady, startupState]);
+  }, [activePeerId, connectActivePeer, identity, interruptStreamingOutput, isCurrentSelection, markPeerRoomsOffline, pairState, requestReconnect, roomId, selectionReady, startupState]);
 
   useEffect(() => {
-    const reconnect = () => scheduleReconnectRef.current?.();
+    const reconnect = () => requestReconnect("closed");
     const goOffline = () => {
       if (reconnectRef.current) clearTimeout(reconnectRef.current);
       reconnectRef.current = null;
@@ -739,7 +771,7 @@ export function PwaApp() {
       if (reconnectRef.current) clearTimeout(reconnectRef.current);
       reconnectRef.current = null;
     };
-  }, [invalidateConnection]);
+  }, [invalidateConnection, requestReconnect]);
 
   const sendMessage = useCallback(() => {
     const text = draft.trim();
@@ -785,6 +817,7 @@ export function PwaApp() {
         void pairingRelay.connect().then(() => { channel.sendPairRequest(createPairRequest(payload.token, browserName(), id())); }).catch((connectError) => { setError(connectError instanceof Error ? connectError.message : "Could not connect to Relay."); finish(null); });
       });
       if (pairedPeer) {
+        reconnectStateRef.current.userRecover();
         await getPwaDatabase().pairings.put(pairedPeer);
         const nextPeers = await listPwaPeers();
         setPeers(nextPeers);
@@ -800,11 +833,20 @@ export function PwaApp() {
   }, [identity, relayUrl, selectPeer]);
 
   const saveRelayUrl = useCallback(async (value: string) => {
-    const normalized = value.trim().replace(/\/$/, "");
-    setRelayUrl(normalized || DEFAULT_RELAY);
-    await getPwaDatabase().settings.put({ key: RELAY_SETTING, value: normalized || DEFAULT_RELAY });
+    const normalized = value.trim().replace(/\/$/, "") || DEFAULT_RELAY;
+    const updatedPeers = peers.map((peer) => ({ ...peer, relayUrl: normalized }));
+    setRelayUrl(normalized);
+    await Promise.all([
+      getPwaDatabase().settings.put({ key: RELAY_SETTING, value: normalized }),
+      getPwaDatabase().pairings.bulkPut(updatedPeers),
+    ]);
+    setPeers(updatedPeers);
+    const activePeer = activePeerRef.current;
+    if (activePeer) activePeerRef.current = { ...activePeer, relayUrl: normalized };
     setSettingsOpen(false);
-  }, []);
+    reconnectStateRef.current.userRecover();
+    if (activePeer) restartActiveConnection();
+  }, [peers, restartActiveConnection]);
 
   const removePeer = useCallback(async (peer: PwaPeerRecord) => {
     const label = `${displayPeer(peer)} / ${peer.roomId || "main"}`;
