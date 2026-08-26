@@ -8,7 +8,7 @@
 - 阶段 2（Extension 最小永久提交链路）：**已完成（2026-08-25）**
 - 阶段 3（v2 逻辑 channel 与权威历史）：**已完成（2026-08-25，Extension 侧）**
 - 阶段 4（Site pending、时间线与 IndexedDB）：**已完成**
-- 阶段 5（Extension/Site Protocol v2 自动化跨项目联调）：**自动化已完成，待真实 Relay/Pi/PWA 手工联调**
+- 阶段 5（Extension/Site Protocol v2 跨项目联调）：**已完成（自动化 + 真实 Relay/Pi/PWA）**
 - Protocol v2 schema、codec、fixture：已冻结；Extension/Site 生产入口已切换为 v2 strict wire
 - Relay：无代码改动
 
@@ -565,11 +565,11 @@ git diff --check
 
 阶段 4 继续负责 Site pending/history/Dexie/UI；阶段 5 再完成跨项目 v2 联调。
 
-### 阶段 4：Site pending、时间线与 IndexedDB（已完成，待阶段 5 联调）
+### 阶段 4：Site pending、时间线与 IndexedDB（已完成）
 
 已完成 Site Protocol v2 生产接线、session hello/ready 与 channel/generation 门禁、pending/accepted/committed/unknown delivery、正式事件与 observed、history/fragment 窗口重组、同步期 realtime journal 合并、最近 5 个完整 group 的 Dexie v6 缓存、reset/bye 重握手、早页内存分页以及 TimelineEvent/partial UI。Site 定向测试 30/30、TypeScript、定向 ESLint、Next build 和 `git diff --check` 均通过；真实 Relay/Pi 同窗联调留在阶段 5。
 
-### 阶段 5：跨项目联调（自动化已完成，待真实手工联调）
+### 阶段 5：跨项目联调（已完成）
 
 已完成测试专用 in-memory Relay/Pi/PWA harness，并将 Extension 历史 v1 集成断言迁移为严格 v2。自动化覆盖：
 
@@ -583,9 +583,20 @@ git diff --check
 
 验证证据：
 
-- Extension 全量：46 files，848 passed，3 skipped，0 failed。
-- Site Protocol/PWA 相关测试：52 passed，0 failed。
+- Extension 全量：46 files，850 passed，3 skipped，0 failed。
+- Site Protocol/PWA 相关测试：60 passed，0 failed。
 - Extension typecheck/build、Site typecheck、定向 ESLint 和 `git diff --check` 通过。
 - Relay Rust 生产代码未修改；Protocol v1 fallback 未恢复。
 
-仍待真实环境手工联调：启动真实 Relay、Pi Extension 和浏览器 PWA，验证 WebSocket/outer envelope、真实 Pi SDK 调度、Pi 进程重启后的 JSONL 恢复、真实 branch/tree navigation、断线重连以及双 PWA 浏览器 tab。完成该手工回归后再将阶段 5 标记为已完成。
+真实环境联调已完成：
+
+1. 从源码启动 Rust Relay、当前 Extension，以及 Site production standalone 产物；Relay对Pi和两个独立浏览器Owner/profile完成真实Ed25519 challenge-response认证。
+2. PWA普通输入完成pending、received/accepted、正式user/assistant提交和observed收敛；页面刷新与历史重同步后，DOM和Dexie均未重复。
+3. 真实模型回合覆盖assistant stream、thinking partial、bash tool running/result和正式tool历史；两个Owner同时收到相同Owner broadcast，direct状态不串台。
+4. 在真实`bash sleep 15`执行窗口内由另一Owner发送第二条消息，JSONL marker确认`origin: pwa`、`delivery: queued`和正确`sender_ref`，并在前一轮agent_end后的下一macrotask排出。
+5. 初始历史只返回最近5个完整group；第6组通过opaque cursor加载到内存，Dexie仍只缓存最近5组。
+6. Relay停机后两个PWA进入离线且正式缓存保留；使用同一SQLite重启Relay后，Pi与两个Owner自动重新认证，事件数量与ID保持不变。
+7. Pi进程使用同一JSONL重启后恢复相同session ID和权威历史；真实fork切到较早branch时，两个PWA均切换到新session scope且旧branch不再显示；切回原session后最近5组和早页均无重复恢复。
+8. 真实联调发现并修复了session replacement握手缺口：旧Extension实例现在在detach/close前发送`bye{session_replaced}`，PWA关闭旧连接并以新channel重新hello；`quit`使用`shutdown`、revoke/stop使用`peer_stop`并终止自动重连，用户主动恢复入口可重新连接。
+9. 同一浏览器profile的第二tab按`RelayConnectionLock`设计只显示本地历史且不建立第二条Relay WebSocket；真实多PWA验证使用两个独立Owner/profile，不把同profile锁行为误判为多channel失败。
+10. Pi真实模型联调共使用6个短业务输入；第一次4秒busy窗口因浏览器自动化耗时未命中queued门槛，随后以15秒工具窗口完成有效复测。根据Pi回合usage，合计模型费用约0.0931美元。Relay Rust生产代码未修改，Protocol v1 fallback未恢复。
