@@ -15,6 +15,7 @@ import {
   timelineEventSchema,
   timelinePartialSchema,
   thinkingLevelSchema,
+  queuedMessageItemSchema,
   timestampSchema,
   userBlockSchema,
   wireImageSchema,
@@ -62,7 +63,7 @@ export const userMessageFrameSchema = strictObject({
   ...channelRequest,
   client_request_id: idSchema,
   text: textSchema,
-  images: z.array(wireImageSchema).max(MAX_ARRAY_ITEMS).optional(),
+  images: z.array(wireImageSchema).max(1).optional(),
   streaming_behavior: z.literal("steer").optional(),
 });
 export const userMessageObservedFrameSchema = strictObject({
@@ -135,6 +136,7 @@ export const queuedMessageSetFrameSchema = strictObject({
   id: idSchema,
   ...channelRequest,
   text: textSchema,
+  images: z.array(wireImageSchema).max(1).optional(),
 });
 export const queuedMessageClearFrameSchema = strictObject({
   ...protocol,
@@ -365,6 +367,14 @@ export const modelsListFrameSchema = strictObject({
   models: z.array(wireModelSchema).max(MAX_ARRAY_ITEMS),
   current: wireModelSchema.optional(),
 });
+export const queuedMessageStateFrameSchema = strictObject({
+  ...ownerBroadcast,
+  type: z.literal("queued_message_state"),
+  snapshot_id: idSchema,
+  chunk_index: z.number().int().nonnegative().finite(),
+  final: z.boolean(),
+  items: z.array(queuedMessageItemSchema).max(MAX_ARRAY_ITEMS),
+});
 export const extensionUiRequestFrameSchema = z.union([
   strictObject({ ...protocol, type: z.literal("extension_ui_request"), ...directResponse, id: idSchema, method: z.literal("select"), title: textSchema, options: z.array(textSchema).max(MAX_ARRAY_ITEMS), ask: extensionUiRequestPayloadSchema.options[0].shape.ask.optional() }),
   strictObject({ ...protocol, type: z.literal("extension_ui_request"), ...directResponse, id: idSchema, method: z.literal("confirm"), title: textSchema, message: textSchema, ask: extensionUiRequestPayloadSchema.options[1].shape.ask.optional() }),
@@ -413,6 +423,7 @@ export const serverFrameSchema = z.union([
   actionOkFrameSchema,
   actionErrorFrameSchema,
   modelsListFrameSchema,
+  queuedMessageStateFrameSchema,
   extensionUiRequestFrameSchema,
   byeFrameSchema,
 ]);
@@ -420,7 +431,7 @@ export const serverFrameSchema = z.union([
 export type ClientFrame = z.infer<typeof clientFrameSchema>;
 export type ServerFrame = z.infer<typeof serverFrameSchema>;
 export type DirectClientFrame = Exclude<ClientFrame, { type: "pair_request" | "ping" }>;
-export type OwnerBroadcastServerFrame = Extract<ServerFrame, { type: "timeline_event" | "timeline_partial" | "timeline_event_fragment" | "bye" }>;
+export type OwnerBroadcastServerFrame = Extract<ServerFrame, { type: "timeline_event" | "timeline_partial" | "timeline_event_fragment" | "queued_message_state" | "bye" }>;
 
 export const clientFrameTypes = new Set<string>(CLIENT_FRAME_TYPES);
 export const serverFrameTypes = new Set<string>(SERVER_FRAME_TYPES);

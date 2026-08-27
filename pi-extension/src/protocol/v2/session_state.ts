@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export type V2IdempotencyStatus = "received" | "accepted" | "committed" | "unknown_delivery";
+export type V2IdempotencyStatus = "received" | "queued" | "accepted" | "committed" | "unknown_delivery";
 
 export type V2ChannelState = {
   readonly senderRef: string;

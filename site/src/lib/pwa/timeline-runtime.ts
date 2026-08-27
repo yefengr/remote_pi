@@ -2,6 +2,10 @@ import type { ClientFrame, ServerFrame } from "../remote-pi/protocol-v2/frames";
 import type { TimelineEvent, TimelinePartial } from "../remote-pi/protocol-v2/schema";
 import { parseTimelineEventV2, parseTimelinePartialV2 } from "../remote-pi/protocol-v2/codec";
 
+type UserMessageFrame = Extract<ClientFrame, { type: "user_message" }>;
+type UserMessageImages = NonNullable<UserMessageFrame["images"]>;
+type UserMessageSendResult = { frame: UserMessageFrame; change: TimelineRuntimeChange };
+
 export type TimelineScope = {
   peerEpk: string;
   roomId: string;
@@ -17,6 +21,8 @@ export type TimelinePending = {
   id: string;
   clientRequestId: string;
   text: string;
+  images?: UserMessageImages;
+  cancelable?: boolean;
   createdAt: number;
   delivery: PendingDelivery;
   requestId: string;
@@ -70,6 +76,9 @@ export class TimelineRuntime {
   private readonly pending = new Map<string, Pending>();
   private historyEvents: TimelineEvent[] = [];
   private unknown: Pending[] = [];
+  private readonly queuedIds = new Set<string>();
+  private queuedSnapshotId: string | null = null;
+  private readonly queuedSnapshotItems = new Map<string, (Extract<ServerFrame, { type: "queued_message_state" }>["items"])[number]>();
   private readonly observedQueue: ClientFrame[] = [];
 
   setScope(scope: TimelineScope): TimelineRuntimeChange {
@@ -106,24 +115,48 @@ export class TimelineRuntime {
     return this.change();
   }
 
-  sendUser(text: string, images?: Extract<ClientFrame, { type: "user_message" }>['images']): { frame: Extract<ClientFrame, { type: "user_message" }>; change: TimelineRuntimeChange } | null {
+  sendUser(text: string, images?: UserMessageImages, requestIds?: { clientRequestId: string; requestId: string }): UserMessageSendResult | null {
     const scope = this.scope;
-    if (!scope || !text.trim()) return null;
-    const clientRequestId = randomId();
+    const hasImages = Boolean(images?.length);
+    if (!scope || images?.length && images.length > 1 || (!text.trim() && !hasImages)) return null;
+    const clientRequestId = requestIds?.clientRequestId ?? randomId();
+    const requestId = requestIds?.requestId ?? randomId();
     const now = Date.now();
-    const requestId = randomId();
-    this.pending.set(clientRequestId, { kind: "pending", id: `pending:${clientRequestId}`, clientRequestId, requestId, text, createdAt: now, delivery: "pending" });
+    this.pending.set(clientRequestId, {
+      kind: "pending",
+      id: `pending:${clientRequestId}`,
+      clientRequestId,
+      requestId,
+      text,
+      ...(hasImages ? { images } : {}),
+      createdAt: now,
+      delivery: "pending",
+    });
     return {
-      frame: {
-        protocol_version: 2,
-        type: "user_message",
-        id: requestId,
-        channel_id: scope.channelId,
-        history_generation: scope.historyGeneration,
-        client_request_id: clientRequestId,
-        text,
-        ...(images ? { images } : {}),
-      },
+      frame: this.userMessageFrame(scope, requestId, clientRequestId, text, images),
+      change: this.change(),
+    };
+  }
+
+  markUnknownDelivery(clientRequestId: string): TimelineRuntimeChange {
+    const pending = this.pending.get(clientRequestId);
+    if (!pending) return this.change();
+    this.pending.delete(clientRequestId);
+    this.unknown.push({ ...pending, delivery: "unknown_delivery" });
+    return this.change();
+  }
+
+  retryUnknown(clientRequestId: string): UserMessageSendResult | null {
+    const scope = this.scope;
+    const index = this.unknown.findIndex((pending) => pending.clientRequestId === clientRequestId);
+    if (!scope || index < 0) return null;
+    const previous = this.unknown[index];
+    const requestId = randomId();
+    const pending = { ...previous, requestId, delivery: "pending" as const };
+    this.unknown.splice(index, 1);
+    this.pending.set(clientRequestId, pending);
+    return {
+      frame: this.userMessageFrame(scope, requestId, clientRequestId, pending.text, pending.images),
       change: this.change(),
     };
   }
@@ -131,6 +164,58 @@ export class TimelineRuntime {
   receive(frame: ServerFrame): TimelineRuntimeChange {
     if (frame.type === "session_ready") return this.change();
     if (frame.type === "reset") return { ...this.invalidateScope(), reset: frame };
+    if (frame.type === "queued_message_state") {
+      const scope = this.scope;
+      if (!scope || !isMatchingScope(scope, frame)) return this.change();
+      if (this.queuedSnapshotId !== frame.snapshot_id || frame.chunk_index === 0) {
+        this.queuedSnapshotId = frame.snapshot_id;
+        this.queuedSnapshotItems.clear();
+      }
+      for (const item of frame.items) this.queuedSnapshotItems.set(item.id, item);
+      if (!frame.final) return this.change();
+      const nextQueuedItems = [...this.queuedSnapshotItems.values()];
+      const nextQueuedIds = new Set(nextQueuedItems.map((item) => item.id));
+      for (const clientRequestId of this.queuedIds) {
+        if (nextQueuedIds.has(clientRequestId)) continue;
+        const pending = this.pending.get(clientRequestId);
+        if (pending?.messageId === undefined) this.pending.delete(clientRequestId);
+      }
+      for (const item of nextQueuedItems) {
+        const existing = this.pending.get(item.id);
+        if (existing) {
+          existing.text = item.text;
+          existing.images = item.images;
+          existing.cancelable = item.sender_ref === scope.selfSenderRef;
+          existing.delivery = "accepted";
+          continue;
+        }
+        this.unknown = this.unknown.filter((pending) => pending.clientRequestId !== item.id);
+        this.pending.set(item.id, {
+          kind: "pending",
+          id: `pending:${item.id}`,
+          clientRequestId: item.id,
+          text: item.text,
+          ...(item.images ? { images: item.images } : {}),
+          cancelable: item.sender_ref === scope.selfSenderRef,
+          createdAt: item.created_at,
+          delivery: "accepted",
+          requestId: item.id,
+        });
+      }
+      this.queuedIds.clear();
+      for (const clientRequestId of nextQueuedIds) this.queuedIds.add(clientRequestId);
+      this.queuedSnapshotItems.clear();
+      this.queuedSnapshotId = null;
+      return this.change();
+    }
+    if (frame.type === "protocol_error" && frame.in_reply_to) {
+      const pending = [...this.pending.values()].find((candidate) => candidate.requestId === frame.in_reply_to);
+      if (pending) {
+        this.pending.delete(pending.clientRequestId);
+        this.unknown.push({ ...pending, delivery: "unknown_delivery" });
+      }
+      return this.change();
+    }
     if (frame.type === "user_message_status") {
       if (!isMatchingScope(this.scope, frame)) return this.change();
       const pending = this.pending.get(frame.client_request_id);
@@ -221,6 +306,19 @@ export class TimelineRuntime {
     return [...this.pending.values(), ...this.unknown];
   }
 
+  private userMessageFrame(scope: TimelineScope, requestId: string, clientRequestId: string, text: string, images?: UserMessageImages): UserMessageFrame {
+    return {
+      protocol_version: 2,
+      type: "user_message",
+      id: requestId,
+      channel_id: scope.channelId,
+      history_generation: scope.historyGeneration,
+      client_request_id: clientRequestId,
+      text,
+      ...(images?.length ? { images } : {}),
+    };
+  }
+
   private commitParsed(event: TimelineEvent): void {
     const previous = this.events.get(event.event_id);
     if (previous && JSON.stringify(previous) !== JSON.stringify(event)) return;
@@ -251,6 +349,9 @@ export class TimelineRuntime {
 
   private clearTransient(movePendingToUnknown: boolean): void {
     this.partials.clear();
+    this.queuedIds.clear();
+    this.queuedSnapshotItems.clear();
+    this.queuedSnapshotId = null;
     if (movePendingToUnknown) {
       for (const pending of this.pending.values()) this.unknown.push({ ...pending, delivery: "unknown_delivery" });
     }

@@ -9,6 +9,9 @@ export type StreamingBehavior = "steer";
 export type QueuedMessageItem = {
   id: string;
   text: string;
+  /** Omitted for text-only items so the existing no-image wire path is unchanged. */
+  images?: WireImage[];
+  sender_ref?: string;
   editable: boolean;
   created_at: number;
 };
@@ -183,7 +186,7 @@ export type ClientMessage =
       images?: WireImage[];
       streaming_behavior?: StreamingBehavior;
     }
-  | { type: "queued_message_set"; id: string; text: string }
+  | { type: "queued_message_set"; id: string; text: string; images?: WireImage[] }
   | { type: "queued_message_clear"; id: string; target_id?: string }
   | { type: "approve_tool"; id: string; tool_call_id: string; decision: "allow" | "deny" }
   | { type: "cancel"; id: string; target_id: string }

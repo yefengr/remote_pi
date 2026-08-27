@@ -65,8 +65,9 @@ export class V2PeerChannel implements V2Channel {
   }
 
   sendV2(msg: ServerFrame): void {
-    const ct = Buffer.from(encodeServerFrameV2(msg)).toString("base64");
+    let ct: string;
     try {
+      ct = Buffer.from(encodeServerFrameV2(msg)).toString("base64");
       this.relay.send(JSON.stringify({ peer: this.remotePeerId, ct } satisfies OuterEnvelope));
     } catch {
       // Reconnect plus authoritative history recovers dropped formal events.

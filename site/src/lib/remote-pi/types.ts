@@ -56,6 +56,8 @@ export interface WireModel {
 export interface QueuedMessageItem {
   id: string;
   text: string;
+  images?: WireImage[];
+  sender_ref?: string;
   editable: boolean;
   created_at: number;
 }
@@ -115,7 +117,7 @@ export type ExtensionUiResponse =
 export type ClientMessage =
   | PairRequest
   | { type: "user_message"; id: string; text: string; images?: WireImage[]; streaming_behavior?: StreamingBehavior }
-  | { type: "queued_message_set"; id: string; text: string }
+  | { type: "queued_message_set"; id: string; text: string; images?: WireImage[] }
   | { type: "queued_message_clear"; id: string; target_id?: string }
   | { type: "approve_tool"; id: string; tool_call_id: string; decision: "allow" | "deny" }
   | { type: "cancel"; id: string; target_id: string }
@@ -147,7 +149,7 @@ export type ServerMessage =
     }
   | { type: "pair_error"; in_reply_to: string; code: PairErrorCode; message: string }
   | { type: "user_input" | "user_message"; id: string; text: string; images?: WireImage[]; streaming_behavior?: StreamingBehavior }
-  | { type: "queued_message_state"; id?: string; text?: string; items?: QueuedMessageItem[] }
+  | { type: "queued_message_state"; id?: string; text?: string; images?: WireImage[]; items?: QueuedMessageItem[] }
   | { type: "steer_consumed"; id: string }
   | { type: "agent_chunk"; in_reply_to: string; delta: string }
   | { type: "agent_done"; in_reply_to: string; usage?: Usage }

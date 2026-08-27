@@ -3,7 +3,7 @@
 import { useState, type RefObject } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ChevronDown, MessageSquare } from "lucide-react";
+import { ChevronDown, MessageSquare, RefreshCw, X } from "lucide-react";
 import type { TimelineEvent, TimelinePartial } from "@/lib/remote-pi/protocol-v2/schema";
 import type { TimelinePending, TimelineViewItem } from "@/lib/pwa/timeline-runtime";
 
@@ -15,6 +15,8 @@ type MessageListProps = {
   listRef: RefObject<HTMLDivElement | null>;
   bottomSentinelRef: RefObject<HTMLDivElement | null>;
   onScroll: () => void;
+  onRetryUnknown?: (clientRequestId: string) => void;
+  onCancelQueued?: (clientRequestId: string) => void;
 };
 
 function blockText(event: TimelineEvent | TimelinePartial): string {
@@ -53,9 +55,10 @@ function EventCard({ event }: { event: TimelineEvent }) {
   </article>;
 }
 
-function PendingCard({ pending }: { pending: TimelinePending }) {
+function PendingCard({ pending, onRetryUnknown, onCancelQueued }: { pending: TimelinePending; onRetryUnknown?: (clientRequestId: string) => void; onCancelQueued?: (clientRequestId: string) => void }) {
   const label = pending.delivery === "unknown_delivery" ? "Unknown" : pending.delivery === "accepted" ? "Queued" : "You";
-  return <article className="pwa-message user pending"><div className="pwa-message-label">{label}<span className="pwa-streaming"><span /> {pending.delivery === "unknown_delivery" ? "delivery unknown" : pending.delivery}</span></div><p>{pending.text}</p><time>{new Date(pending.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></article>;
+  const queued = pending.delivery === "accepted" && pending.messageId === undefined && pending.cancelable === true;
+  return <article className="pwa-message user pending"><div className="pwa-message-label">{label}<span className="pwa-streaming"><span /> {pending.delivery === "unknown_delivery" ? "delivery unknown" : pending.delivery}</span>{pending.delivery === "unknown_delivery" && onRetryUnknown ? <button className="pwa-pending-retry" type="button" onClick={() => onRetryUnknown(pending.clientRequestId)} aria-label="Retry delivery" title="Retry delivery"><RefreshCw size={14} /></button> : null}{queued && onCancelQueued ? <button className="pwa-pending-retry" type="button" onClick={() => onCancelQueued(pending.clientRequestId)} aria-label="Cancel queued message" title="Cancel queued message"><X size={14} /></button> : null}</div><div className="pwa-user-blocks">{pending.text ? <p>{pending.text}</p> : null}{pending.images?.map((image, index) => <img className="pwa-message-image" key={index} src={`data:${image.mime};base64,${image.data}`} alt={`User attachment ${index + 1}`} />)}</div><time>{new Date(pending.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></article>;
 }
 
 function PartialCard({ partial }: { partial: TimelinePartial }) {
@@ -64,10 +67,10 @@ function PartialCard({ partial }: { partial: TimelinePartial }) {
   return <article className={`pwa-message ${partial.kind} partial`}><div className="pwa-message-label">{label}<span className="pwa-streaming"><span /> streaming</span></div>{partial.kind === "assistant" ? <div className="pwa-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown></div> : <p>{text}</p>}</article>;
 }
 
-export function MessageList({ items, hasEarlier, loadingEarlier, onLoadEarlier, listRef, bottomSentinelRef, onScroll }: MessageListProps) {
+export function MessageList({ items, hasEarlier, loadingEarlier, onLoadEarlier, listRef, bottomSentinelRef, onScroll, onRetryUnknown, onCancelQueued }: MessageListProps) {
   return <div className="pwa-message-list" ref={listRef} onScroll={onScroll}>
     {hasEarlier ? <button className="pwa-secondary-button pwa-earlier-button" type="button" onClick={onLoadEarlier} disabled={loadingEarlier}>{loadingEarlier ? "Loading earlier records…" : "Load earlier records"}</button> : null}
-    {items.length === 0 ? <div className="pwa-chat-empty"><div className="pwa-chat-empty-icon"><MessageSquare size={21} /></div><h3>Ready when you are.</h3><p>Your local session history will appear here.</p></div> : items.map((item) => item.kind === "event" ? <EventCard event={item.event} key={item.event.event_id} /> : item.kind === "pending" ? <PendingCard pending={item} key={item.id} /> : <PartialCard partial={item.partial} key={item.partial.partial_id} />)}
+    {items.length === 0 ? <div className="pwa-chat-empty"><div className="pwa-chat-empty-icon"><MessageSquare size={21} /></div><h3>Ready when you are.</h3><p>Your local session history will appear here.</p></div> : items.map((item) => item.kind === "event" ? <EventCard event={item.event} key={item.event.event_id} /> : item.kind === "pending" ? <PendingCard pending={item} key={item.id} onRetryUnknown={onRetryUnknown} onCancelQueued={onCancelQueued} /> : <PartialCard partial={item.partial} key={item.partial.partial_id} />)}
     <div ref={bottomSentinelRef} aria-hidden="true" className="pwa-bottom-sentinel" />
   </div>;
 }

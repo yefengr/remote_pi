@@ -20,8 +20,10 @@ export type V2ServiceOptions = {
   onUserMessage: (
     frame: Extract<ClientFrame, { type: "user_message" }>,
     correlation: Correlation,
-  ) => boolean;
+  ) => boolean | "queued" | "rejected";
   onCancel?: (targetId: string) => boolean;
+  onQueuedMessageClear?: (targetId?: string) => void;
+  onListModels?: () => Pick<Extract<ServerFrame, { type: "models_list" }>, "models" | "current">;
 };
 
 export type V2Broadcast = Extract<
@@ -39,6 +41,8 @@ export class TimelineV2Service {
   private readonly runtime: TimelineRuntime;
   private readonly onUserMessage: V2ServiceOptions["onUserMessage"];
   private readonly onCancel?: V2ServiceOptions["onCancel"];
+  private readonly onQueuedMessageClear?: V2ServiceOptions["onQueuedMessageClear"];
+  private readonly onListModels?: V2ServiceOptions["onListModels"];
   private readonly requestChannels = new Map<string, string>();
   private generationValue: string;
 
@@ -50,6 +54,8 @@ export class TimelineV2Service {
     this.runtime = options.runtime;
     this.onUserMessage = options.onUserMessage;
     this.onCancel = options.onCancel;
+    this.onQueuedMessageClear = options.onQueuedMessageClear;
+    this.onListModels = options.onListModels;
     this.pager = new TimelineHistoryPager(
       this.sessionManager,
       (manager) => this.runtime.recover(manager),
@@ -97,15 +103,17 @@ export class TimelineV2Service {
       case "user_message_observed":
         return this.handleObserved(frame);
       case "queued_message_set":
-      case "queued_message_clear":
       case "approve_tool":
       case "session_new":
       case "session_compact":
       case "model_set":
       case "thinking_set":
-      case "list_models":
       case "extension_ui_response":
         return this.requireReady(frame);
+      case "list_models":
+        return this.handleListModels(frame);
+      case "queued_message_clear":
+        return this.handleQueuedMessageClear(frame);
     }
   }
 
@@ -162,7 +170,8 @@ export class TimelineV2Service {
   }
 
   canDrain(clientRequestId: string): boolean {
-    return this.findRecord(clientRequestId)?.status === "received";
+    const status = this.findRecord(clientRequestId)?.status;
+    return status === "received" || status === "queued";
   }
 
   unknownDelivery(clientRequestId: string): ServerFrame[] {
@@ -248,6 +257,13 @@ export class TimelineV2Service {
     return this.direct(frame.channel_id, { type: "pong", in_reply_to: frame.id });
   }
 
+  private handleQueuedMessageClear(frame: Extract<ClientFrame, { type: "queued_message_clear" }>): ServerFrame[] {
+    const error = this.ensureReady(frame);
+    if (error) return [error];
+    this.onQueuedMessageClear?.(frame.target_id);
+    return [];
+  }
+
   private handleCancel(frame: Extract<ClientFrame, { type: "cancel" }>): ServerFrame[] {
     const error = this.ensureReady(frame);
     if (error) return [error];
@@ -303,7 +319,16 @@ export class TimelineV2Service {
       };
     try {
       const acceptedForDelivery = this.onUserMessage(frame, correlation);
+      if (acceptedForDelivery === "rejected") {
+        this.state.forget(result.record.key);
+        this.requestChannels.delete(frame.client_request_id);
+        return [this.error(frame.id, "too_large", "The image queue is full; retry after queued work drains.", frame.channel_id)];
+      }
       if (!acceptedForDelivery) return this.unknownDelivery(frame.client_request_id);
+      if (acceptedForDelivery === "queued") {
+        this.state.update(result.record.key, "queued");
+        return [this.status(frame, "accepted")];
+      }
       if (frame.streaming_behavior === "steer") return this.unknownDelivery(frame.client_request_id);
       return [this.status(frame, "received")];
     } catch {
@@ -317,6 +342,7 @@ export class TimelineV2Service {
   ): ServerFrame[] {
     if (record.status === "unknown_delivery") return this.unknownDelivery(frame.client_request_id);
     if (record.status === "received") return [this.status(frame, "received")];
+    if (record.status === "queued") return [this.status(frame, "accepted")];
     return [this.status(frame, record.status === "committed" ? "committed" : "accepted", record.messageId, record.groupId)];
   }
 
@@ -336,6 +362,17 @@ export class TimelineV2Service {
       ...(messageId ? { message_id: messageId } : {}),
       ...(groupId ? { group_id: groupId } : {}),
     })[0]!;
+  }
+
+  private handleListModels(frame: Extract<ClientFrame, { type: "list_models" }>): ServerFrame[] {
+    const error = this.ensureReady(frame);
+    if (error) return [error];
+    if (!this.onListModels) return [this.error(frame.id, "unsupported_type", "model listing is unavailable", frame.channel_id)];
+    try {
+      return this.direct(frame.channel_id, { type: "models_list", ...this.onListModels(), in_reply_to: frame.id });
+    } catch {
+      return [this.error(frame.id, "internal_error", "Could not list available models.", frame.channel_id)];
+    }
   }
 
   private requireReady(frame: ClientFrame): ServerFrame[] {
@@ -367,7 +404,7 @@ export class TimelineV2Service {
 
   private error(
     inReplyTo: string,
-    code: "protocol_upgrade_required" | "invalid_channel" | "invalid_message" | "unsupported_type" | "internal_error",
+    code: "protocol_upgrade_required" | "invalid_channel" | "invalid_message" | "unsupported_type" | "too_large" | "internal_error",
     message: string,
     channelId?: string,
   ): ServerFrame {

@@ -268,6 +268,26 @@ export async function handleModelSet(
   });
 }
 
+export function getModelsList(
+  ctx: ActionCtx | null,
+  reg: ActionModelRegistry,
+  currentNameOrId?: string,
+): { models: WireModel[]; current?: WireModel } {
+  // Prefer Pi's LIVE session registry when available so the app sees models
+  // registered dynamically by extensions via `pi.registerProvider(...)`.
+  // Fall back to remote-pi's own disk-backed registry when no ctx exists.
+  const liveReg = ctx?.modelRegistry ?? reg;
+  liveReg.refresh();
+  const available = liveReg.getAvailable();
+  const models = available.map(wireFromModel);
+  const liveCurrent = ctx?.getModel?.();
+  const cachedMatches = currentNameOrId
+    ? available.filter((model) => model.id === currentNameOrId || model.name === currentNameOrId)
+    : [];
+  const current = liveCurrent ?? (cachedMatches.length === 1 ? cachedMatches[0] : undefined);
+  return { models, ...(current ? { current: wireFromModel(current) } : {}) };
+}
+
 export function handleListModels(
   ctx: ActionCtx | null,
   reg: ActionModelRegistry,
@@ -277,19 +297,7 @@ export function handleListModels(
   // refresh() can throw if `models.json` is malformed — wrap in try so the
   // app gets an explicit error reply instead of a silent drop.
   try {
-    // Prefer Pi's LIVE session registry when available so the app sees models
-    // registered dynamically by extensions via `pi.registerProvider(...)`.
-    // Fall back to remote-pi's own disk-backed registry when no ctx exists.
-    const liveReg = ctx?.modelRegistry ?? reg;
-    liveReg.refresh();
-    const models = liveReg.getAvailable().map(wireFromModel);
-    const current = ctx?.getModel?.();
-    sender.send({
-      type: "models_list",
-      in_reply_to: msg.id,
-      models,
-      current: current ? wireFromModel(current) : undefined,
-    });
+    sender.send({ type: "models_list", in_reply_to: msg.id, ...getModelsList(ctx, reg) });
   } catch (e) {
     sender.send({
       type: "error",

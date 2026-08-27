@@ -17,7 +17,7 @@ Atualizada em 2026-08-25.
 
 ### Inner frame 规则
 
-- JSON UTF-8 inner frame 最大 `512 KiB`；未完成逻辑窗口最大 `32 MiB`；单 fragment 解码后最大 `50 KiB`。
+- JSON UTF-8 inner frame 最大 `2 MiB`；未完成逻辑窗口最大 `32 MiB`；单 fragment 解码后最大 `50 KiB`。
 - ID 最大 256 字符；普通字符串最大 1 MiB；数组最大 4096 项；时间戳必须是非负有限数。
 - 所有对象 strict，拒绝未知字段；`JsonValue` 只允许可递归 JSON 值。
 - `TimelineEvent` 同时用于实时正式事件与历史 `session_history_chunk.events`，不允许 `unknown` payload 或半成品事件。
@@ -36,7 +36,7 @@ Atualizada em 2026-08-25.
 
 PWA → Extension：`pair_request`、`session_hello`、`user_message`、`user_message_observed`、`session_sync`、`queued_message_set`、`queued_message_clear`、`approve_tool`、`cancel`、`ping`、`session_new`、`session_compact`、`model_set`、`thinking_set`、`list_models`、`extension_ui_response`。
 
-Extension → PWA：`pair_ok`、`pair_error`、`session_ready`、`user_message_started`、`user_message_status`、`timeline_event`、`timeline_partial`、`timeline_event_fragment`、`session_history_chunk`、`protocol_error`、`reset`、`pong`、`cancelled`、`action_ok`、`action_error`、`models_list`、`extension_ui_request`、`bye`。
+Extension → PWA：`pair_ok`、`pair_error`、`session_ready`、`user_message_started`、`user_message_status`、`timeline_event`、`timeline_partial`、`timeline_event_fragment`、`session_history_chunk`、`protocol_error`、`reset`、`pong`、`cancelled`、`action_ok`、`action_error`、`models_list`、`queued_message_state`、`extension_ui_request`、`bye`。
 
 `approve_tool` 暂保留为严格 v2 输入帧，以便现有入口在正式切换时明确拒绝/忽略策略；它不重新启用生产 approval gate。
 
@@ -323,7 +323,8 @@ Detalhes em `plan/28-pi-commands.md`.
 ## Imagens (plan/30)
 
 `user_message` aceita um anexo de imagem inline (uma por mensagem hoje),
-opcional e retrocompatível — mensagem só-texto não muda no fio.
+opcional e retrocompatível — mensagem só-texto não muda no fio. A primeira versão
+PWA também usa o mesmo caminho para imagens que aguardam a fila do Pi.
 
 ### Wire
 ClientMessage `user_message` ganha `images?`:
@@ -350,8 +351,9 @@ tem `vision:false`.
 
 ### Transporte
 A imagem vai **inline** na `user_message` (base64), dentro do `ct` atual: no caminho PWA↔Pi ele pode ser encaminhado sem parse, mas é Base64 de JSON em claro, não ciphertext/E2E, e o operador do relay pode lê-lo. Custo: double-base64 (~+77%),
-aceito nesta fatia por usar imagem comprimida (~150–400 KB). Histórico/
-`session_sync` trafega os bytes (decisão #8). Canal binário fica pra Trilha 2.
+aceito nesta fatia por usar imagem comprimida com orçamento dinâmico dentro do
+limite de frame `2 MiB`. Histórico/`session_sync` trafega os bytes (decisão #8).
+Canal binário e fragmentação de upload ficam para uma trilha futura.
 
 ---
 
@@ -366,38 +368,49 @@ relay; restart perde o estado.
 
 ```jsonc
 // PWA → Pi-extension
-{ "type": "queued_message_set", "id": "msg-2", "text": "próximo prompt" }
+{ "type": "queued_message_set", "id": "msg-2", "text": "próximo prompt", "images": [{ "data": "<base64>", "mime": "image/jpeg" }] }
 { "type": "queued_message_clear", "id": "clear-1", "target_id": "msg-2" }
 { "type": "queued_message_clear", "id": "clear-all" }
 
-// Pi-extension → PWA(s)
+// Pi-extension → PWA(s), legacy envelope
 {
   "type": "queued_message_state",
   "id": "msg-2",
   "text": "próximo prompt",
   "items": [
-    { "id": "msg-2", "text": "próximo prompt", "editable": true, "created_at": 1782250000000 }
+    { "id": "msg-2", "text": "próximo prompt", "images": [{ "data": "<base64>", "mime": "image/jpeg" }], "sender_ref": "owner", "editable": true, "created_at": 1782250000000 }
   ]
 }
-{ "type": "queued_message_state", "items": [] } // vazio
+// Protocol v2 state is chunked; every frame is <= 2 MiB.
+{
+  "protocol_version": 2,
+  "type": "queued_message_state",
+  "session_id": "S1", "history_generation": "G1",
+  "snapshot_id": "SNAP1", "chunk_index": 0, "final": true,
+  "items": [{ "id": "msg-2", "text": "próximo prompt", "images": [{ "data": "<base64>", "mime": "image/jpeg" }], "sender_ref": "owner", "editable": true, "created_at": 1782250000000 }]
+}
 ```
 
 ### Semântica
 
-- `queued_message_set`: cria/substitui uma pendência textual PWA-owned. `id`
-  vira o id do `user_message` drenado.
+- `queued_message_set`: cria/substitui uma pendência PWA-owned. `id` vira o
+  id do `user_message` drenado; a pendência pode carregar uma imagem.
 - `queued_message_clear.target_id`: cancela um item. Sem `target_id`, cancela
   todos os itens PWA-owned (compat com o antigo clear de slot único).
-- Enquanto o Pi está ocupado, cada mudança broadcasta o estado completo para
-  todos os owners conectados.
+- Enquanto o Pi está ocupado, cada mudança broadcasta o estado para todos os
+  owners conectados. No Protocol v2, `queued_message_state` usa
+  `snapshot_id`/`chunk_index`/`final`; uma fila grande pode ocupar vários frames,
+  todos abaixo do limite de `2 MiB`.
 - Se `queued_message_set` chega quando o Pi já está idle, a extensão drena
   imediatamente como `user_message` normal e broadcasta estado vazio, para não
   deixar item preso esperando um turn futuro.
 - Drain: quando `currentTurnId == null`, `working != true` e não há compaction
   ativa, remove um item, broadcasta `queued_message_state`, faz handoff para o
   SDK, e só então ecoa `user_message` normal para todos os owners.
-- `session_sync`: envia o `queued_message_state` atual antes do histórico.
-- Só texto. `images` seguem apenas no `user_message` imediato.
+- `session_sync`: o estado atual da fila é enviado quando o canal v2 é
+  estabelecido, antes do histórico.
+- `images` são preservadas no `user_message`, no estado da fila e no histórico;
+  a UI do PWA limita a uma imagem por mensagem.
 - Filas internas do Pi/TUI não são expostas/editáveis neste MVP: a extension API
   não fornece ids estáveis nem mutação segura dessa fila.
 - Relay inalterado; não há E2E e o operador do relay pode ler o conteúdo atual.

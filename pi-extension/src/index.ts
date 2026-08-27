@@ -73,6 +73,8 @@ import type {
 import {
   decodeClientFrameV2,
   encodeServerFrameV2,
+  fingerprintV2Payload,
+  MAX_FRAME_BYTES,
   parseTimelinePartialV2,
   type ClientFrame,
   type ServerFrame,
@@ -94,6 +96,7 @@ import {
   handleModelSet,
   handleThinkingSet,
   handleListModels,
+  getModelsList,
   type ActionCtx,
 } from "./actions/handlers.js";
 import { ensureModelRegistry } from "./actions/registry.js";
@@ -935,7 +938,8 @@ function _ensureV2Service(senderRef: string): TimelineV2Service | null {
       const steering = frame.streaming_behavior === "steer";
       const busy = _agentRunActive || _isBusyForQueueDrain() || _v2QueuedDrainScheduled;
       if (!steering && busy) {
-        return _enqueueV2UserMessage(senderRef, frame, correlation);
+        const queued = _enqueueV2UserMessage(senderRef, frame, correlation);
+        return queued === true ? "queued" : queued;
       }
 
       const previousTurnId = _currentTurnId;
@@ -955,6 +959,12 @@ function _ensureV2Service(senderRef: string): TimelineV2Service | null {
       return true;
     },
     onCancel: (targetId) => _abortCurrentTurn(_lastEventCtx ?? _lastCtx ?? undefined),
+    onQueuedMessageClear: (targetId) => _clearV2QueuedUserMessages(senderRef, targetId),
+    onListModels: () => getModelsList(
+      (_lastEventCtx ?? _lastCtx) as ActionCtx | null,
+      ensureModelRegistry((_lastEventCtx ?? _lastCtx) as ActionCtx | null),
+      _currentModel,
+    ),
   });
   return service;
 }
@@ -971,6 +981,9 @@ function _routeV2ClientFrameFrom(senderRef: string, frame: ClientFrame): void {
   }
   const frames = binding.service.handle(frame);
   for (const response of frames) binding.channel.sendV2(response);
+  if (frame.type === "session_hello") {
+    for (const state of _v2QueuedStateFrames(binding.service)) binding.channel.sendV2(state);
+  }
 }
 
 function _attachV2Peer(relay: RelayClient, appPeerId: string): void {
@@ -990,18 +1003,30 @@ type PendingSteer = { id: string; text: string };
 let _pendingSteers: PendingSteer[] = [];
 let _lastConsumedSteerText: string | null = null;
 
-type PwaQueuedItem = QueuedMessageItem & { editable: true };
+type PwaQueuedItem = QueuedMessageItem & {
+  editable: true;
+  ownerRef: string;
+  imageBytes: number;
+};
 let _queuedItems: PwaQueuedItem[] = [];
 
 const MAX_V2_QUEUED_USERS_PER_OWNER = 128;
 const MAX_V2_QUEUED_USERS = 512;
 const V2_QUEUED_USER_TTL_MS = 5 * 60 * 1000;
+export const MAX_QUEUED_IMAGE_BYTES_PER_OWNER = 8 * 1024 * 1024;
+export const MAX_QUEUED_IMAGE_BYTES_GLOBAL = 32 * 1024 * 1024;
+
+type QueuedImageLimits = { perOwner: number; global: number };
+let _queuedImageBytesGlobal = 0;
+const _queuedImageBytesByOwner = new Map<string, number>();
+let _queuedImageLimitsForTest: QueuedImageLimits | null = null;
 
 type V2QueuedUserMessage = {
   senderRef: string;
   frame: Extract<ClientFrame, { type: "user_message" }>;
   correlation: Correlation;
   enqueuedAt: number;
+  imageBytes: number;
   payloadFingerprint: string;
 };
 let _v2QueuedUserMessages: V2QueuedUserMessage[] = [];
@@ -1036,12 +1061,75 @@ let _agentRunActive = false;
 let _agentRunGeneration = 0;
 let _meshDrainScheduled = false;
 
+function _queuedImageLimits(): QueuedImageLimits {
+  return _queuedImageLimitsForTest ?? {
+    perOwner: MAX_QUEUED_IMAGE_BYTES_PER_OWNER,
+    global: MAX_QUEUED_IMAGE_BYTES_GLOBAL,
+  };
+}
+
+/** Test-only: lower the image budget without allocating multi-megabyte frames. */
+export function _setQueuedImageLimitsForTest(limits: QueuedImageLimits | null): void {
+  if (limits && (
+    !Number.isSafeInteger(limits.perOwner) || limits.perOwner < 0 ||
+    !Number.isSafeInteger(limits.global) || limits.global < 0
+  )) {
+    throw new Error("queued image limits must be non-negative safe integers");
+  }
+  _queuedImageLimitsForTest = limits ? { ...limits } : null;
+}
+
+/**
+ * Count the retained wire representation, never decoded bytes. Base64 is ASCII
+ * under the strict v2 schema, and UTF-8 remains a conservative estimate for
+ * legacy input; this is stable without decoding or retaining a second buffer.
+ */
+function _estimateQueuedImageBytes(images: readonly WireImage[] | undefined): number {
+  if (!images || images.length === 0) return 0;
+  return images.reduce(
+    (total, image) => total + Buffer.byteLength(image.data, "utf8") + Buffer.byteLength(image.mime, "utf8"),
+    0,
+  );
+}
+
+function _reserveQueuedImageBytes(ownerRef: string, imageBytes: number): boolean {
+  if (imageBytes === 0) return true;
+  const limits = _queuedImageLimits();
+  const ownerBytes = _queuedImageBytesByOwner.get(ownerRef) ?? 0;
+  if (ownerBytes + imageBytes > limits.perOwner || _queuedImageBytesGlobal + imageBytes > limits.global) {
+    return false;
+  }
+  _queuedImageBytesGlobal += imageBytes;
+  _queuedImageBytesByOwner.set(ownerRef, ownerBytes + imageBytes);
+  return true;
+}
+
+function _releaseQueuedImageBytes(ownerRef: string, imageBytes: number): void {
+  if (imageBytes === 0) return;
+  const ownerBytes = _queuedImageBytesByOwner.get(ownerRef) ?? 0;
+  const remainingOwnerBytes = Math.max(0, ownerBytes - imageBytes);
+  if (remainingOwnerBytes === 0) _queuedImageBytesByOwner.delete(ownerRef);
+  else _queuedImageBytesByOwner.set(ownerRef, remainingOwnerBytes);
+  _queuedImageBytesGlobal = Math.max(0, _queuedImageBytesGlobal - imageBytes);
+}
+
+function _restoreQueuedImageBytes(ownerRef: string, imageBytes: number): void {
+  if (imageBytes === 0) return;
+  _queuedImageBytesGlobal += imageBytes;
+  _queuedImageBytesByOwner.set(ownerRef, (_queuedImageBytesByOwner.get(ownerRef) ?? 0) + imageBytes);
+}
+
+function _queuedStateItem(item: PwaQueuedItem): QueuedMessageItem {
+  const { ownerRef, imageBytes: _imageBytes, ...wireItem } = item;
+  return { ...wireItem, sender_ref: ownerRef };
+}
+
 function _queuedStateMessage(): ServerMessage {
   const first = _queuedItems[0];
   return {
     type: "queued_message_state",
     ...(first ? { id: first.id, text: first.text } : {}),
-    items: _queuedItems.map((item) => ({ ...item })),
+    items: _queuedItems.map(_queuedStateItem),
   };
 }
 
@@ -1054,28 +1142,34 @@ function _broadcastQueuedState(): void {
 }
 
 function _resetQueuedItems({ broadcast = false }: { broadcast?: boolean } = {}): void {
+  for (const item of _queuedItems) _releaseQueuedImageBytes(item.ownerRef, item.imageBytes);
   _queuedItems = [];
   if (broadcast) _broadcastQueuedState();
 }
 
-function _upsertQueuedItem(item: PwaQueuedItem): void {
-  const index = _queuedItems.findIndex((existing) => existing.id === item.id);
-  if (index === -1) {
-    _queuedItems = [..._queuedItems, item];
-  } else {
-    _queuedItems = [
-      ..._queuedItems.slice(0, index),
-      item,
-      ..._queuedItems.slice(index + 1),
-    ];
+function _enqueuePwaQueuedItem(item: PwaQueuedItem): boolean {
+  if (_queuedItems.some((existing) => existing.id === item.id)) {
+    // Image attachments are immutable while queued. A retry is free; changing
+    // the item requires queued_message_clear followed by a new id.
+    _broadcastQueuedState();
+    return true;
   }
+  if (!_reserveQueuedImageBytes(item.ownerRef, item.imageBytes)) return false;
+  _queuedItems = [..._queuedItems, item];
   _broadcastQueuedState();
+  return true;
 }
 
 function _clearQueuedItems(targetId?: string): void {
-  _queuedItems = targetId
-    ? _queuedItems.filter((item) => item.id !== targetId)
-    : [];
+  const retained: PwaQueuedItem[] = [];
+  for (const item of _queuedItems) {
+    if (targetId === undefined || item.id === targetId) {
+      _releaseQueuedImageBytes(item.ownerRef, item.imageBytes);
+    } else {
+      retained.push(item);
+    }
+  }
+  _queuedItems = retained;
   _broadcastQueuedState();
 }
 
@@ -1117,14 +1211,21 @@ function _maybeDrainQueuedItem(): void {
   if (_isBusyForQueueDrain()) return;
   const item = _queuedItems.shift();
   if (!item) return;
+  _releaseQueuedImageBytes(item.ownerRef, item.imageBytes);
   _broadcastQueuedState();
 
   const previousTurnId = _currentTurnId;
   _currentTurnId = item.id;
-  const msg: ClientUserMessage = { type: "user_message", id: item.id, text: item.text };
-  const wake = _wakeAgent(item.text, `queued PWA user_message id=${item.id}`, "steer");
+  const msg: ClientUserMessage = {
+    type: "user_message",
+    id: item.id,
+    text: item.text,
+    ...(item.images && item.images.length > 0 ? { images: item.images } : {}),
+  };
+  const wake = _wakeAgent(_v2UserContent(item), `queued PWA user_message id=${item.id}`, "steer");
   if (!wake.ok) {
     _currentTurnId = previousTurnId;
+    _restoreQueuedImageBytes(item.ownerRef, item.imageBytes);
     _queuedItems = [item, ..._queuedItems];
     _broadcastQueuedState();
     _broadcastToActive({
@@ -1139,7 +1240,7 @@ function _maybeDrainQueuedItem(): void {
 }
 
 function _v2UserContent(
-  frame: Extract<ClientFrame, { type: "user_message" }>,
+  frame: Pick<Extract<ClientFrame, { type: "user_message" }>, "text" | "images">,
 ): Parameters<ExtensionAPI["sendUserMessage"]>[0] {
   return frame.images && frame.images.length > 0
     ? [
@@ -1150,15 +1251,101 @@ function _v2UserContent(
 }
 
 function _resetV2QueuedUserMessages(): void {
+  for (const item of _v2QueuedUserMessages) _releaseQueuedImageBytes(item.senderRef, item.imageBytes);
   _v2QueuedUserMessages = [];
   _v2QueuedDrainScheduled = false;
   _v2QueuedEpoch += 1;
+  _broadcastV2QueuedState();
 }
 
 function _v2QueuedPayloadFingerprint(
   frame: Extract<ClientFrame, { type: "user_message" }>,
 ): string {
-  return JSON.stringify({ text: frame.text, images: frame.images ?? [] });
+  return fingerprintV2Payload({
+    text: frame.text,
+    images: frame.images ?? [],
+    streaming_behavior: frame.streaming_behavior ?? null,
+  });
+}
+
+function _v2QueuedWireItem(item: Pick<V2QueuedUserMessage, "senderRef" | "frame" | "enqueuedAt">): QueuedMessageItem {
+  return {
+    id: item.frame.client_request_id,
+    text: item.frame.text,
+    ...(item.frame.images && item.frame.images.length > 0 ? { images: item.frame.images } : {}),
+    sender_ref: item.senderRef,
+    editable: true,
+    created_at: item.enqueuedAt,
+  };
+}
+
+function _v2QueuedItemFitsFrame(item: Pick<V2QueuedUserMessage, "senderRef" | "frame" | "enqueuedAt">, service: TimelineV2Service): boolean {
+  return Buffer.byteLength(JSON.stringify({
+    protocol_version: 2,
+    type: "queued_message_state",
+    session_id: _currentSessionManager?.getSessionId() ?? "unknown",
+    history_generation: service.generation,
+    snapshot_id: randomUUID(),
+    chunk_index: 0,
+    final: true,
+    items: [_v2QueuedWireItem(item)],
+  }), "utf8") <= MAX_FRAME_BYTES;
+}
+
+function _v2QueuedStateFrames(service: TimelineV2Service): ServerFrame[] {
+  const snapshotId = randomUUID();
+  const items = _v2QueuedUserMessages.map((item) => _v2QueuedWireItem(item));
+  const chunks: typeof items[] = [];
+  let current: typeof items = [];
+  for (const item of items) {
+    const candidate = [...current, item];
+    const probe = {
+      protocol_version: 2 as const,
+      type: "queued_message_state" as const,
+      session_id: _currentSessionManager?.getSessionId() ?? "unknown",
+      history_generation: service.generation,
+      snapshot_id: snapshotId,
+      chunk_index: chunks.length,
+      final: false,
+      items: candidate,
+    };
+    if (current.length > 0 && Buffer.byteLength(JSON.stringify(probe), "utf8") > MAX_FRAME_BYTES) {
+      chunks.push(current);
+      current = [item];
+    } else {
+      current = candidate;
+    }
+  }
+  if (current.length > 0 || chunks.length === 0) chunks.push(current);
+  return chunks.map((itemsChunk, index) => ({
+    protocol_version: 2,
+    type: "queued_message_state",
+    session_id: _currentSessionManager?.getSessionId() ?? "unknown",
+    history_generation: service.generation,
+    snapshot_id: snapshotId,
+    chunk_index: index,
+    final: index === chunks.length - 1,
+    items: itemsChunk,
+  }));
+}
+
+function _broadcastV2QueuedState(): void {
+  _broadcastV2((service) => _v2QueuedStateFrames(service));
+}
+
+function _clearV2QueuedUserMessages(senderRef: string, targetId?: string): void {
+  const retained: V2QueuedUserMessage[] = [];
+  for (const item of _v2QueuedUserMessages) {
+    const matchesOwner = item.senderRef === senderRef;
+    const matchesTarget = targetId === undefined || item.frame.client_request_id === targetId;
+    if (matchesOwner && matchesTarget) {
+      _releaseQueuedImageBytes(item.senderRef, item.imageBytes);
+    } else {
+      retained.push(item);
+    }
+  }
+  _v2QueuedUserMessages = retained;
+  _broadcastV2QueuedState();
 }
 
 function _sendV2QueuedUnknown(item: V2QueuedUserMessage, binding: V2PeerBinding): void {
@@ -1177,24 +1364,28 @@ function _sendV2QueuedUnknown(item: V2QueuedUserMessage, binding: V2PeerBinding)
 
 function _expireV2QueuedUserMessages(now: number): void {
   const live: V2QueuedUserMessage[] = [];
+  let changed = false;
   for (const item of _v2QueuedUserMessages) {
     if (now - item.enqueuedAt <= V2_QUEUED_USER_TTL_MS) {
       live.push(item);
       continue;
     }
+    changed = true;
+    _releaseQueuedImageBytes(item.senderRef, item.imageBytes);
     const binding = _v2ActivePeers.get(item.senderRef);
     if (binding && item.frame.history_generation === binding.service.generation) {
       _sendV2QueuedUnknown(item, binding);
     }
   }
   _v2QueuedUserMessages = live;
+  if (changed) _broadcastV2QueuedState();
 }
 
 function _enqueueV2UserMessage(
   senderRef: string,
   frame: Extract<ClientFrame, { type: "user_message" }>,
   correlation: Correlation,
-): boolean {
+): boolean | "rejected" {
   const now = Date.now();
   _expireV2QueuedUserMessages(now);
   const payloadFingerprint = _v2QueuedPayloadFingerprint(frame);
@@ -1203,15 +1394,22 @@ function _enqueueV2UserMessage(
   if (duplicate) return duplicate.payloadFingerprint === payloadFingerprint;
   const ownerCount = _v2QueuedUserMessages.filter((item) => item.senderRef === senderRef).length;
   if (ownerCount >= MAX_V2_QUEUED_USERS_PER_OWNER || _v2QueuedUserMessages.length >= MAX_V2_QUEUED_USERS) {
-    return false;
+    return frame.images && frame.images.length > 0 ? "rejected" : false;
   }
+  const imageBytes = _estimateQueuedImageBytes(frame.images);
+  const service = _v2ActivePeers.get(senderRef)?.service;
+  const candidate = { senderRef, frame, enqueuedAt: now };
+  if (imageBytes > 0 && (!service || !_v2QueuedItemFitsFrame(candidate, service))) return "rejected";
+  if (!_reserveQueuedImageBytes(senderRef, imageBytes)) return "rejected";
   _v2QueuedUserMessages.push({
     senderRef,
     frame,
     correlation: { ...correlation, delivery: "queued" },
     enqueuedAt: now,
+    imageBytes,
     payloadFingerprint,
   });
+  _broadcastV2QueuedState();
   return true;
 }
 
@@ -1232,6 +1430,8 @@ function _scheduleV2QueuedUserDrain(): void {
 
     const item = _v2QueuedUserMessages.shift();
     if (!item) return;
+    _releaseQueuedImageBytes(item.senderRef, item.imageBytes);
+    _broadcastV2QueuedState();
     const binding = _v2ActivePeers.get(item.senderRef);
     if (!binding || item.frame.history_generation !== binding.service.generation) {
       _scheduleV2QueuedUserDrain();
@@ -1549,7 +1749,13 @@ function _detachPeerChannel(appPeerId: string): void {
   try { v2?.channel.detach(); } catch { /* best-effort */ }
   _activePeers.delete(appPeerId);
   _v2ActivePeers.delete(appPeerId);
-  _v2QueuedUserMessages = _v2QueuedUserMessages.filter((item) => item.senderRef !== appPeerId);
+  const retainedV2QueuedItems: V2QueuedUserMessage[] = [];
+  for (const item of _v2QueuedUserMessages) {
+    if (item.senderRef === appPeerId) _releaseQueuedImageBytes(item.senderRef, item.imageBytes);
+    else retainedV2QueuedItems.push(item);
+  }
+  _v2QueuedUserMessages = retainedV2QueuedItems;
+  _broadcastV2QueuedState();
   if (_peerShort === appPeerId.slice(0, 8)) {
     // Pick a different remaining peer for the UX hint, or clear when none.
     const next = _activePeers.keys().next().value ?? _v2ActivePeers.keys().next().value;
@@ -4860,11 +5066,29 @@ export function _routeClientMessageFrom(
   switch (msg.type) {
     case "queued_message_set": {
       const text = msg.text.trim();
-      if (!text) {
+      const images = msg.images && msg.images.length > 0 ? msg.images : undefined;
+      if (!text && !images) {
         _clearQueuedItems(msg.id);
         break;
       }
-      _upsertQueuedItem({ id: msg.id, text, editable: true, created_at: Date.now() });
+      const queued = _enqueuePwaQueuedItem({
+        id: msg.id,
+        text,
+        ...(images ? { images } : {}),
+        editable: true,
+        created_at: Date.now(),
+        ownerRef: sender.getPeerId(),
+        imageBytes: _estimateQueuedImageBytes(images),
+      });
+      if (!queued) {
+        sender.send({
+          type: "error",
+          code: "too_large",
+          in_reply_to: msg.id,
+          message: "Image queue capacity exceeded; retry after queued work drains.",
+        });
+        break;
+      }
       _maybeDrainQueuedItem();
       break;
     }

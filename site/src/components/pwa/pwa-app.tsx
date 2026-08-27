@@ -1,6 +1,6 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownToLine, Activity, MessageSquare, RefreshCw, Settings, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent } from "react";
+import { ArrowDownToLine, Activity, Camera, ClipboardPaste, ImagePlus, MessageSquare, RefreshCw, Send, Settings, X } from "lucide-react";
 import { MessageList } from "@/components/pwa/message-list";
 import { describeStartupFailure, PairingDialog, StartupErrorView, StartupLoading, type StartupError } from "@/components/pwa/pwa-startup";
 import { SessionSheet } from "@/components/pwa/session-sheet";
@@ -14,14 +14,15 @@ import { normalizePeerId } from "@/lib/remote-pi/encoding";
 import { generateOwnerKeyPair } from "@/lib/remote-pi/crypto";
 import { assertBrowserCapabilities, browserName, fromStoredKey, mergeRooms, migrateLegacyDefaultRelay, toStoredKey, type ConnectionContext } from "@/lib/pwa/runtime";
 import { TimelineRuntime, type TimelineScope, type TimelineViewItem } from "@/lib/pwa/timeline-runtime";
+import { getImageOutputMime, prepareImageAttachment } from "@/lib/pwa/image-upload";
 import { recoverServerFrame } from "@/lib/pwa/server-frame-recovery";
 import { ReconnectState, type ReconnectTrigger } from "@/lib/pwa/reconnect-state";
 import { HistoryWindowAssembler, TimelineEventFragmentAssembler } from "@/lib/pwa/timeline-transfer";
 import { commitRealtime, loadRecent, replaceRecentWindow, TimelineStoreConflictError } from "@/lib/pwa/timeline-store";
 import type { TimelineEvent } from "@/lib/remote-pi/protocol-v2/schema";
 import { refreshPwaApp } from "@/lib/pwa/service-worker-update";
-import type { ControlFrame, OwnerKeyPair } from "@/lib/remote-pi/types";
-import type { ServerFrame } from "@/lib/remote-pi/protocol-v2/frames";
+import type { ControlFrame, OwnerKeyPair, WireImage } from "@/lib/remote-pi/types";
+import type { ClientFrame, ServerFrame } from "@/lib/remote-pi/protocol-v2/frames";
 import {
   clearPwaData,
   getPwaDatabase,
@@ -44,6 +45,7 @@ const RETRY_DELAYS_MS = [1000, 2000, 5000, 10000, 30000] as const;
 const MAX_RETRY_ATTEMPTS = RETRY_DELAYS_MS.length;
 type PairState = "idle" | "scanning" | "pairing";
 type StartupState = "loading" | "ready" | "error";
+type ImageAttachment = { source: Blob; previewUrl: string; label: string };
 function id(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
@@ -66,6 +68,9 @@ export function PwaApp() {
   const [retryAttempt, setRetryAttempt] = useState(0);
   const [relayUrl, setRelayUrl] = useState(DEFAULT_RELAY);
   const [draft, setDraft] = useState("");
+  const [attachment, setAttachment] = useState<ImageAttachment | null>(null);
+  const [sendingImage, setSendingImage] = useState(false);
+  const [visionAvailable, setVisionAvailable] = useState<boolean | null>(null);
   const [pairState, setPairState] = useState<PairState>("idle");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sessionSheetOpen, setSessionSheetOpen] = useState(false);
@@ -111,15 +116,22 @@ export function PwaApp() {
   const bottomSentinelRef = useRef<HTMLDivElement | null>(null);
   const followOutputRef = useRef(true);
   const scrollOnNextMessagesRef = useRef(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const cameraInputRef = useRef<HTMLInputElement | null>(null);
+  const modelRequestRef = useRef<string | null>(null);
 
   useEffect(() => { roomsRef.current = rooms; }, [rooms]);
   useEffect(() => { roomIdRef.current = roomId; }, [roomId]);
   useEffect(() => { connectionRef.current = connection; }, [connection]);
   const activePeer = useMemo(() => peers.find((peer) => peer.id === activePeerId) ?? null, [activePeerId, peers]);
+  const canAttachImage = connection === "online" && visionAvailable === true && !sendingImage;
   useEffect(() => {
     activePeerRef.current = activePeer;
     activePeerIdRef.current = activePeerId;
   }, [activePeer, activePeerId]);
+  useEffect(() => () => {
+    if (attachment) URL.revokeObjectURL(attachment.previewUrl);
+  }, [attachment]);
   const activeRooms = useMemo(
     () => rooms.filter((room) => room.peerEpk === activePeer?.remoteEpk).sort((a, b) => (a.name || a.cwd || a.roomId).localeCompare(b.name || b.cwd || b.roomId)),
     [activePeer?.remoteEpk, rooms],
@@ -164,6 +176,8 @@ export function PwaApp() {
     fragmentAssemblerRef.current?.reset();
     fragmentAssemblerRef.current = null;
     realtimeJournalRef.current.clear();
+    modelRequestRef.current = null;
+    setVisionAvailable(null);
     setNextBefore(null);
     setLoadingEarlier(false);
     applyTimelineChange(timelineRuntimeRef.current.markDisconnected());
@@ -234,6 +248,10 @@ export function PwaApp() {
 
   const handleServerFrame = useCallback((frame: ServerFrame, context: ConnectionContext) => {
     if (!isCurrentSelection(context.generation, context.peerId, context.peerEpk, context.roomId, context.channel, context.relay)) return;
+    if (frame.type === "models_list") {
+      if (frame.in_reply_to === modelRequestRef.current) setVisionAvailable(frame.current?.vision ?? null);
+      return;
+    }
     if (frame.type === "session_ready") {
       if (frame.in_reply_to !== helloRequestRef.current) return;
       helloRequestRef.current = null;
@@ -252,6 +270,10 @@ export function PwaApp() {
         if (cacheEpoch === sessionEpochRef.current && networkSnapshotAppliedEpochRef.current !== cacheEpoch && timelineRuntimeRef.current.currentScope?.sessionId === scope.sessionId && timelineRuntimeRef.current.currentScope.historyGeneration === scope.historyGeneration) applyTimelineChange(timelineRuntimeRef.current.replaceHistory(cached));
       }).catch(() => setError("Could not read local history."));
       context.channel.send({ protocol_version: 2, type: "session_sync", id: requestId, channel_id: context.channel.channelId, history_generation: frame.history_generation, before: null, limit: 5 });
+      setVisionAvailable(null);
+      const modelRequestId = id();
+      modelRequestRef.current = modelRequestId;
+      context.channel.send({ protocol_version: 2, type: "list_models", id: modelRequestId, channel_id: context.channel.channelId, history_generation: frame.history_generation });
       setConnection("online");
       return;
     }
@@ -294,6 +316,7 @@ export function PwaApp() {
     });
     if (recoveryAction !== "ignore") return;
     const changed = timelineRuntimeRef.current.receive(frame);
+    if (frame.type === "protocol_error") setError(frame.message);
     if (frame.type === "timeline_event_fragment") {
       const scope = timelineRuntimeRef.current.currentScope;
       if (!scope) return;
@@ -563,6 +586,8 @@ export function PwaApp() {
     applyTimelineChange(timelineRuntimeRef.current.clear());
     setLastSyncedAt(undefined);
     setDraft("");
+    setAttachment(null);
+    setVisionAvailable(null);
     setUnreadOutput(0);
     scheduleScrollToLatest();
     setConnection(peerId ? (typeof navigator !== "undefined" && navigator.onLine ? "connecting" : "no_network") : "offline");
@@ -580,6 +605,8 @@ export function PwaApp() {
     applyTimelineChange(timelineRuntimeRef.current.clear());
     setLastSyncedAt(undefined);
     setDraft("");
+    setAttachment(null);
+    setVisionAvailable(null);
     setUnreadOutput(0);
     scheduleScrollToLatest();
     setConnection(typeof navigator !== "undefined" && navigator.onLine ? "connecting" : "no_network");
@@ -773,19 +800,128 @@ export function PwaApp() {
     };
   }, [invalidateConnection, requestReconnect]);
 
-  const sendMessage = useCallback(() => {
+  const setImageAttachment = useCallback((source: Blob, label: string) => {
+    if (!canAttachImage) {
+      setError("Image attachments are unavailable for this connection.");
+      return;
+    }
+    try {
+      getImageOutputMime(source.type);
+    } catch (imageError) {
+      setError(imageError instanceof Error ? imageError.message : "Could not use that image.");
+      return;
+    }
+    setAttachment({ source, previewUrl: URL.createObjectURL(source), label });
+  }, [canAttachImage]);
+
+  const readImageFromClipboard = useCallback(async () => {
+    if (!canAttachImage) {
+      setError("Image attachments are unavailable for this connection.");
+      return;
+    }
+    if (!navigator.clipboard?.read) {
+      setError("This browser cannot read images from the clipboard.");
+      return;
+    }
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const type = item.types.find((candidate) => candidate === "image/png" || candidate === "image/jpeg" || candidate === "image/webp");
+        if (!type) continue;
+        setImageAttachment(await item.getType(type), "Clipboard image");
+        return;
+      }
+      setError("The clipboard does not contain a PNG, JPEG, or WebP image.");
+    } catch (clipboardError) {
+      setError(clipboardError instanceof Error ? clipboardError.message : "Could not read an image from the clipboard.");
+    }
+  }, [canAttachImage, setImageAttachment]);
+
+  const handleImagePaste = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const image = Array.from(event.clipboardData.files).find((file) => file.type.startsWith("image/"));
+    if (!image) return;
+    event.preventDefault();
+    setImageAttachment(image, image.name || "Clipboard image");
+  }, [setImageAttachment]);
+
+  const sendMessage = useCallback(async () => {
     const text = draft.trim();
+    const source = attachment?.source;
     const peer = activePeerRef.current;
     const channel = channelRef.current;
     const generation = selectionGenerationRef.current;
     const selectedRoom = roomIdRef.current;
-    if (!text || !peer || !channel || connectionRef.current !== "online" || !isCurrentSelection(generation, peer.id, peer.remoteEpk, selectedRoom, channel, relayRef.current || undefined)) return;
-    const prepared = timelineRuntimeRef.current.sendUser(text);
-    if (!prepared || !channel.send(prepared.frame)) { setError("Relay is not connected."); return; }
+    const scope = timelineRuntimeRef.current.currentScope;
+    if ((!text && !source) || sendingImage || !peer || !channel || !scope || connectionRef.current !== "online" || !isCurrentSelection(generation, peer.id, peer.remoteEpk, selectedRoom, channel, relayRef.current || undefined)) return;
+    if (source && !canAttachImage) {
+      setError("Image attachments are unavailable for this connection.");
+      return;
+    }
+
+    const clientRequestId = id();
+    const requestId = id();
+    let images: WireImage[] | undefined;
+    if (source) {
+      const frame: Omit<Extract<ClientFrame, { type: "user_message" }>, "images"> = {
+        protocol_version: 2,
+        type: "user_message",
+        id: requestId,
+        channel_id: scope.channelId,
+        history_generation: scope.historyGeneration,
+        client_request_id: clientRequestId,
+        text,
+      };
+      setSendingImage(true);
+      try {
+        images = [await prepareImageAttachment(source, frame)];
+      } catch (imageError) {
+        setError(imageError instanceof Error ? imageError.message : "Could not prepare that image.");
+        return;
+      } finally {
+        setSendingImage(false);
+      }
+      const currentScope = timelineRuntimeRef.current.currentScope;
+      if (!currentScope || currentScope.sessionId !== scope.sessionId || currentScope.historyGeneration !== scope.historyGeneration) return;
+    }
+
+    const prepared = timelineRuntimeRef.current.sendUser(text, images, { clientRequestId, requestId });
+    if (!prepared) return;
+    if (!channel.send(prepared.frame)) {
+      applyTimelineChange(timelineRuntimeRef.current.markUnknownDelivery(clientRequestId));
+      setError("Relay is not connected.");
+      return;
+    }
     applyTimelineChange(prepared.change);
     scheduleScrollToLatest();
-    setDraft("");
-  }, [applyTimelineChange, draft, isCurrentSelection, scheduleScrollToLatest]);
+    setDraft((current) => current.trim() === text ? "" : current);
+    setAttachment(null);
+  }, [applyTimelineChange, attachment, canAttachImage, draft, isCurrentSelection, scheduleScrollToLatest, sendingImage]);
+
+  const retryUnknownMessage = useCallback((clientRequestId: string) => {
+    const peer = activePeerRef.current;
+    const channel = channelRef.current;
+    const generation = selectionGenerationRef.current;
+    const selectedRoom = roomIdRef.current;
+    if (!peer || !channel || connectionRef.current !== "online" || !isCurrentSelection(generation, peer.id, peer.remoteEpk, selectedRoom, channel, relayRef.current || undefined)) return;
+    const prepared = timelineRuntimeRef.current.retryUnknown(clientRequestId);
+    if (!prepared) return;
+    if (!channel.send(prepared.frame)) {
+      applyTimelineChange(timelineRuntimeRef.current.markUnknownDelivery(clientRequestId));
+      setError("Relay is not connected.");
+      return;
+    }
+    applyTimelineChange(prepared.change);
+    scheduleScrollToLatest();
+  }, [applyTimelineChange, isCurrentSelection, scheduleScrollToLatest]);
+
+  const cancelQueuedMessage = useCallback((clientRequestId: string) => {
+    const scope = timelineRuntimeRef.current.currentScope;
+    const channel = channelRef.current;
+    if (!scope || !channel || connectionRef.current !== "online") return;
+    if (!channel.send({ protocol_version: 2, type: "queued_message_clear", id: id(), channel_id: scope.channelId, history_generation: scope.historyGeneration, target_id: clientRequestId })) {
+      setError("Relay is not connected.");
+    }
+  }, []);
 
   const pairFromQr = useCallback(async (raw: string) => {
     if (!identity) return;
@@ -886,6 +1022,7 @@ export function PwaApp() {
     setSessionSheetOpen(false);
     setPairState("idle");
     setDraft("");
+    setAttachment(null);
     scrollOnNextMessagesRef.current = false;
     followOutputRef.current = true;
     setFollowingOutput(true);
@@ -929,12 +1066,25 @@ export function PwaApp() {
         <main className="pwa-main">
           {activePeer ? <>
             <div className="pwa-chat-head"><div><span className="pwa-kicker">Active session</span><h2>{displayPeer(activePeer)}</h2><span className="pwa-chat-meta"><span className={connection === "online" ? "pwa-status-dot online" : "pwa-status-dot"} />{connection === "online" ? "Live" : connection === "tab_in_use" ? "Local history / another tab" : "Local history"} <span className="pwa-separator">/</span> room <code>{roomId}</code> <span className="pwa-separator">/</span> last synced <time dateTime={lastSyncedAt ? new Date(lastSyncedAt).toISOString() : undefined}>{formatSyncTime(lastSyncedAt)}</time></span></div><div className="pwa-room-control"><label htmlFor="room-id">Room</label><select id="room-id" value={roomId} disabled={connection !== "online"} onChange={(event) => selectRoom(event.target.value)}><option value={roomId}>{roomId}</option>{activeRooms.filter((room) => room.roomId !== roomId).map((room) => <option key={room.roomId} value={room.roomId}>{room.name || room.cwd || room.roomId}</option>)}</select></div></div>
-            <MessageList items={timelineItems} hasEarlier={nextBefore !== null} loadingEarlier={loadingEarlier} onLoadEarlier={loadEarlier} listRef={messageListRef} bottomSentinelRef={bottomSentinelRef} onScroll={handleMessageListScroll} />
+            <MessageList items={timelineItems} hasEarlier={nextBefore !== null} loadingEarlier={loadingEarlier} onLoadEarlier={loadEarlier} listRef={messageListRef} bottomSentinelRef={bottomSentinelRef} onScroll={handleMessageListScroll} onRetryUnknown={retryUnknownMessage} onCancelQueued={cancelQueuedMessage} />
             {((connection !== "no_network" && (connection === "retrying" || connection === "offline")) || !followingOutput || unreadOutput > 0) ? <div className="pwa-message-actions">
               {connection !== "no_network" && (connection === "retrying" || connection === "offline") ? <button className="pwa-latest-button" type="button" onClick={() => restartActiveConnection(true)}><RefreshCw size={16} />Try again</button> : null}
               {!followingOutput || unreadOutput > 0 ? <button className="pwa-latest-button" type="button" onClick={() => { scrollToLatest(true); resumeFollowingOutput(); }}><ArrowDownToLine size={16} />{unreadOutput > 0 ? `${unreadOutput} new output` : "Latest"}</button> : null}
             </div> : null}
-            <form className="pwa-composer" onSubmit={(event) => { event.preventDefault(); sendMessage(); }}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={connection === "online" ? "Send a message to your agent..." : "Reconnect to send a message"} disabled={connection !== "online"} rows={2} /><button className="pwa-primary-button" type="submit" disabled={connection !== "online" || !draft.trim()}>Send <span>↗</span></button></form>
+            <form className="pwa-composer" onSubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
+              <input ref={fileInputRef} className="pwa-image-input" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) setImageAttachment(file, file.name || "Image attachment"); event.currentTarget.value = ""; }} />
+              <input ref={cameraInputRef} className="pwa-image-input" type="file" accept="image/png,image/jpeg,image/webp" capture="environment" onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) setImageAttachment(file, file.name || "Camera image"); event.currentTarget.value = ""; }} />
+              {attachment ? <div className="pwa-composer-preview"><img src={attachment.previewUrl} alt={attachment.label} /><button type="button" onClick={() => setAttachment(null)} disabled={sendingImage} aria-label="Remove image" title="Remove image"><X size={14} /></button></div> : null}
+              <div className="pwa-composer-row">
+                <div className="pwa-composer-tools">
+                  <button className="pwa-composer-icon" type="button" onClick={() => fileInputRef.current?.click()} disabled={!canAttachImage} aria-label="Choose image" title="Choose image"><ImagePlus size={18} /></button>
+                  <button className="pwa-composer-icon" type="button" onClick={() => void readImageFromClipboard()} disabled={!canAttachImage} aria-label="Paste image" title="Paste image"><ClipboardPaste size={18} /></button>
+                  <button className="pwa-composer-icon" type="button" onClick={() => cameraInputRef.current?.click()} disabled={!canAttachImage} aria-label="Use camera" title="Use camera"><Camera size={18} /></button>
+                </div>
+                <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onPaste={handleImagePaste} placeholder={connection === "online" ? "Send a message to your agent..." : "Reconnect to send a message"} disabled={connection !== "online" || sendingImage} rows={2} />
+                <button className="pwa-primary-button" type="submit" disabled={connection !== "online" || sendingImage || (!draft.trim() && !attachment) || (attachment !== null && visionAvailable !== true)} aria-label="Send message" title="Send message"><Send size={17} /></button>
+              </div>
+            </form>
           </> : <EmptyWorkspace onPair={() => setPairState("scanning")} />}
         </main>
         {settingsOpen ? <SettingsPanel relayUrl={relayUrl} defaultRelayUrl={DEFAULT_RELAY} onSave={saveRelayUrl} onClose={closeSettings} onClearData={clearLocalData} onResetLayout={resetLayout} /> : null}

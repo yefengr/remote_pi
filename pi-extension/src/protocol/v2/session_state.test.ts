@@ -21,6 +21,10 @@ describe("V2SessionState", () => {
     expect(accepted?.status).toBe("accepted");
     expect(state.begin({ ...request, payload: { streaming_behavior: "steer", images: [], text: "hello" } })).toMatchObject({ kind: "replay", record: { status: "accepted", messageId: "m1" } });
     expect(state.begin({ ...request, payload: { ...request.payload, text: "different" } }).kind).toBe("conflict");
+    expect(state.begin({
+      ...request,
+      payload: { ...request.payload, images: [{ data: "REVG", mime: "image/png" }] },
+    }).kind).toBe("conflict");
   });
 
   test("generation change clears old records", () => {

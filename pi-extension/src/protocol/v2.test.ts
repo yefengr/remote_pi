@@ -77,7 +77,7 @@ const ask = {
 
 describe("v2 bounds and scalar schemas", () => {
   test("exports the frozen protocol limits", () => {
-    expect(MAX_FRAME_BYTES).toBe(512 * 1024);
+    expect(MAX_FRAME_BYTES).toBe(2 * 1024 * 1024);
     expect(MAX_HISTORY_CHUNK_BYTES).toBe(512 * 1024);
     expect(MAX_WINDOW_DECODE_BYTES).toBe(32 * 1024 * 1024);
     expect(MAX_FRAGMENT_DECODE_BYTES).toBe(50 * 1024);
@@ -119,7 +119,7 @@ describe("Protocol v2 client frames", () => {
       { ...version, type: "model_set", id: "N3", ...channel, provider: "openai", model_id: "model" },
       { ...version, type: "thinking_set", id: "N4", ...channel, level: "high" },
       { ...version, type: "list_models", id: "N5", ...channel },
-      { ...version, type: "queued_message_set", id: "N6", ...channel, text: "later" },
+      { ...version, type: "queued_message_set", id: "N6", ...channel, text: "later", images: [{ data: "abc", mime: "image/png" }] },
       { ...version, type: "queued_message_clear", id: "N7", ...channel },
       { ...version, type: "approve_tool", id: "N8", ...channel, tool_call_id: "TC1", decision: "allow" },
     ];
@@ -189,13 +189,14 @@ describe("Protocol v2 server frames", () => {
       { ...version, type: "user_message_status", ...direct, in_reply_to: "R1", ...session, client_request_id: "R1", status: "unknown_delivery" },
     ];
     const timeline = { ...version, type: "timeline_event", ...session, event: userEvent() };
+    const queuedState = { ...version, type: "queued_message_state", ...session, snapshot_id: "SNAP1", chunk_index: 0, final: true, items: [{ id: "Q1", text: "queued image", images: [{ data: "abc", mime: "image/png" }], editable: true, created_at: 1 }] };
     const fragment = { ...version, type: "timeline_event_fragment", ...session, event_id: "A1", index: 0, data_base64: "eA==", final: true };
     const chunks = [
       { ...version, type: "session_history_chunk", ...direct, in_reply_to: "Y1", ...session, snapshot_head: "HEAD", chunk_index: 0, events: [userEvent()], fragments: [], final_chunk: false },
       { ...version, type: "session_history_chunk", ...direct, in_reply_to: "Y1", ...session, snapshot_head: "HEAD", chunk_index: 1, events: [], fragments: [], final_chunk: true, eos: true },
       { ...version, type: "session_history_chunk", ...direct, in_reply_to: "Y1", ...session, snapshot_head: "HEAD", chunk_index: 2, events: [], fragments: [{ event_id: "A1", index: 0, data_base64: "eA==", final: true }], final_chunk: true, eos: false, next_before: "CURSOR" },
     ];
-    for (const frame of [pairOk, pairError, ready, started, ...statuses, timeline, fragment, ...chunks]) {
+    for (const frame of [pairOk, pairError, ready, started, ...statuses, timeline, queuedState, fragment, ...chunks]) {
       expect(decodeServerFrameV2(frame).protocol_version).toBe(2);
     }
     expect(validateFragmentSizeV2(fragment)).toBe(1);
@@ -213,6 +214,7 @@ describe("Protocol v2 server frames", () => {
       { ...version, type: "action_ok", ...direct, in_reply_to: "N1", action: "session_new" },
       { ...version, type: "action_error", ...direct, in_reply_to: "N2", action: "session_compact", error: "busy" },
       { ...version, type: "models_list", ...direct, in_reply_to: "N5", models: [{ id: "m", name: "M", provider: "p", reasoning: true, context_window: 100, vision: false }] },
+      { ...version, type: "queued_message_state", ...session, snapshot_id: "SNAP2", chunk_index: 0, final: true, items: [] },
       request,
       { ...version, type: "bye", ...session, reason: "shutdown" },
     ];
@@ -254,10 +256,18 @@ describe("strict boundary and size errors", () => {
     expectCode(() => decodeClientFrameV2({ ...version, type: "ping", id: "Q1", ...channel, extra: true }), "schema");
   });
 
-  test("enforces the 512 KiB frame limit for raw decode and both encoders", () => {
+  test("enforces the 2 MiB frame limit for raw decode and both encoders", () => {
     const oversized = { ...version, type: "user_message", id: "U1", ...channel, client_request_id: "R1", text: "x".repeat(MAX_FRAME_BYTES) };
     expectCode(() => decodeClientFrameV2(oversized), "size");
     expectCode(() => encodeClientFrameV2(oversized as never), "size");
+    expectCode(() => decodeClientFrameV2({
+      ...version,
+      type: "queued_message_set",
+      id: "N6",
+      ...channel,
+      text: "later",
+      images: [{ data: "abc", mime: "image/png", unexpected: true }],
+    }), "schema");
     expectCode(() => encodeServerFrameV2({ ...version, type: "protocol_error", code: "too_large", message: "x".repeat(MAX_FRAME_BYTES) } as never), "size");
     const padded = `${" ".repeat(MAX_FRAME_BYTES)}{"protocol_version":2,"type":"ping","id":"Q1","channel_id":"C1","history_generation":"G1"}`;
     expectCode(() => decodeClientFrameV2(padded), "size");

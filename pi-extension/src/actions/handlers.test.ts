@@ -17,6 +17,7 @@ import {
   handleModelSet,
   handleThinkingSet,
   handleListModels,
+  getModelsList,
   wireFromModel,
   type ActionCtx,
   type ActionPi,
@@ -299,6 +300,23 @@ describe("handleListModels", () => {
       },
     ]);
     expect(reply.current).toEqual(reply.models[0]);
+  });
+
+  test("falls back to an exact cached model name and preserves vision capability", () => {
+    const visionModel: SdkModelLike = { ...sampleModel, name: "Claude Vision", input: ["text", "image"] };
+    expect(getModelsList(null, fakeRegistry([visionModel]), "Claude Vision").current).toMatchObject({
+      id: visionModel.id,
+      vision: true,
+    });
+  });
+
+  test("does not guess current when the cached model is absent from the catalog", () => {
+    expect(getModelsList(null, fakeRegistry([sampleModel]), "unknown-model").current).toBeUndefined();
+  });
+
+  test("does not guess current when cached name or id matches multiple providers", () => {
+    const duplicate: SdkModelLike = { ...sampleModel, provider: "proxy", input: ["text", "image"] };
+    expect(getModelsList(null, fakeRegistry([sampleModel, duplicate]), sampleModel.id).current).toBeUndefined();
   });
 
   test("omits `current` when ctx.getModel is undefined", () => {

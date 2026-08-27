@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const PROTOCOL_VERSION = 2 as const;
 export const PROTOCOL_VERSION_V2 = PROTOCOL_VERSION;
-export const MAX_FRAME_BYTES = 512 * 1024;
+export const MAX_FRAME_BYTES = 2 * 1024 * 1024;
 export const MAX_HISTORY_CHUNK_BYTES = 512 * 1024;
 export const MAX_SESSION_HISTORY_CHUNK_BYTES = MAX_HISTORY_CHUNK_BYTES;
 export const MAX_WINDOW_BYTES = 32 * 1024 * 1024;
@@ -300,6 +300,14 @@ export const wireImageSchema = strictObject({
   data: z.string().min(1).max(MAX_WINDOW_BYTES),
   mime: imageMimeSchema,
 });
+export const queuedMessageItemSchema = strictObject({
+  id: idSchema,
+  text: textSchema,
+  images: z.array(wireImageSchema).max(1).optional(),
+  sender_ref: idSchema.optional(),
+  editable: z.boolean(),
+  created_at: timestampSchema,
+});
 export const wireModelSchema = strictObject({
   id: idSchema,
   name: textSchema,
@@ -318,7 +326,7 @@ export const CLIENT_FRAME_TYPES = [
 export const SERVER_FRAME_TYPES = [
   "pair_ok", "pair_error", "session_ready", "user_message_started", "user_message_status", "timeline_event",
   "timeline_partial", "timeline_event_fragment", "session_history_chunk", "protocol_error", "reset", "pong",
-  "cancelled", "action_ok", "action_error", "models_list", "extension_ui_request", "bye",
+  "cancelled", "action_ok", "action_error", "models_list", "queued_message_state", "extension_ui_request", "bye",
 ] as const;
 export type ClientFrameType = (typeof CLIENT_FRAME_TYPES)[number];
 export type ServerFrameType = (typeof SERVER_FRAME_TYPES)[number];

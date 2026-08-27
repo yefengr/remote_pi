@@ -80,11 +80,80 @@ describe("TimelineV2Service", () => {
     });
   });
 
+  test("lists the current vision model only after hello and generation validation", () => {
+    const session = SessionManager.inMemory(process.cwd());
+    const onListModels = vi.fn(() => ({
+      models: [{ id: "vision-1", name: "Vision", provider: "test", reasoning: false, context_window: 1000, vision: true }],
+      current: { id: "vision-1", name: "Vision", provider: "test", reasoning: false, context_window: 1000, vision: true },
+    }));
+    const service = new TimelineV2Service({ sessionManager: session, senderRef: "owner-1", runtime: new TimelineRuntime(), onUserMessage: () => false, onListModels });
+    const request = {
+      protocol_version: 2 as const,
+      type: "list_models" as const,
+      id: "models-1",
+      channel_id: "channel-1",
+      history_generation: service.generation,
+    };
+    expect(service.handle(request)[0]).toMatchObject({ type: "protocol_error", code: "invalid_channel" });
+    service.handle(hello());
+    expect(service.handle({ ...request, history_generation: "old" })[0]).toMatchObject({ type: "reset", reason: "generation_changed" });
+    expect(service.handle(request)[0]).toMatchObject({
+      type: "models_list",
+      target_channel_id: "channel-1",
+      in_reply_to: "models-1",
+      current: { id: "vision-1", vision: true },
+    });
+    expect(onListModels).toHaveBeenCalledTimes(1);
+  });
+
+  test("redacts list-model failures from directed protocol errors", () => {
+    const session = SessionManager.inMemory(process.cwd());
+    const service = new TimelineV2Service({
+      sessionManager: session,
+      senderRef: "owner-1",
+      runtime: new TimelineRuntime(),
+      onUserMessage: () => false,
+      onListModels: () => { throw new Error("/private/models.json contains a secret"); },
+    });
+    service.handle(hello());
+    expect(service.handle({
+      protocol_version: 2,
+      type: "list_models",
+      id: "models-1",
+      channel_id: "channel-1",
+      history_generation: service.generation,
+    })[0]).toMatchObject({
+      type: "protocol_error",
+      code: "internal_error",
+      message: "Could not list available models.",
+      target_channel_id: "channel-1",
+    });
+  });
+
   test("rejects old generation after hello", () => {
     const session = SessionManager.inMemory(process.cwd());
     const service = new TimelineV2Service({ sessionManager: session, senderRef: "owner-1", runtime: new TimelineRuntime(), onUserMessage: () => false });
     service.handle(hello());
     expect(service.handle(user("old"))[0]).toMatchObject({ type: "reset", reason: "generation_changed", target_channel_id: "channel-1" });
+  });
+
+  test("keeps queued delivery accepted across idempotent retries", () => {
+    const session = SessionManager.inMemory(process.cwd());
+    const onUserMessage = vi.fn(() => "queued" as const);
+    const service = new TimelineV2Service({ sessionManager: session, senderRef: "owner-1", runtime: new TimelineRuntime(), onUserMessage });
+    service.handle(hello());
+    expect(service.handle(user(service.generation))[0]).toMatchObject({
+      type: "user_message_status",
+      status: "accepted",
+      client_request_id: "request-1",
+    });
+    expect(service.canDrain("request-1")).toBe(true);
+    expect(service.handle(user(service.generation, { id: "wire-2" }))[0]).toMatchObject({
+      type: "user_message_status",
+      status: "accepted",
+      client_request_id: "request-1",
+    });
+    expect(onUserMessage).toHaveBeenCalledTimes(1);
   });
 
   test("accepts reliable user once and replays idempotent status without a second SDK call", () => {
@@ -113,12 +182,33 @@ describe("TimelineV2Service", () => {
     expect(replay[0]).toMatchObject({ type: "user_message_status", status: "accepted" });
   });
 
-  test("rejects same id with different payload and marks steer delivery unknown", () => {
+  test("rejects same id with different payload and keeps unknown delivery idempotent", () => {
     const session = SessionManager.inMemory(process.cwd());
-    const service = new TimelineV2Service({ sessionManager: session, senderRef: "owner-1", runtime: new TimelineRuntime(), onUserMessage: () => false });
+    const send = vi.fn(() => false);
+    const service = new TimelineV2Service({ sessionManager: session, senderRef: "owner-1", runtime: new TimelineRuntime(), onUserMessage: send });
     service.handle(hello());
-    expect(service.handle(user(service.generation, { streaming_behavior: "steer" }))[0]).toMatchObject({ type: "user_message_status", status: "unknown_delivery" });
-    expect(service.handle(user(service.generation, { id: "wire-2", text: "different", streaming_behavior: "steer" }))[0]).toMatchObject({ type: "protocol_error", code: "invalid_message" });
+    const frame = user(service.generation, {
+      streaming_behavior: "steer",
+      images: [{ data: "QUJD", mime: "image/png" }],
+    });
+    expect(service.handle(frame)[0]).toMatchObject({
+      type: "user_message_status",
+      in_reply_to: "request-1",
+      client_request_id: "request-1",
+      status: "unknown_delivery",
+    });
+    expect(service.handle({ ...frame, id: "wire-2" })[0]).toMatchObject({
+      type: "user_message_status",
+      in_reply_to: "request-1",
+      client_request_id: "request-1",
+      status: "unknown_delivery",
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(service.handle(user(service.generation, {
+      id: "wire-3",
+      streaming_behavior: "steer",
+      images: [{ data: "REVG", mime: "image/png" }],
+    }))[0]).toMatchObject({ type: "protocol_error", code: "invalid_message" });
   });
 
   test("cancel callback failures remain direct internal errors", () => {

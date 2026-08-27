@@ -237,6 +237,7 @@ const {
   _resetCwdLockForTest,
   _handleControl,
   _routeClientMessageFrom,
+  _setQueuedImageLimitsForTest,
   _deliverMeshMessageToAgentForTest,
   CTRL_PREFIX,
 } = indexModule;
@@ -1158,33 +1159,6 @@ function captureMessageRenderer(): {
   };
 }
 
-async function _pairForTest(appPeerId: string): Promise<void> {
-  captureHandler("remote-pi");
-  await _connectForTest(makeMockCtx());
-  relayRef.current!.emit("message", JSON.stringify({
-    peer: appPeerId,
-    ct: Buffer.from(JSON.stringify({
-      type: "pair_request", id: "req-1", token: "test-token", device_name: "Phone",
-    })).toString("base64"),
-  }));
-  await vi.waitFor(() => expect(_getState()).toBe("paired"), { timeout: 2000 });
-}
-
-/** Adds a second pair_request from a new peer to an already-running Pi.
- *  Used by multi-channel tests to verify the catch-22 is gone. */
-async function _pairAdditionalForTest(appPeerId: string, deviceName: string): Promise<void> {
-  relayRef.current!.emit("message", JSON.stringify({
-    peer: appPeerId,
-    ct: Buffer.from(JSON.stringify({
-      type: "pair_request", id: `req-${appPeerId.slice(0, 6)}`, token: "test-token", device_name: deviceName,
-    })).toString("base64"),
-  }));
-  await vi.waitFor(
-    () => expect(_hasActivePeerForTest(appPeerId)).toBe(true),
-    { timeout: 2000 },
-  );
-}
-
 type V2PairContext = {
   peer: string;
   channelId: string;
@@ -1456,7 +1430,7 @@ describe("multi-channel broadcast (W2D)", () => {
     expect(contexts).toHaveLength(2);
   });
 
-  test("queued v2 controls return directed unsupported_type errors", async () => {
+  test("v2 queue clear is handled while queue set remains unsupported", async () => {
     const { contexts } = await setupV2(["owner-queue"]);
     const context = contexts[0]!;
     const sendsBefore = relayRef.current!.send.mock.calls.length;
@@ -1464,11 +1438,11 @@ describe("multi-channel broadcast (W2D)", () => {
       { protocol_version: 2 as const, type: "queued_message_set" as const, id: "queue-set", channel_id: context.channelId, history_generation: context.historyGeneration, text: "later" },
       { protocol_version: 2 as const, type: "queued_message_clear" as const, id: "queue-clear", channel_id: context.channelId, history_generation: context.historyGeneration, target_id: "queue-set" },
     ]) relayRef.current!.emit("message", makeV2Line(context.peer, frame));
-    await vi.waitFor(() => expect(sentV2(sendsBefore).filter((item) => item.frame.type === "protocol_error")).toHaveLength(2));
-    for (const item of sentV2(sendsBefore)) {
-      expect(item.peer).toBe(context.peer);
-      expect(item.frame).toMatchObject({ type: "protocol_error", code: "unsupported_type", target_channel_id: context.channelId });
-    }
+    await vi.waitFor(() => expect(sentV2(sendsBefore).filter((item) => item.frame.type === "protocol_error")).toHaveLength(1));
+    const errors = sentV2(sendsBefore).filter((item) => item.frame.type === "protocol_error");
+    expect(errors[0]?.peer).toBe(context.peer);
+    expect(errors[0]?.frame).toMatchObject({ type: "protocol_error", code: "unsupported_type", target_channel_id: context.channelId });
+    expect(sentV2(sendsBefore).some((item) => item.frame.type === "queued_message_state")).toBe(true);
   });
 
   test("v2 steering reports unknown delivery and does not publish a formal event", async () => {
@@ -1515,6 +1489,71 @@ describe("multi-channel broadcast (W2D)", () => {
       { type: "image", data: "QUJD", mimeType: "image/png" },
       { type: "text", text: "what is this?" },
     ], undefined));
+  });
+
+  test("v2 queued image limits retain text, deduplicate retries, and release bytes on drain", async () => {
+    const { harness, contexts } = await setupV2(["owner-image-a", "owner-image-b"]);
+    const [first, second] = contexts;
+    if (!first || !second) throw new Error("missing v2 channels");
+    const sendUserMessage = vi.fn();
+    _setPiForTest({ sendUserMessage, sendMessage: vi.fn() } as never);
+    _setQueuedImageLimitsForTest({ perOwner: 13, global: 26 });
+    const image = [{ data: "QUJD", mime: "image/png" }]; // 4 base64 + 9 MIME UTF-8 bytes
+    const sendQueued = (
+      context: { peer: string; channelId: string; historyGeneration: string },
+      id: string,
+      requestId: string,
+      text: string,
+      withImage = true,
+    ) => relayRef.current!.emit("message", makeV2Line(context.peer, {
+      protocol_version: 2,
+      type: "user_message",
+      id,
+      channel_id: context.channelId,
+      history_generation: context.historyGeneration,
+      client_request_id: requestId,
+      text,
+      ...(withImage ? { images: image } : {}),
+    }));
+
+    try {
+      harness.handler("agent_start")({ type: "agent_start" });
+      sendQueued(first, "wire-a-1", "request-a-1", "first image");
+      sendQueued(first, "wire-a-1-retry", "request-a-1", "first image");
+      sendQueued(first, "wire-a-2", "request-a-2", "owner text survives", false);
+      sendQueued(second, "wire-b-1", "request-b-1", "second image");
+      sendQueued(second, "wire-b-2", "request-b-2", "global text survives", false);
+
+      harness.handler("agent_end")({ type: "agent_end" });
+      await vi.waitFor(() => expect(sendUserMessage).toHaveBeenCalledTimes(1));
+      expect(sendUserMessage.mock.calls[0]).toEqual([[
+        { type: "image", data: "QUJD", mimeType: "image/png" },
+        { type: "text", text: "first image" },
+      ], undefined]);
+
+      // Draining the first item releases its Owner and global reservation.
+      sendQueued(first, "wire-a-3", "request-a-3", "released image");
+      harness.handler("agent_end")({ type: "agent_end" });
+      await vi.waitFor(() => expect(sendUserMessage).toHaveBeenCalledTimes(2));
+      expect(sendUserMessage.mock.calls[1]).toEqual(["owner text survives", undefined]);
+      harness.handler("agent_end")({ type: "agent_end" });
+      await vi.waitFor(() => expect(sendUserMessage).toHaveBeenCalledTimes(3));
+      expect(sendUserMessage.mock.calls[2]).toEqual([[
+        { type: "image", data: "QUJD", mimeType: "image/png" },
+        { type: "text", text: "second image" },
+      ], undefined]);
+      harness.handler("agent_end")({ type: "agent_end" });
+      await vi.waitFor(() => expect(sendUserMessage).toHaveBeenCalledTimes(4));
+      expect(sendUserMessage.mock.calls[3]).toEqual(["global text survives", undefined]);
+      harness.handler("agent_end")({ type: "agent_end" });
+      await vi.waitFor(() => expect(sendUserMessage).toHaveBeenCalledTimes(5));
+      expect(sendUserMessage.mock.calls[4]).toEqual([[
+        { type: "image", data: "QUJD", mimeType: "image/png" },
+        { type: "text", text: "released image" },
+      ], undefined]);
+    } finally {
+      _setQueuedImageLimitsForTest(null);
+    }
   });
 
   test("compaction publishes a formal v2 system event to every owner", async () => {
@@ -5580,12 +5619,13 @@ describe("model meta", () => {
       history_generation: historyGeneration,
       client_request_id: "request-v2-queued",
       text: "queued v2",
+      images: [{ data: "QUJD", mime: "image/png" }],
     }));
     await vi.waitFor(() => {
       const frames = relayRef.current!.send.mock.calls.map((call) => decodeV2Sent(call[0] as string).frame);
       expect(frames).toContainEqual(expect.objectContaining({
         type: "user_message_status",
-        status: "received",
+        status: "accepted",
         client_request_id: "request-v2-queued",
       }));
     });
@@ -5593,7 +5633,10 @@ describe("model meta", () => {
 
     harness.handler("agent_end")({ type: "agent_end" });
     await vi.waitFor(() => expect(sendUserMessage).toHaveBeenCalledTimes(1));
-    expect(sendUserMessage.mock.calls[0]?.[1]).toBeUndefined();
+    expect(sendUserMessage.mock.calls[0]).toEqual([[
+      { type: "image", data: "QUJD", mimeType: "image/png" },
+      { type: "text", text: "queued v2" },
+    ], undefined]);
     const frames = relayRef.current!.send.mock.calls.map((call) => decodeV2Sent(call[0] as string).frame);
     expect(frames).toContainEqual(expect.objectContaining({
       type: "user_message_started",

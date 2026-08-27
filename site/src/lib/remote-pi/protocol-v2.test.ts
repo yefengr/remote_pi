@@ -70,7 +70,7 @@ const ask = {
 };
 
 test("exports the frozen limits and validates scalar/event invariants", () => {
-  assert.equal(MAX_FRAME_BYTES, 512 * 1024);
+  assert.equal(MAX_FRAME_BYTES, 2 * 1024 * 1024);
   assert.equal(MAX_HISTORY_CHUNK_BYTES, 512 * 1024);
   assert.equal(MAX_WINDOW_BYTES, 32 * 1024 * 1024);
   assert.equal(MAX_FRAGMENT_BYTES, 50 * 1024);
@@ -120,7 +120,7 @@ test("accepts the closed client catalog, including queue, approval and strict as
     { ...version, type: "model_set", id: "N3", ...channel, provider: "openai", model_id: "model" },
     { ...version, type: "thinking_set", id: "N4", ...channel, level: "high" },
     { ...version, type: "list_models", id: "N5", ...channel },
-    { ...version, type: "queued_message_set", id: "N6", ...channel, text: "later" },
+    { ...version, type: "queued_message_set", id: "N6", ...channel, text: "later", images: [{ data: "abc", mime: "image/png" }] },
     { ...version, type: "queued_message_clear", id: "N7", ...channel },
     { ...version, type: "approve_tool", id: "N8", ...channel, tool_call_id: "TC1", decision: "allow" },
   ];
@@ -132,6 +132,7 @@ test("accepts the closed client catalog, including queue, approval and strict as
   assert.deepEqual(decodeClientFrameV2(encoded), askResponse);
   expectCode(() => decodeClientFrameV2({ ...askResponse, ask: { ...askResponse.ask, answers: { q1: { custom_text: "wrong" } } } }), "schema");
   expectCode(() => decodeClientFrameV2({ ...askResponse, ask: { ...askResponse.ask, answers: { q1: { optionNotes: { yes: "note" }, extra: true } } } }), "schema");
+  expectCode(() => decodeClientFrameV2({ ...version, type: "user_message", id: "U2", ...channel, client_request_id: "R2", text: "", images: [{ data: "abc", mime: "image/png" }, { data: "def", mime: "image/jpeg" }] }), "schema");
   expectCode(() => decodeClientFrameV2({ ...askResponse, extra: true }), "schema");
 });
 
@@ -162,6 +163,7 @@ test("accepts server frames while rejecting old wrappers and direction drift", (
     { ...version, type: "action_ok", ...direct, in_reply_to: "N1", action: "session_new" },
     { ...version, type: "action_error", ...direct, in_reply_to: "N2", action: "session_compact", error: "busy" },
     { ...version, type: "models_list", ...direct, in_reply_to: "N5", models: [] },
+    { ...version, type: "queued_message_state", ...session, snapshot_id: "SNAP1", chunk_index: 0, final: true, items: [{ id: "Q1", text: "queued image", images: [{ data: "abc", mime: "image/png" }], editable: true, created_at: 1 }] },
     { ...version, type: "extension_ui_request", ...direct, id: "UI1", method: "select", title: "Pick", options: ["one"], ask },
     { ...version, type: "bye", ...session, reason: "shutdown" },
   ];
@@ -192,7 +194,7 @@ test("validates fragments and history chunk overlap/final rules", () => {
   expectCode(() => decodeServerFrameV2(oversizedFragment), "size");
 });
 
-test("enforces the 512 KiB boundary for raw decode and both encoders", () => {
+test("enforces the 2 MiB boundary for raw decode and both encoders", () => {
   const oversized = { ...version, type: "user_message", id: "U1", ...channel, client_request_id: "R1", text: "x".repeat(MAX_FRAME_BYTES) };
   expectCode(() => decodeClientFrameV2(oversized), "size");
   expectCode(() => encodeClientFrameV2(oversized as never), "size");

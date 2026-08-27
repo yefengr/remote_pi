@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const PROTOCOL_VERSION_V2 = 2 as const;
 export const TIMELINE_MARKER_NAME = "remote-pi:timeline-v2" as const;
-export const MAX_FRAME_BYTES = 512 * 1024;
+export const MAX_FRAME_BYTES = 2 * 1024 * 1024;
 export const MAX_HISTORY_CHUNK_BYTES = 512 * 1024;
 export const MAX_WINDOW_DECODE_BYTES = 32 * 1024 * 1024;
 export const MAX_FRAGMENT_DECODE_BYTES = 50 * 1024;
@@ -211,6 +211,14 @@ const wireImage = z.strictObject({
   data: z.string().min(1).max(MAX_WINDOW_DECODE_BYTES),
   mime: imageMime,
 });
+const queuedMessageItem = z.strictObject({
+  id,
+  text: boundedText,
+  images: z.array(wireImage).max(1).optional(),
+  sender_ref: id.optional(),
+  editable: z.boolean(),
+  created_at: timestamp,
+});
 const harness = z.strictObject({ name: id, version: id });
 const wireModel = z.strictObject({
   id,
@@ -274,7 +282,7 @@ const pairRequest = z.strictObject({ ...frameBase, type: z.literal("pair_request
 const sessionHello = z.strictObject({ ...frameBase, type: z.literal("session_hello"), id, channel_id: id });
 const userMessage = z.strictObject({
   ...frameBase, type: z.literal("user_message"), id, ...clientDirect,
-  client_request_id: id, text: boundedText, images: z.array(wireImage).max(MAX_ARRAY_ITEMS).optional(),
+  client_request_id: id, text: boundedText, images: z.array(wireImage).max(1).optional(),
   streaming_behavior: z.literal("steer").optional(),
 });
 const userMessageObserved = z.strictObject({
@@ -293,7 +301,10 @@ const sessionCompact = z.strictObject({ ...actionCommon, type: z.literal("sessio
 const modelSet = z.strictObject({ ...actionCommon, type: z.literal("model_set"), provider: id, model_id: id });
 const thinkingSet = z.strictObject({ ...actionCommon, type: z.literal("thinking_set"), level: thinkingLevel });
 const listModels = z.strictObject({ ...actionCommon, type: z.literal("list_models") });
-const queuedSet = z.strictObject({ ...frameBase, type: z.literal("queued_message_set"), id, ...clientDirect, text: boundedText });
+const queuedSet = z.strictObject({
+  ...frameBase, type: z.literal("queued_message_set"), id, ...clientDirect,
+  text: boundedText, images: z.array(wireImage).max(1).optional(),
+});
 const queuedClear = z.strictObject({ ...frameBase, type: z.literal("queued_message_clear"), id, ...clientDirect, target_id: id.optional() });
 const approveTool = z.strictObject({ ...frameBase, type: z.literal("approve_tool"), id, ...clientDirect, tool_call_id: id, decision: z.enum(["allow", "deny"]) });
 
@@ -395,6 +406,13 @@ const cancelled = z.strictObject({ ...frameBase, type: z.literal("cancelled"), .
 const actionOk = z.strictObject({ ...frameBase, type: z.literal("action_ok"), ...responseDirect, in_reply_to: id, action: actionName });
 const actionError = z.strictObject({ ...frameBase, type: z.literal("action_error"), ...responseDirect, in_reply_to: id, action: actionName, error: nonEmptyText });
 const modelsList = z.strictObject({ ...frameBase, type: z.literal("models_list"), ...responseDirect, in_reply_to: id, models: z.array(wireModel).max(MAX_ARRAY_ITEMS), current: wireModel.optional() });
+const queuedMessageState = z.strictObject({
+  ...frameBase, type: z.literal("queued_message_state"), ...broadcastBase,
+  snapshot_id: id,
+  chunk_index: nonNegativeInt,
+  final: z.boolean(),
+  items: z.array(queuedMessageItem).max(MAX_ARRAY_ITEMS),
+});
 
 const extensionUiRequest = z.union([
   z.strictObject({ ...frameBase, type: z.literal("extension_ui_request"), ...responseDirect, id, method: z.literal("select"), title: boundedText, options: z.array(boundedText).max(MAX_ARRAY_ITEMS), ask: askEnrichment.optional() }),
@@ -408,7 +426,7 @@ const bye = z.strictObject({ ...frameBase, type: z.literal("bye"), ...broadcastB
 export const ServerFrameSchema = z.union([
   pairOk, pairError, sessionReady, userMessageStarted, userMessageStatus,
   timelineEventFrame, TimelinePartialSchema, TimelineEventFragmentSchema, SessionHistoryChunkSchema,
-  protocolError, reset, pong, cancelled, actionOk, actionError, modelsList, extensionUiRequest, bye,
+  protocolError, reset, pong, cancelled, actionOk, actionError, modelsList, queuedMessageState, extensionUiRequest, bye,
 ]);
 export type ServerFrame = z.infer<typeof ServerFrameSchema>;
 
@@ -417,7 +435,7 @@ export const ClientFrameTypes = new Set<ClientFrame["type"]>([
   "session_new", "session_compact", "model_set", "thinking_set", "list_models", "queued_message_set", "queued_message_clear", "approve_tool", "extension_ui_response",
 ]);
 export const ServerFrameTypes = new Set<ServerFrame["type"]>([
-  "pair_ok", "pair_error", "session_ready", "user_message_started", "user_message_status", "timeline_event", "timeline_partial", "timeline_event_fragment", "session_history_chunk", "protocol_error", "reset", "pong", "cancelled", "action_ok", "action_error", "models_list", "extension_ui_request", "bye",
+  "pair_ok", "pair_error", "session_ready", "user_message_started", "user_message_status", "timeline_event", "timeline_partial", "timeline_event_fragment", "session_history_chunk", "protocol_error", "reset", "pong", "cancelled", "action_ok", "action_error", "models_list", "queued_message_state", "extension_ui_request", "bye",
 ]);
 
 const markerSystemKind = z.enum(["compaction", "branch_summary", "custom"]);
