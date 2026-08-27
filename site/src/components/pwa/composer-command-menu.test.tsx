@@ -19,6 +19,7 @@ const panelProps: Omit<ComposerCommandMenuPanelProps, "view"> = {
   pendingAction: null,
   models: [model],
   currentModel: model,
+  currentModelFallback: null,
   thinking: "medium",
   onNewSession: () => {},
   onCompactSession: () => {},
@@ -41,9 +42,22 @@ test("renders all root Pi commands", () => {
   assert.match(html, /\/compact/);
   assert.match(html, /Compact context/);
   assert.match(html, /\/model/);
-  assert.match(html, /Change model/);
+  assert.match(html, /anthropic \/ Claude Sonnet 4/);
   assert.match(html, /\/thinking/);
   assert.match(html, /Thinking level: medium/);
+});
+
+test("falls back to room metadata before the current model catalog arrives", () => {
+  const html = renderPanel("root", { currentModel: null, currentModelFallback: "GPT-5.4" });
+
+  assert.match(html, /GPT-5.4/);
+  assert.doesNotMatch(html, /Current model unavailable/);
+});
+
+test("shows an explicit unavailable state when no current model is known", () => {
+  const html = renderPanel("root", { currentModel: null, currentModelFallback: null });
+
+  assert.match(html, /Current model unavailable/);
 });
 
 test("disables new and compact while the active room is working", () => {

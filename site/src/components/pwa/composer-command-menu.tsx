@@ -23,6 +23,7 @@ export type ComposerCommandMenuPanelProps = ComposerCommandMenuCallbacks & {
   pendingAction: ComposerCommandAction | null;
   models: WireModel[];
   currentModel: WireModel | null;
+  currentModelFallback: string | null;
   thinking: ThinkingLevel;
   onBack: () => void;
   onOpenModels: () => void;
@@ -46,6 +47,7 @@ export function ComposerCommandMenuPanel({
   pendingAction,
   models,
   currentModel,
+  currentModelFallback,
   thinking,
   onNewSession,
   onCompactSession,
@@ -57,6 +59,9 @@ export function ComposerCommandMenuPanel({
 }: ComposerCommandMenuPanelProps) {
   const actionDisabled = !isOnline || pendingAction !== null;
   const newSessionDisabled = actionDisabled || isWorking;
+  const currentModelLabel = currentModel
+    ? modelLabel(currentModel)
+    : currentModelFallback || "Current model unavailable";
 
   if (view === "models") {
     return <div className="pwa-command-menu-panel" role="menu" aria-label="Change model">
@@ -99,7 +104,7 @@ export function ComposerCommandMenuPanel({
     </button>
     <button className="pwa-command-row" type="button" role="menuitem" disabled={actionDisabled} onClick={onOpenModels}>
       <Cpu size={16} />
-      <span className="pwa-command-copy"><code>/model</code><small>Change model</small></span>
+      <span className="pwa-command-copy"><code>/model</code><small>{currentModelLabel}</small></span>
       <ChevronRight className="pwa-command-chevron" size={16} />
     </button>
     <button className="pwa-command-row" type="button" role="menuitem" disabled={actionDisabled} onClick={onOpenThinking}>

@@ -16,6 +16,7 @@ const commonProps = {
   onClearAttachment: () => {},
   commandModels: [],
   commandCurrentModel: null,
+  commandCurrentModelFallback: null,
   commandThinking: "off" as const,
   commandPendingAction: null,
   onNewSession: () => {},

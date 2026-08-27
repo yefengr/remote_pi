@@ -26,6 +26,7 @@ type MessageComposerProps = {
   onClearAttachment: () => void;
   commandModels: WireModel[];
   commandCurrentModel: WireModel | null;
+  commandCurrentModelFallback: string | null;
   commandThinking: ThinkingLevel;
   commandPendingAction: ComposerCommandAction | null;
   onNewSession: () => void;
@@ -50,6 +51,7 @@ export function MessageComposer({
   onClearAttachment,
   commandModels,
   commandCurrentModel,
+  commandCurrentModelFallback,
   commandThinking,
   commandPendingAction,
   onNewSession,
@@ -160,6 +162,7 @@ export function MessageComposer({
                 pendingAction={commandPendingAction}
                 models={commandModels}
                 currentModel={commandCurrentModel}
+                currentModelFallback={commandCurrentModelFallback}
                 thinking={commandThinking}
                 onNewSession={() => { setCommandMenuOpen(false); onNewSession(); }}
                 onCompactSession={() => { setCommandMenuOpen(false); onCompactSession(); }}
