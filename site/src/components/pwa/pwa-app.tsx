@@ -74,6 +74,7 @@ export function PwaApp() {
   const [draft, setDraft] = useState("");
   const [attachment, setAttachment] = useState<ImageAttachment | null>(null);
   const [sendingImage, setSendingImage] = useState(false);
+  const [stopRequestId, setStopRequestId] = useState<string | null>(null);
   const [visionAvailable, setVisionAvailable] = useState<boolean | null>(null);
   const [pairState, setPairState] = useState<PairState>("idle");
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -125,6 +126,7 @@ export function PwaApp() {
   const followOutputRef = useRef(true);
   const scrollOnNextMessagesRef = useRef(false);
   const modelRequestRef = useRef<string | null>(null);
+  const stopRequestIdRef = useRef<string | null>(null);
 
   useEffect(() => { roomsRef.current = rooms; }, [rooms]);
   useEffect(() => { roomIdRef.current = roomId; }, [roomId]);
@@ -142,6 +144,18 @@ export function PwaApp() {
     () => rooms.filter((room) => room.peerEpk === activePeer?.remoteEpk).sort((a, b) => (a.name || a.cwd || a.roomId).localeCompare(b.name || b.cwd || b.roomId)),
     [activePeer?.remoteEpk, rooms],
   );
+  const activeRoom = useMemo(
+    () => activeRooms.find((room) => room.roomId === roomId) ?? null,
+    [activeRooms, roomId],
+  );
+  const clearStopRequest = useCallback((requestId?: string) => {
+    if (requestId && stopRequestIdRef.current !== requestId) return;
+    stopRequestIdRef.current = null;
+    setStopRequestId(null);
+  }, []);
+  useEffect(() => {
+    if (connection !== "online" || activeRoom?.working !== true) clearStopRequest();
+  }, [activePeerId, activeRoom?.working, clearStopRequest, connection, roomId]);
   const isCurrentSelection = useCallback((generation: number, peerId: string, peerEpk: string, selectedRoom: string, channel?: PeerChannel, relay?: RelayClient) => {
     return selectionGenerationRef.current === generation
       && activePeerIdRef.current === peerId
@@ -304,6 +318,13 @@ export function PwaApp() {
       if (frame.in_reply_to === modelRequestRef.current) setVisionAvailable(frame.current?.vision ?? null);
       return;
     }
+    if (frame.type === "cancelled") {
+      clearStopRequest(frame.in_reply_to);
+      return;
+    }
+    if (frame.type === "protocol_error" && frame.in_reply_to === stopRequestIdRef.current) {
+      clearStopRequest(frame.in_reply_to);
+    }
     if (frame.type === "session_ready") {
       if (frame.in_reply_to !== helloRequestRef.current) return;
       helloRequestRef.current = null;
@@ -341,6 +362,7 @@ export function PwaApp() {
         sessionEpochRef.current += 1;
         networkSnapshotAppliedEpochRef.current = 0;
         helloRequestRef.current = null;
+        clearStopRequest();
       },
       rehello: () => {
         setConnection("connecting");
@@ -421,7 +443,7 @@ export function PwaApp() {
       return;
     }
     applyTimelineChange(changed);
-  }, [applyTimelineChange, isCurrentSelection, noteIncomingOutput, reportTimelineWrite]);
+  }, [applyTimelineChange, clearStopRequest, isCurrentSelection, noteIncomingOutput, reportTimelineWrite]);
 
   const loadEarlier = useCallback(() => {
     const scope = timelineRuntimeRef.current.currentScope;
@@ -919,6 +941,22 @@ export function PwaApp() {
     setAttachment(null);
   }, [applyTimelineChange, attachment, canAttachImage, draft, isCurrentSelection, scheduleScrollToLatest, sendingImage]);
 
+  const stopCurrentTask = useCallback(() => {
+    const peer = activePeerRef.current;
+    const channel = channelRef.current;
+    const generation = selectionGenerationRef.current;
+    const selectedRoom = roomIdRef.current;
+    const scope = timelineRuntimeRef.current.currentScope;
+    if (stopRequestIdRef.current || !peer || !channel || !scope || connectionRef.current !== "online" || !isCurrentSelection(generation, peer.id, peer.remoteEpk, selectedRoom, channel, relayRef.current || undefined)) return;
+    const requestId = id();
+    stopRequestIdRef.current = requestId;
+    setStopRequestId(requestId);
+    if (!channel.send({ protocol_version: 2, type: "cancel", id: requestId, channel_id: scope.channelId, history_generation: scope.historyGeneration })) {
+      clearStopRequest(requestId);
+      setError("Relay is not connected.");
+    }
+  }, [clearStopRequest, isCurrentSelection]);
+
   const retryUnknownMessage = useCallback((clientRequestId: string) => {
     const peer = activePeerRef.current;
     const channel = channelRef.current;
@@ -1097,7 +1135,7 @@ export function PwaApp() {
                 {connection !== "no_network" && (connection === "retrying" || connection === "offline") ? <button className="pwa-latest-button" type="button" onClick={() => restartActiveConnection(true)}><RefreshCw size={16} />Try again</button> : null}
                 {!followingOutput || unreadOutput > 0 ? <button className="pwa-latest-button" type="button" onClick={() => { scrollToLatest(true); resumeFollowingOutput(); }}><ArrowDownToLine size={16} />{unreadOutput > 0 ? `${unreadOutput} new output` : "Latest"}</button> : null}
               </div> : null}
-              <MessageComposer attachment={attachment} canAttachImage={canAttachImage} sendingImage={sendingImage} isOnline={connection === "online"} draft={draft} onDraftChange={setDraft} onSend={sendMessage} onSetAttachment={setImageAttachment} onClearAttachment={() => setAttachment(null)} />
+              <MessageComposer attachment={attachment} canAttachImage={canAttachImage} sendingImage={sendingImage} isOnline={connection === "online"} isWorking={activeRoom?.working === true} stopping={stopRequestId !== null} draft={draft} onDraftChange={setDraft} onSend={sendMessage} onStop={stopCurrentTask} onSetAttachment={setImageAttachment} onClearAttachment={() => setAttachment(null)} />
             </div>
           </> : <EmptyWorkspace onPair={() => setPairState("scanning")} />}
         </main>

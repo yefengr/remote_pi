@@ -113,7 +113,7 @@ describe("Protocol v2 client frames", () => {
       { ...version, type: "user_message_observed", id: "O1", ...channel, client_request_id: "R1", message_id: "M1", status: "committed" },
       { ...version, type: "session_sync", id: "Y1", ...channel, before: null, limit: 5 },
       { ...version, type: "ping", id: "Q1", ...channel },
-      { ...version, type: "cancel", id: "X1", ...channel, target_id: "R1" },
+      { ...version, type: "cancel", id: "X1", ...channel },
       { ...version, type: "session_new", id: "N1", ...channel },
       { ...version, type: "session_compact", id: "N2", ...channel },
       { ...version, type: "model_set", id: "N3", ...channel, provider: "openai", model_id: "model" },
@@ -124,6 +124,7 @@ describe("Protocol v2 client frames", () => {
       { ...version, type: "approve_tool", id: "N8", ...channel, tool_call_id: "TC1", decision: "allow" },
     ];
     for (const frame of frames) expect(decodeClientFrameV2(frame).protocol_version).toBe(2);
+    expectCode(() => decodeClientFrameV2({ ...version, type: "cancel", id: "X2", ...channel, target_id: "R1" }), "schema");
   });
 
   test("round-trips ask responses with the existing camelCase inner keys", () => {
@@ -210,7 +211,7 @@ describe("Protocol v2 server frames", () => {
       { ...version, type: "protocol_error", code: "invalid_generation", message: "generation changed" },
       { ...version, type: "reset", ...direct, ...session, reason: "generation_changed" },
       { ...version, type: "pong", ...direct, in_reply_to: "Q1" },
-      { ...version, type: "cancelled", ...direct, in_reply_to: "X1", target_id: "R1" },
+      { ...version, type: "cancelled", ...direct, in_reply_to: "X1" },
       { ...version, type: "action_ok", ...direct, in_reply_to: "N1", action: "session_new" },
       { ...version, type: "action_error", ...direct, in_reply_to: "N2", action: "session_compact", error: "busy" },
       { ...version, type: "models_list", ...direct, in_reply_to: "N5", models: [{ id: "m", name: "M", provider: "p", reasoning: true, context_window: 100, vision: false }] },
@@ -219,6 +220,7 @@ describe("Protocol v2 server frames", () => {
       { ...version, type: "bye", ...session, reason: "shutdown" },
     ];
     for (const frame of frames) expect(decodeServerFrameV2(frame).protocol_version).toBe(2);
+    expectCode(() => decodeServerFrameV2({ ...version, type: "cancelled", ...direct, in_reply_to: "X2", target_id: "R1" }), "schema");
     expectCode(() => decodeServerFrameV2({ ...version, type: "timeline_event", ...session, event: userEvent(), target_channel_id: "C1" }), "schema");
     expectCode(() => decodeServerFrameV2({ ...version, type: "bye", ...session, target_channel_id: "C1", reason: "shutdown" }), "schema");
     expectCode(() => decodeServerFrameV2({ ...version, type: "protocol_error", ...direct, code: "invalid_message", message: "bad", extra: true }), "schema");

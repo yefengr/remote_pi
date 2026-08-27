@@ -2390,7 +2390,6 @@ describe("routeClientMessage cancel handling", () => {
       id: "cancel-stale",
       channel_id: pair.channelId,
       history_generation: pair.historyGeneration,
-      target_id: "msg-stale",
     }));
 
     await new Promise<void>((r) => setImmediate(r));
@@ -2404,8 +2403,8 @@ describe("routeClientMessage cancel handling", () => {
     expect(cancelled[0]!.frame).toMatchObject({
       type: "cancelled",
       in_reply_to: "cancel-stale",
-      target_id: "msg-stale",
     });
+    expect(cancelled[0]!.frame).not.toHaveProperty("target_id");
     expect(staleAbort).not.toHaveBeenCalled();
     expect(freshAbort).toHaveBeenCalledTimes(1);
   });
@@ -2488,7 +2487,6 @@ describe("routeClientMessage cancel handling", () => {
       id: "cancel-nopi",
       channel_id: pair.channelId,
       history_generation: pair.historyGeneration,
-      target_id: "msg-nopi",
     }));
 
     await new Promise<void>((r) => setImmediate(r));
@@ -2502,8 +2500,8 @@ describe("routeClientMessage cancel handling", () => {
     expect(cancelled[0]!.frame).toMatchObject({
       type: "cancelled",
       in_reply_to: "cancel-nopi",
-      target_id: "msg-nopi",
     });
+    expect(cancelled[0]!.frame).not.toHaveProperty("target_id");
     expect(freshAbort).toHaveBeenCalledTimes(1);
   });
 
@@ -2526,7 +2524,6 @@ describe("routeClientMessage cancel handling", () => {
       id: "cancel-nonreal",
       channel_id: pair.channelId,
       history_generation: pair.historyGeneration,
-      target_id: "msg-nonreal",
     }));
 
     await new Promise<void>((r) => setImmediate(r));
@@ -2568,7 +2565,6 @@ describe("routeClientMessage cancel handling", () => {
       id: "cancel-throw",
       channel_id: pair.channelId,
       history_generation: pair.historyGeneration,
-      target_id: "msg-throw",
     }));
 
     await new Promise<void>((r) => setImmediate(r));

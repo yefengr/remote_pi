@@ -326,7 +326,7 @@ export class TimelineRuntime {
       }
       return TimelineEventSchema.parse({
         ...base, group_id: groupId, kind: "assistant", blocks: this.assistantBlocks(message.content),
-        status: "complete",
+        status: message.stopReason === "aborted" ? "interrupted" : "complete",
       });
     }
     const result = this.jsonValue(message.content);

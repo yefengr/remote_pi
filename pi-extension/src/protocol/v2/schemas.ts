@@ -294,7 +294,7 @@ const sessionSync = z.strictObject({
   before: id.nullable(), limit: nonNegativeInt.max(100).optional(),
 });
 const ping = z.strictObject({ ...frameBase, type: z.literal("ping"), id, ...clientDirect });
-const cancel = z.strictObject({ ...frameBase, type: z.literal("cancel"), id, ...clientDirect, target_id: id });
+const cancel = z.strictObject({ ...frameBase, type: z.literal("cancel"), id, ...clientDirect });
 const actionCommon = { ...frameBase, id, ...clientDirect };
 const sessionNew = z.strictObject({ ...actionCommon, type: z.literal("session_new") });
 const sessionCompact = z.strictObject({ ...actionCommon, type: z.literal("session_compact") });
@@ -402,7 +402,7 @@ const reset = z.strictObject({
   session_id: id, history_generation: id, reason: z.enum(["generation_changed", "branch_changed", "session_replaced", "conflict", "invalid_cursor"]),
 });
 const pong = z.strictObject({ ...frameBase, type: z.literal("pong"), ...responseDirect, in_reply_to: id });
-const cancelled = z.strictObject({ ...frameBase, type: z.literal("cancelled"), ...responseDirect, in_reply_to: id, target_id: id });
+const cancelled = z.strictObject({ ...frameBase, type: z.literal("cancelled"), ...responseDirect, in_reply_to: id });
 const actionOk = z.strictObject({ ...frameBase, type: z.literal("action_ok"), ...responseDirect, in_reply_to: id, action: actionName });
 const actionError = z.strictObject({ ...frameBase, type: z.literal("action_error"), ...responseDirect, in_reply_to: id, action: actionName, error: nonEmptyText });
 const modelsList = z.strictObject({ ...frameBase, type: z.literal("models_list"), ...responseDirect, in_reply_to: id, models: z.array(wireModel).max(MAX_ARRAY_ITEMS), current: wireModel.optional() });

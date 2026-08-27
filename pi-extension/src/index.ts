@@ -958,7 +958,7 @@ function _ensureV2Service(senderRef: string): TimelineV2Service | null {
       if (steering) _trackPendingSteer(frame.client_request_id, frame.text);
       return true;
     },
-    onCancel: (targetId) => _abortCurrentTurn(_lastEventCtx ?? _lastCtx ?? undefined),
+    onCancel: () => _abortCurrentTurn(_lastEventCtx ?? _lastCtx ?? undefined),
     onQueuedMessageClear: (targetId) => _clearV2QueuedUserMessages(senderRef, targetId),
     onListModels: () => getModelsList(
       (_lastEventCtx ?? _lastCtx) as ActionCtx | null,

@@ -21,7 +21,7 @@ export type V2ServiceOptions = {
     frame: Extract<ClientFrame, { type: "user_message" }>,
     correlation: Correlation,
   ) => boolean | "queued" | "rejected";
-  onCancel?: (targetId: string) => boolean;
+  onCancel?: () => boolean;
   onQueuedMessageClear?: (targetId?: string) => void;
   onListModels?: () => Pick<Extract<ServerFrame, { type: "models_list" }>, "models" | "current">;
 };
@@ -268,13 +268,12 @@ export class TimelineV2Service {
     const error = this.ensureReady(frame);
     if (error) return [error];
     try {
-      if (!(this.onCancel?.(frame.target_id) ?? false)) {
+      if (!(this.onCancel?.() ?? false)) {
         return [this.error(frame.id, "internal_error", "no active request to cancel", frame.channel_id)];
       }
       return this.direct(frame.channel_id, {
         type: "cancelled",
         in_reply_to: frame.id,
-        target_id: frame.target_id,
       });
     } catch (cancelError) {
       const detail = cancelError instanceof Error ? cancelError.message : String(cancelError);

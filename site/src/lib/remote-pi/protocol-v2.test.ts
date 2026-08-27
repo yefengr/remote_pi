@@ -114,7 +114,7 @@ test("accepts the closed client catalog, including queue, approval and strict as
     { ...version, type: "user_message_observed", id: "O1", ...channel, client_request_id: "R1", message_id: "M1", status: "committed" },
     { ...version, type: "session_sync", id: "Y1", ...channel, before: null, limit: 5 },
     { ...version, type: "ping", id: "Q1", ...channel },
-    { ...version, type: "cancel", id: "X1", ...channel, target_id: "R1" },
+    { ...version, type: "cancel", id: "X1", ...channel },
     { ...version, type: "session_new", id: "N1", ...channel },
     { ...version, type: "session_compact", id: "N2", ...channel },
     { ...version, type: "model_set", id: "N3", ...channel, provider: "openai", model_id: "model" },
@@ -134,6 +134,7 @@ test("accepts the closed client catalog, including queue, approval and strict as
   expectCode(() => decodeClientFrameV2({ ...askResponse, ask: { ...askResponse.ask, answers: { q1: { optionNotes: { yes: "note" }, extra: true } } } }), "schema");
   expectCode(() => decodeClientFrameV2({ ...version, type: "user_message", id: "U2", ...channel, client_request_id: "R2", text: "", images: [{ data: "abc", mime: "image/png" }, { data: "def", mime: "image/jpeg" }] }), "schema");
   expectCode(() => decodeClientFrameV2({ ...askResponse, extra: true }), "schema");
+  expectCode(() => decodeClientFrameV2({ ...version, type: "cancel", id: "X1", ...channel, target_id: "R1" }), "schema");
 });
 
 test("accepts server frames while rejecting old wrappers and direction drift", () => {
@@ -159,7 +160,7 @@ test("accepts server frames while rejecting old wrappers and direction drift", (
     { ...version, type: "protocol_error", code: "invalid_generation", message: "generation changed" },
     { ...version, type: "reset", ...direct, ...session, reason: "conflict" },
     { ...version, type: "pong", ...direct, in_reply_to: "Q1" },
-    { ...version, type: "cancelled", ...direct, in_reply_to: "X1", target_id: "R1" },
+    { ...version, type: "cancelled", ...direct, in_reply_to: "X1" },
     { ...version, type: "action_ok", ...direct, in_reply_to: "N1", action: "session_new" },
     { ...version, type: "action_error", ...direct, in_reply_to: "N2", action: "session_compact", error: "busy" },
     { ...version, type: "models_list", ...direct, in_reply_to: "N5", models: [] },
@@ -173,6 +174,7 @@ test("accepts server frames while rejecting old wrappers and direction drift", (
   expectCode(() => decodeServerFrameV2({ ...version, type: "timeline_partial", ...session, group_id: "GR1", partial_id: "PA1", kind: "assistant", status: "running", partial: {} }), "schema");
   expectCode(() => decodeServerFrameV2({ ...version, type: "timeline_partial", ...session, group_id: "GR1", partial_id: "PA1", kind: "assistant", status: "running", event_id: "A1" }), "schema");
   expectCode(() => decodeServerFrameV2({ ...ready, extra: true }), "schema");
+  expectCode(() => decodeServerFrameV2({ ...version, type: "cancelled", ...direct, in_reply_to: "X1", target_id: "R1" }), "schema");
 });
 
 test("validates fragments and history chunk overlap/final rules", () => {

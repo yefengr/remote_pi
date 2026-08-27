@@ -47,7 +47,7 @@ test("accumulates deltas for the same assistant partial id", () => {
     runtime.receive({ protocol_version: 2, type: "timeline_partial", session_id: scope.sessionId, history_generation: scope.historyGeneration, group_id: "assistant-group", partial_id: "assistant-partial", kind: "assistant", status: "delta", delta });
   }
 
-  const partial = runtime.receive({ protocol_version: 2, type: "session_ready", session_id: scope.sessionId, history_generation: scope.historyGeneration }).items.find((item) => item.kind === "partial");
+  const partial = runtime.receive({ protocol_version: 2, type: "session_ready", target_channel_id: scope.channelId, in_reply_to: "hello", session_id: scope.sessionId, history_generation: scope.historyGeneration, self_sender_ref: scope.selfSenderRef }).items.find((item) => item.kind === "partial");
   assert.equal(partial?.kind, "partial");
   assert.equal(partial?.partial.delta, "abc");
 });

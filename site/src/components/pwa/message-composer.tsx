@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type FormEvent } from "react";
-import { Camera, ImagePlus, Plus, Send, X } from "lucide-react";
+import { Camera, ImagePlus, LoaderCircle, Plus, Send, Square, X } from "lucide-react";
 
 export type MessageComposerAttachment = {
   source: Blob;
@@ -14,9 +14,12 @@ type MessageComposerProps = {
   canAttachImage: boolean;
   sendingImage: boolean;
   isOnline: boolean;
+  isWorking: boolean;
+  stopping: boolean;
   draft: string;
   onDraftChange: (value: string) => void;
   onSend: () => void | Promise<void>;
+  onStop: () => void;
   onSetAttachment: (source: Blob, label: string) => void;
   onClearAttachment: () => void;
 };
@@ -26,9 +29,12 @@ export function MessageComposer({
   canAttachImage,
   sendingImage,
   isOnline,
+  isWorking,
+  stopping,
   draft,
   onDraftChange,
   onSend,
+  onStop,
   onSetAttachment,
   onClearAttachment,
 }: MessageComposerProps) {
@@ -67,6 +73,9 @@ export function MessageComposer({
     };
   }, [menuOpen]);
 
+  const hasMessage = Boolean(draft.trim() || attachment);
+  const showStop = isOnline && isWorking;
+
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     void onSend();
@@ -104,7 +113,10 @@ export function MessageComposer({
               <button type="button" onClick={useCamera}><Camera size={17} />Use camera</button>
             </div> : null}
           </div>
-          <button className="pwa-primary-button" type="submit" disabled={!isOnline || sendingImage || (!draft.trim() && !attachment) || (attachment !== null && !canAttachImage)} aria-label="Send message" title="Send message"><Send size={17} /></button>
+          <div className="pwa-composer-actions">
+            {showStop ? <button className={`pwa-stop-button${hasMessage ? "" : " primary"}`} type="button" onClick={onStop} disabled={stopping} aria-label={stopping ? "Stopping current task" : "Stop current task"} title={stopping ? "Stopping current task" : "Stop current task"}>{stopping ? <LoaderCircle className="pwa-spin" size={16} /> : <Square size={15} fill="currentColor" />}<span>{stopping ? "Stopping…" : "Stop"}</span></button> : null}
+            {hasMessage || !showStop ? <button className="pwa-primary-button" type="submit" disabled={!isOnline || sendingImage || !hasMessage || (attachment !== null && !canAttachImage)} aria-label="Send message" title="Send message"><Send size={17} /></button> : null}
+          </div>
         </div>
       </div>
     </form>

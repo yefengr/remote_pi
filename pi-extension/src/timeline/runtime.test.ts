@@ -152,6 +152,27 @@ describe("TimelineRuntime", () => {
     ]));
   });
 
+  test("maps aborted assistant messages to interrupted timeline events", async () => {
+    const session = SessionManager.inMemory(process.cwd());
+    const runtime = new TimelineRuntime();
+    const assistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "partial answer" }],
+      stopReason: "aborted",
+      timestamp: 2,
+    };
+    runtime.onAgentStart();
+    runtime.onMessageStart(assistant, session);
+    runtime.onMessageEnd(assistant, session);
+    session.appendMessage(assistant as never);
+    await nextMacrotask();
+
+    expect(runtime.getPublishedEvents()).toContainEqual(expect.objectContaining({
+      kind: "assistant",
+      status: "interrupted",
+    }));
+  });
+
   test("stops scanner at markers, hard boundaries, and role mismatch", () => {
     const session = SessionManager.inMemory(process.cwd());
     const runtime = new TimelineRuntime();

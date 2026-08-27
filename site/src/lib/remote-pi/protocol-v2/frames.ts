@@ -95,7 +95,6 @@ export const cancelFrameSchema = strictObject({
   type: z.literal("cancel"),
   id: idSchema,
   ...channelRequest,
-  target_id: idSchema,
 });
 export const sessionNewFrameSchema = strictObject({
   ...protocol,
@@ -345,7 +344,6 @@ export const cancelledFrameSchema = strictObject({
   ...directResponse,
   type: z.literal("cancelled"),
   in_reply_to: idSchema,
-  target_id: idSchema,
 });
 export const actionOkFrameSchema = strictObject({
   ...directResponse,

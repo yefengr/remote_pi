@@ -211,6 +211,33 @@ describe("TimelineV2Service", () => {
     }))[0]).toMatchObject({ type: "protocol_error", code: "invalid_message" });
   });
 
+  test("cancel invokes a parameterless callback and returns a direct acknowledgement", () => {
+    const session = SessionManager.inMemory(process.cwd());
+    const onCancel = vi.fn(() => true);
+    const service = new TimelineV2Service({
+      sessionManager: session,
+      senderRef: "owner-1",
+      runtime: new TimelineRuntime(),
+      onUserMessage: () => false,
+      onCancel,
+    });
+    service.handle(hello());
+    const [response] = service.handle({
+      protocol_version: 2,
+      type: "cancel",
+      id: "cancel-1",
+      channel_id: "channel-1",
+      history_generation: service.generation,
+    });
+    expect(onCancel).toHaveBeenCalledWith();
+    expect(response).toMatchObject({
+      type: "cancelled",
+      target_channel_id: "channel-1",
+      in_reply_to: "cancel-1",
+    });
+    expect(response).not.toHaveProperty("target_id");
+  });
+
   test("cancel callback failures remain direct internal errors", () => {
     const session = SessionManager.inMemory(process.cwd());
     const service = new TimelineV2Service({
@@ -227,7 +254,6 @@ describe("TimelineV2Service", () => {
       id: "cancel-1",
       channel_id: "channel-1",
       history_generation: service.generation,
-      target_id: "request-1",
     })[0]).toMatchObject({
       type: "protocol_error",
       target_channel_id: "channel-1",
