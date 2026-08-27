@@ -64,7 +64,7 @@ function PendingCard({ pending, onRetryUnknown, onCancelQueued }: { pending: Tim
 function PartialCard({ partial }: { partial: TimelinePartial }) {
   const text = blockText(partial);
   const label = partial.kind === "tool" ? `Tool / ${partial.tool}` : partial.kind === "thinking" ? "Thinking" : "Agent";
-  return <article className={`pwa-message ${partial.kind} partial`}><div className="pwa-message-label">{label}<span className="pwa-streaming"><span /> streaming</span></div>{partial.kind === "assistant" ? <div className="pwa-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown></div> : <p>{text}</p>}</article>;
+  return <article className={`pwa-message ${partial.kind} partial`}><div className="pwa-message-label">{label}<span className="pwa-streaming"><span /> streaming</span></div>{text.trim() ? partial.kind === "assistant" ? <div className="pwa-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown></div> : <p>{text}</p> : null}</article>;
 }
 
 export function MessageList({ items, hasEarlier, loadingEarlier, onLoadEarlier, listRef, bottomSentinelRef, onScroll, onRetryUnknown, onCancelQueued }: MessageListProps) {

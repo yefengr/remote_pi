@@ -1,8 +1,10 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent } from "react";
-import { ArrowDownToLine, Activity, Camera, ClipboardPaste, ImagePlus, MessageSquare, RefreshCw, Send, Settings, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowDownToLine, Activity, MessageSquare, RefreshCw, Settings, X } from "lucide-react";
+import { MessageComposer } from "@/components/pwa/message-composer";
 import { MessageList } from "@/components/pwa/message-list";
 import { describeStartupFailure, PairingDialog, StartupErrorView, StartupLoading, type StartupError } from "@/components/pwa/pwa-startup";
+import { MobileTopbarMenu } from "@/components/pwa/mobile-topbar-menu";
 import { SessionSheet } from "@/components/pwa/session-sheet";
 import { SettingsPanel } from "@/components/pwa/settings-panel";
 import { ConnectionStatus, DesktopSidebar, EmptyWorkspace, displayPeer, type ConnectionViewState } from "@/components/pwa/workspace-view";
@@ -116,8 +118,6 @@ export function PwaApp() {
   const bottomSentinelRef = useRef<HTMLDivElement | null>(null);
   const followOutputRef = useRef(true);
   const scrollOnNextMessagesRef = useRef(false);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const modelRequestRef = useRef<string | null>(null);
 
   useEffect(() => { roomsRef.current = rooms; }, [rooms]);
@@ -814,36 +814,6 @@ export function PwaApp() {
     setAttachment({ source, previewUrl: URL.createObjectURL(source), label });
   }, [canAttachImage]);
 
-  const readImageFromClipboard = useCallback(async () => {
-    if (!canAttachImage) {
-      setError("Image attachments are unavailable for this connection.");
-      return;
-    }
-    if (!navigator.clipboard?.read) {
-      setError("This browser cannot read images from the clipboard.");
-      return;
-    }
-    try {
-      const items = await navigator.clipboard.read();
-      for (const item of items) {
-        const type = item.types.find((candidate) => candidate === "image/png" || candidate === "image/jpeg" || candidate === "image/webp");
-        if (!type) continue;
-        setImageAttachment(await item.getType(type), "Clipboard image");
-        return;
-      }
-      setError("The clipboard does not contain a PNG, JPEG, or WebP image.");
-    } catch (clipboardError) {
-      setError(clipboardError instanceof Error ? clipboardError.message : "Could not read an image from the clipboard.");
-    }
-  }, [canAttachImage, setImageAttachment]);
-
-  const handleImagePaste = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
-    const image = Array.from(event.clipboardData.files).find((file) => file.type.startsWith("image/"));
-    if (!image) return;
-    event.preventDefault();
-    setImageAttachment(image, image.name || "Clipboard image");
-  }, [setImageAttachment]);
-
   const sendMessage = useCallback(async () => {
     const text = draft.trim();
     const source = attachment?.source;
@@ -1057,8 +1027,11 @@ export function PwaApp() {
         <div className="pwa-topbar-actions">
           {activePeer ? <button className="pwa-session-trigger" type="button" onClick={() => setSessionSheetOpen(true)} aria-haspopup="dialog" aria-expanded={sessionSheetOpen}><MessageSquare size={16} /><span>{displayPeer(activePeer)} / {roomId}</span></button> : null}
           <ConnectionStatus state={connection} retryAttempt={retryAttempt} />
-          <button className="pwa-icon-button" type="button" onClick={() => void refreshPwaApp()} aria-label="Refresh app" title="Refresh app"><RefreshCw size={18} /></button>
-          <button className="pwa-icon-button" type="button" onClick={() => setSettingsOpen((open) => !open)} aria-label="Open settings" title="Settings"><Settings size={18} /></button>
+          <div className="pwa-desktop-actions">
+            <button className="pwa-icon-button" type="button" onClick={() => void refreshPwaApp()} aria-label="Refresh app" title="Refresh app"><RefreshCw size={18} /></button>
+            <button className="pwa-icon-button" type="button" onClick={() => setSettingsOpen((open) => !open)} aria-label="Open settings" title="Settings"><Settings size={18} /></button>
+          </div>
+          <MobileTopbarMenu onRefresh={() => { void refreshPwaApp(); }} onOpenSettings={() => setSettingsOpen((open) => !open)} />
         </div>
       </header>
       <div className="pwa-layout">
@@ -1067,24 +1040,13 @@ export function PwaApp() {
           {activePeer ? <>
             <div className="pwa-chat-head"><div><span className="pwa-kicker">Active session</span><h2>{displayPeer(activePeer)}</h2><span className="pwa-chat-meta"><span className={connection === "online" ? "pwa-status-dot online" : "pwa-status-dot"} />{connection === "online" ? "Live" : connection === "tab_in_use" ? "Local history / another tab" : "Local history"} <span className="pwa-separator">/</span> room <code>{roomId}</code> <span className="pwa-separator">/</span> last synced <time dateTime={lastSyncedAt ? new Date(lastSyncedAt).toISOString() : undefined}>{formatSyncTime(lastSyncedAt)}</time></span></div><div className="pwa-room-control"><label htmlFor="room-id">Room</label><select id="room-id" value={roomId} disabled={connection !== "online"} onChange={(event) => selectRoom(event.target.value)}><option value={roomId}>{roomId}</option>{activeRooms.filter((room) => room.roomId !== roomId).map((room) => <option key={room.roomId} value={room.roomId}>{room.name || room.cwd || room.roomId}</option>)}</select></div></div>
             <MessageList items={timelineItems} hasEarlier={nextBefore !== null} loadingEarlier={loadingEarlier} onLoadEarlier={loadEarlier} listRef={messageListRef} bottomSentinelRef={bottomSentinelRef} onScroll={handleMessageListScroll} onRetryUnknown={retryUnknownMessage} onCancelQueued={cancelQueuedMessage} />
-            {((connection !== "no_network" && (connection === "retrying" || connection === "offline")) || !followingOutput || unreadOutput > 0) ? <div className="pwa-message-actions">
-              {connection !== "no_network" && (connection === "retrying" || connection === "offline") ? <button className="pwa-latest-button" type="button" onClick={() => restartActiveConnection(true)}><RefreshCw size={16} />Try again</button> : null}
-              {!followingOutput || unreadOutput > 0 ? <button className="pwa-latest-button" type="button" onClick={() => { scrollToLatest(true); resumeFollowingOutput(); }}><ArrowDownToLine size={16} />{unreadOutput > 0 ? `${unreadOutput} new output` : "Latest"}</button> : null}
-            </div> : null}
-            <form className="pwa-composer" onSubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
-              <input ref={fileInputRef} className="pwa-image-input" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) setImageAttachment(file, file.name || "Image attachment"); event.currentTarget.value = ""; }} />
-              <input ref={cameraInputRef} className="pwa-image-input" type="file" accept="image/png,image/jpeg,image/webp" capture="environment" onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) setImageAttachment(file, file.name || "Camera image"); event.currentTarget.value = ""; }} />
-              {attachment ? <div className="pwa-composer-preview"><img src={attachment.previewUrl} alt={attachment.label} /><button type="button" onClick={() => setAttachment(null)} disabled={sendingImage} aria-label="Remove image" title="Remove image"><X size={14} /></button></div> : null}
-              <div className="pwa-composer-row">
-                <div className="pwa-composer-tools">
-                  <button className="pwa-composer-icon" type="button" onClick={() => fileInputRef.current?.click()} disabled={!canAttachImage} aria-label="Choose image" title="Choose image"><ImagePlus size={18} /></button>
-                  <button className="pwa-composer-icon" type="button" onClick={() => void readImageFromClipboard()} disabled={!canAttachImage} aria-label="Paste image" title="Paste image"><ClipboardPaste size={18} /></button>
-                  <button className="pwa-composer-icon" type="button" onClick={() => cameraInputRef.current?.click()} disabled={!canAttachImage} aria-label="Use camera" title="Use camera"><Camera size={18} /></button>
-                </div>
-                <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onPaste={handleImagePaste} placeholder={connection === "online" ? "Send a message to your agent..." : "Reconnect to send a message"} disabled={connection !== "online" || sendingImage} rows={2} />
-                <button className="pwa-primary-button" type="submit" disabled={connection !== "online" || sendingImage || (!draft.trim() && !attachment) || (attachment !== null && visionAvailable !== true)} aria-label="Send message" title="Send message"><Send size={17} /></button>
-              </div>
-            </form>
+            <div className="pwa-chat-footer">
+              {((connection !== "no_network" && (connection === "retrying" || connection === "offline")) || !followingOutput || unreadOutput > 0) ? <div className="pwa-message-actions">
+                {connection !== "no_network" && (connection === "retrying" || connection === "offline") ? <button className="pwa-latest-button" type="button" onClick={() => restartActiveConnection(true)}><RefreshCw size={16} />Try again</button> : null}
+                {!followingOutput || unreadOutput > 0 ? <button className="pwa-latest-button" type="button" onClick={() => { scrollToLatest(true); resumeFollowingOutput(); }}><ArrowDownToLine size={16} />{unreadOutput > 0 ? `${unreadOutput} new output` : "Latest"}</button> : null}
+              </div> : null}
+              <MessageComposer attachment={attachment} canAttachImage={canAttachImage} sendingImage={sendingImage} isOnline={connection === "online"} draft={draft} onDraftChange={setDraft} onSend={sendMessage} onSetAttachment={setImageAttachment} onClearAttachment={() => setAttachment(null)} />
+            </div>
           </> : <EmptyWorkspace onPair={() => setPairState("scanning")} />}
         </main>
         {settingsOpen ? <SettingsPanel relayUrl={relayUrl} defaultRelayUrl={DEFAULT_RELAY} onSave={saveRelayUrl} onClose={closeSettings} onClearData={clearLocalData} onResetLayout={resetLayout} /> : null}
