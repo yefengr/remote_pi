@@ -2027,10 +2027,10 @@ a {
 .pwa-bottom-sentinel { width: 1px; height: 1px; }
 .pwa-message { width: min(100%, 780px); max-width: 780px; min-width: 0; overflow: visible; padding-left: 14px; border-left: 2px solid var(--pwa-line); position: relative; }
 .pwa-message > * { min-width: 0; max-width: 100%; }
-.pwa-message.user { justify-self: end; width: min(80%, 680px); border-left: 0; border-right: 2px solid rgba(79,195,247,.35); padding: 12px 15px 12px 20px; background: linear-gradient(90deg, transparent, rgba(79,195,247,.07)); text-align: right; }
+.pwa-message.user { justify-self: end; width: min(80%, 680px); border-left: 0; border-right: 2px solid rgba(79,195,247,.35); padding: 12px 15px 12px 20px; background: linear-gradient(90deg, transparent, rgba(79,195,247,.07)); text-align: left; }
 .pwa-message.system { border-left-color: #f5c66a; color: #f5c66a; }
 .pwa-message-label { margin-bottom: 7px; color: var(--pwa-accent); font: 10px var(--ff-mono); letter-spacing: .12em; text-transform: uppercase; }
-.pwa-message.user .pwa-message-label { color: var(--pwa-dim); }
+.pwa-message.user .pwa-message-label { color: var(--pwa-dim); text-align: right; }
 .pwa-message p { margin: 0; color: var(--pwa-ink); font-size: 15px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
 .pwa-message time { display: block; margin-top: 8px; color: #56656b; font: 10px var(--ff-mono); }
 .pwa-message.user time { text-align: right; }
@@ -2040,6 +2040,7 @@ a {
 .pwa-message-toggle { margin-left: 8px; padding: 0; border: 0; color: var(--pwa-dim); background: transparent; cursor: pointer; vertical-align: middle; }
 .pwa-earlier-button { justify-self: center; }
 .pwa-markdown { color: var(--pwa-ink); font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
+.pwa-stream-text { color: var(--pwa-ink); font-size: 15px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
 .pwa-markdown > :first-child { margin-top: 0; }
 .pwa-markdown > :last-child { margin-bottom: 0; }
 .pwa-markdown p, .pwa-markdown ul, .pwa-markdown ol, .pwa-markdown blockquote, .pwa-markdown pre { margin: 12px 0; }

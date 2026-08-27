@@ -16,6 +16,7 @@ import { normalizePeerId } from "@/lib/remote-pi/encoding";
 import { generateOwnerKeyPair } from "@/lib/remote-pi/crypto";
 import { assertBrowserCapabilities, browserName, fromStoredKey, mergeRooms, migrateLegacyDefaultRelay, toStoredKey, type ConnectionContext } from "@/lib/pwa/runtime";
 import { TimelineRuntime, type TimelineScope, type TimelineViewItem } from "@/lib/pwa/timeline-runtime";
+import { StreamDisplayBuffer } from "@/lib/pwa/stream-display-buffer";
 import { getImageOutputMime, prepareImageAttachment } from "@/lib/pwa/image-upload";
 import { recoverServerFrame } from "@/lib/pwa/server-frame-recovery";
 import { ReconnectState, type ReconnectTrigger } from "@/lib/pwa/reconnect-state";
@@ -45,6 +46,7 @@ const ACTIVE_ROOM_SETTING = "active_room:";
 const BOTTOM_DISTANCE_PX = 72;
 const RETRY_DELAYS_MS = [1000, 2000, 5000, 10000, 30000] as const;
 const MAX_RETRY_ATTEMPTS = RETRY_DELAYS_MS.length;
+const STREAM_DISPLAY_CADENCE_MS = 36;
 type PairState = "idle" | "scanning" | "pairing";
 type StartupState = "loading" | "ready" | "error";
 type ImageAttachment = { source: Blob; previewUrl: string; label: string };
@@ -103,6 +105,10 @@ export function PwaApp() {
   const connectionRef = useRef(connection);
   // Stream handlers update this synchronously; React state only mirrors it for rendering.
   const timelineItemsRef = useRef<TimelineViewItem[]>([]);
+  const streamDisplayBufferRef = useRef(new StreamDisplayBuffer());
+  const streamDisplayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const streamDisplayRafRef = useRef<number | null>(null);
+  const scheduleStreamDisplayRef = useRef<() => void>(() => {});
   const timelineRuntimeRef = useRef(new TimelineRuntime());
   const historyAssemblerRef = useRef<HistoryWindowAssembler | null>(null);
   const historyModeRef = useRef<"recent" | "earlier">("recent");
@@ -157,12 +163,58 @@ export function PwaApp() {
     while (pendingWritesRef.current.size) await Promise.allSettled(Array.from(pendingWritesRef.current));
   }, []);
 
+  const clearStreamDisplaySchedule = useCallback(() => {
+    if (streamDisplayTimerRef.current) clearTimeout(streamDisplayTimerRef.current);
+    if (streamDisplayRafRef.current !== null) cancelAnimationFrame(streamDisplayRafRef.current);
+    streamDisplayTimerRef.current = null;
+    streamDisplayRafRef.current = null;
+  }, []);
+
+  const renderStreamSnapshot = useCallback((items: TimelineViewItem[]) => {
+    setTimelineItems(items);
+  }, []);
+
+  const scheduleStreamDisplay = useCallback(() => {
+    if (streamDisplayTimerRef.current || streamDisplayRafRef.current !== null || typeof document !== "undefined" && document.hidden) return;
+    streamDisplayTimerRef.current = setTimeout(() => {
+      streamDisplayTimerRef.current = null;
+      streamDisplayRafRef.current = requestAnimationFrame(() => {
+        streamDisplayRafRef.current = null;
+        const change = streamDisplayBufferRef.current.advance();
+        if (change.shouldRender) renderStreamSnapshot(change.items);
+        if (change.hasPending) scheduleStreamDisplayRef.current();
+      });
+    }, STREAM_DISPLAY_CADENCE_MS);
+  }, [renderStreamSnapshot]);
+
+  useEffect(() => {
+    scheduleStreamDisplayRef.current = scheduleStreamDisplay;
+    return () => {
+      if (scheduleStreamDisplayRef.current === scheduleStreamDisplay) scheduleStreamDisplayRef.current = () => {};
+    };
+  }, [scheduleStreamDisplay]);
+
   const applyTimelineChange = useCallback((change: ReturnType<TimelineRuntime["receive"]>) => {
     timelineItemsRef.current = change.items;
-    setTimelineItems(change.items);
+    const displayChange = streamDisplayBufferRef.current.ingest(change.items);
+    if (displayChange.shouldRender) renderStreamSnapshot(displayChange.items);
+    if (displayChange.hasPending) scheduleStreamDisplay();
     const channel = channelRef.current;
     for (const frame of change.observed) channel?.send(frame);
-  }, []);
+  }, [renderStreamSnapshot, scheduleStreamDisplay]);
+
+  useEffect(() => {
+    const resetForVisibility = () => {
+      clearStreamDisplaySchedule();
+      const change = streamDisplayBufferRef.current.reset(timelineItemsRef.current);
+      renderStreamSnapshot(change.items);
+    };
+    document.addEventListener("visibilitychange", resetForVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", resetForVisibility);
+      clearStreamDisplaySchedule();
+    };
+  }, [clearStreamDisplaySchedule, renderStreamSnapshot]);
 
   const reportTimelineWrite = useCallback((write: Promise<unknown>) => {
     void trackWrite(write).catch((writeError) => {
