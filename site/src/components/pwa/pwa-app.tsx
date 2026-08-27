@@ -12,7 +12,6 @@ import { ConnectionStatus, DesktopSidebar, EmptyWorkspace, displayPeer, type Con
 import { createPairRequest, parsePairUri, relayMismatch } from "@/lib/remote-pi/pairing";
 import { PeerChannel } from "@/lib/remote-pi/peer-channel";
 import { RelayClient } from "@/lib/remote-pi/relay-client";
-import { RelayConnectionLock } from "@/lib/pwa/connection-lock";
 import { normalizePeerId } from "@/lib/remote-pi/encoding";
 import { generateOwnerKeyPair } from "@/lib/remote-pi/crypto";
 import { assertBrowserCapabilities, browserName, fromStoredKey, mergeRooms, migrateLegacyDefaultRelay, toStoredKey, type ConnectionContext } from "@/lib/pwa/runtime";
@@ -102,7 +101,6 @@ export function PwaApp() {
   const relayRef = useRef<RelayClient | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectionDisposeRef = useRef<(() => void) | null>(null);
-  const relayLockRef = useRef<RelayConnectionLock | null>(null);
   const suppressRoomPersistenceRef = useRef(new Set<string>());
   const retryAttemptRef = useRef(0);
   const scheduleReconnectRef = useRef<(() => void) | null>(null);
@@ -269,15 +267,14 @@ export function PwaApp() {
     applyTimelineChange(timelineRuntimeRef.current.markDisconnected());
   }, [applyTimelineChange, clearPendingAction]);
 
-  const markPeerRoomsOffline = useCallback(async (peerEpk: string) => {
+  const markPeerRoomsOffline = useCallback((peerEpk: string) => {
     if (suppressRoomPersistenceRef.current.has(makePwaPeerId(peerEpk, roomIdRef.current))) return;
     const now = Date.now();
     const updated = roomsRef.current.map((room) => room.peerEpk === peerEpk && room.online ? { ...room, online: false, updatedAt: now } : room);
     if (updated.every((room, index) => room === roomsRef.current[index])) return;
     roomsRef.current = updated;
     if (activePeerRef.current?.remoteEpk === peerEpk) setRooms(updated);
-    await trackWrite(getPwaDatabase().rooms.bulkPut(updated.filter((room) => room.peerEpk === peerEpk)));
-  }, [trackWrite]);
+  }, []);
 
 
   const upsertRooms = useCallback(async (peerEpk: string, nextRooms: PwaRoomRecord[], generation: number) => {
@@ -572,7 +569,7 @@ export function PwaApp() {
       if (state === "connecting" || state === "authenticating") setConnection("connecting");
       if (state === "closed") {
         interruptStreamingOutput();
-        void markPeerRoomsOffline(peer.remoteEpk);
+        markPeerRoomsOffline(peer.remoteEpk);
         setConnection("offline");
         requestReconnect("closed", connectionToken);
       }
@@ -613,7 +610,7 @@ export function PwaApp() {
     const previousPeer = activePeerRef.current;
     if (previousPeer) {
       interruptStreamingOutput();
-      void markPeerRoomsOffline(previousPeer.remoteEpk);
+      markPeerRoomsOffline(previousPeer.remoteEpk);
     }
     const generation = selectionGenerationRef.current + 1;
     selectionGenerationRef.current = generation;
@@ -635,11 +632,6 @@ export function PwaApp() {
   }, [clearPendingAction, interruptStreamingOutput, markPeerRoomsOffline]);
 
   const restartActiveConnection = useCallback((resetRetries = true) => {
-    const lock = relayLockRef.current;
-    if (lock && !lock.ensureHeld()) {
-      setConnection("tab_in_use");
-      return;
-    }
     const peer = activePeerRef.current;
     if (!selectionReady || !peer) {
       setConnection("offline");
@@ -845,72 +837,34 @@ export function PwaApp() {
   }, [activePeerId, applyTimelineChange]);
 
   useEffect(() => {
-    if (!selectionReady || startupState !== "ready" || pairState !== "idle" || !activePeerId || !identity) return;
+    if (!selectionReady || startupState !== "ready" || !activePeerId || !identity) return;
     const peer = activePeerRef.current;
     if (!peer) return;
     const generation = selectionGenerationRef.current;
     const selectedRoom = roomIdRef.current;
-    const lock = new RelayConnectionLock();
-    relayLockRef.current = lock;
     let disposed = false;
-    let attemptInFlight = false;
     let cleanup: (() => void) | undefined;
-    let removeAvailable: (() => void) | null = null;
-    const removeLost = lock.onLost(() => {
-      const latestDispose = connectionDisposeRef.current;
-      connectionDisposeRef.current = null;
-      latestDispose?.();
-      interruptStreamingOutput();
-      void markPeerRoomsOffline(peer.remoteEpk);
-      cleanup = undefined;
-      setConnection("tab_in_use");
-    });
-    const tryConnect = async () => {
-      if (disposed || reconnectStateRef.current.isTerminal || attemptInFlight || cleanup) return;
-      attemptInFlight = true;
-      const acquired = await lock.acquire();
-      attemptInFlight = false;
-      if (disposed) {
-        if (acquired) lock.release();
-        return;
-      }
-      if (!acquired) {
-        setConnection("tab_in_use");
-        removeAvailable ??= lock.onAvailable(() => { void tryConnect(); });
-        return;
-      }
-      removeAvailable?.();
-      removeAvailable = null;
-      const dispose = await connectActivePeer(peer, generation, selectedRoom);
-      if (disposed || !isCurrentSelection(generation, peer.id, peer.remoteEpk, selectedRoom)) {
-        dispose?.();
-        lock.release();
-        return;
-      }
+    void connectActivePeer(peer, generation, selectedRoom).then((dispose) => {
       if (!dispose) return;
+      if (disposed || !isCurrentSelection(generation, peer.id, peer.remoteEpk, selectedRoom)) {
+        dispose();
+        return;
+      }
       cleanup = dispose;
       connectionDisposeRef.current = dispose;
-    };
-    void tryConnect();
-    const retryLock = setInterval(() => { if (!cleanup) void tryConnect(); }, 2000);
+    });
     return () => {
       disposed = true;
-      clearInterval(retryLock);
-      removeAvailable?.();
-      removeLost();
       const latestDispose = connectionDisposeRef.current;
       connectionDisposeRef.current = null;
       latestDispose?.();
       interruptStreamingOutput();
-      void markPeerRoomsOffline(peer.remoteEpk);
+      markPeerRoomsOffline(peer.remoteEpk);
       if (cleanup && cleanup !== latestDispose) cleanup();
-      lock.release();
-      lock.dispose();
-      if (relayLockRef.current === lock) relayLockRef.current = null;
       channelRef.current = null;
       relayRef.current = null;
     };
-  }, [activePeerId, connectActivePeer, identity, interruptStreamingOutput, isCurrentSelection, markPeerRoomsOffline, pairState, requestReconnect, roomId, selectionReady, startupState]);
+  }, [activePeerId, connectActivePeer, identity, interruptStreamingOutput, isCurrentSelection, markPeerRoomsOffline, roomId, selectionReady, startupState]);
 
   useEffect(() => {
     const reconnect = () => requestReconnect("closed");
@@ -1098,13 +1052,6 @@ export function PwaApp() {
     if (!payload) { setError("That is not a valid Remote Pi pairing QR."); setPairState("scanning"); return; }
     if (relayMismatch(payload.relayUrl, relayUrl)) { setError("This QR belongs to a different Relay. Update the Relay setting first."); setPairState("scanning"); return; }
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    const pairingLock = new RelayConnectionLock();
-    if (!await pairingLock.acquire()) {
-      pairingLock.dispose();
-      setError("Another Remote Pi tab is using the Relay connection.");
-      setPairState("scanning");
-      return;
-    }
     let relay: RelayClient | null = null;
     let closePairing = () => {};
     try {
@@ -1130,8 +1077,6 @@ export function PwaApp() {
     } finally {
       closePairing();
       relay?.close();
-      pairingLock.release();
-      pairingLock.dispose();
     }
   }, [identity, relayUrl, selectPeer]);
 
@@ -1235,7 +1180,7 @@ export function PwaApp() {
         <DesktopSidebar peers={peers} activePeerId={activePeerId} connection={connection} onPair={() => setPairState("scanning")} onSelect={selectPeer} onRename={(peer) => void renamePeer(peer)} onRemove={(peer) => void removePeer(peer)} onClearData={clearLocalData} />
         <main className="pwa-main">
           {activePeer ? <>
-            <div className="pwa-chat-head"><div><span className="pwa-kicker">Active session</span><h2>{displayPeer(activePeer)}</h2><span className="pwa-chat-meta"><span className={connection === "online" ? "pwa-status-dot online" : "pwa-status-dot"} />{connection === "online" ? "Live" : connection === "tab_in_use" ? "Local history / another tab" : "Local history"} <span className="pwa-separator">/</span> room <code>{roomId}</code> <span className="pwa-separator">/</span> last synced <time dateTime={lastSyncedAt ? new Date(lastSyncedAt).toISOString() : undefined}>{formatSyncTime(lastSyncedAt)}</time></span></div><div className="pwa-room-control"><label htmlFor="room-id">Room</label><select id="room-id" value={roomId} disabled={connection !== "online"} onChange={(event) => selectRoom(event.target.value)}><option value={roomId}>{roomId}</option>{activeRooms.filter((room) => room.roomId !== roomId).map((room) => <option key={room.roomId} value={room.roomId}>{room.name || room.cwd || room.roomId}</option>)}</select></div></div>
+            <div className="pwa-chat-head"><div><span className="pwa-kicker">Active session</span><h2>{displayPeer(activePeer)}</h2><span className="pwa-chat-meta"><span className={connection === "online" ? "pwa-status-dot online" : "pwa-status-dot"} />{connection === "online" ? "Live" : "Local history"} <span className="pwa-separator">/</span> room <code>{roomId}</code> <span className="pwa-separator">/</span> last synced <time dateTime={lastSyncedAt ? new Date(lastSyncedAt).toISOString() : undefined}>{formatSyncTime(lastSyncedAt)}</time></span></div><div className="pwa-room-control"><label htmlFor="room-id">Room</label><select id="room-id" value={roomId} disabled={connection !== "online"} onChange={(event) => selectRoom(event.target.value)}><option value={roomId}>{roomId}</option>{activeRooms.filter((room) => room.roomId !== roomId).map((room) => <option key={room.roomId} value={room.roomId}>{room.name || room.cwd || room.roomId}</option>)}</select></div></div>
             <MessageList items={timelineItems} hasEarlier={nextBefore !== null} loadingEarlier={loadingEarlier} onLoadEarlier={loadEarlier} listRef={messageListRef} bottomSentinelRef={bottomSentinelRef} onScroll={handleMessageListScroll} onRetryUnknown={retryUnknownMessage} onCancelQueued={cancelQueuedMessage} />
             <div className="pwa-chat-footer">
               {((connection !== "no_network" && (connection === "retrying" || connection === "offline")) || !followingOutput || unreadOutput > 0) ? <div className="pwa-message-actions">

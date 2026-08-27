@@ -1979,7 +1979,7 @@ a {
 .pwa-connection { display: inline-flex; align-items: center; gap: 8px; color: var(--pwa-dim); font: 12px var(--ff-mono); }
 .pwa-connection.online { color: var(--pwa-green); }
 .pwa-connection.retrying { color: #f5c66a; }
-.pwa-connection.no_network, .pwa-connection.tab_in_use { color: #a5b1b5; }
+.pwa-connection.no_network { color: #a5b1b5; }
 .pwa-status-dot, .pwa-local-dot { width: 7px; height: 7px; border-radius: 50%; background: #536268; display: inline-block; }
 .pwa-connection.online .pwa-status-dot, .pwa-status-dot.online, .pwa-local-dot { background: var(--pwa-green); box-shadow: 0 0 12px rgba(115,226,164,.65); }
 .pwa-icon-button, .pwa-round-button { border: 1px solid var(--pwa-line); color: var(--pwa-dim); background: transparent; cursor: pointer; transition: border-color .2s, color .2s, background .2s, transform .2s; }

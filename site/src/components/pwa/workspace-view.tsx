@@ -3,14 +3,14 @@
 import { Circle, Link2, MessageSquare, Pencil, Plus, Radio, Trash2 } from "lucide-react";
 import type { PwaPeerRecord } from "@/lib/pwa/db";
 
-export type ConnectionViewState = "offline" | "connecting" | "online" | "retrying" | "no_network" | "tab_in_use";
+export type ConnectionViewState = "offline" | "connecting" | "online" | "retrying" | "no_network";
 
 export function displayPeer(peer: PwaPeerRecord): string {
   return peer.nickname?.trim() || peer.sessionName || "Remote Pi";
 }
 
 export function ConnectionStatus({ state, retryAttempt = 0 }: { state: ConnectionViewState; retryAttempt?: number }) {
-  const label = state === "online" ? "Connected" : state === "connecting" ? "Connecting" : state === "retrying" ? `Retrying ${retryAttempt}/5` : state === "no_network" ? "No network" : state === "tab_in_use" ? "Another tab" : "Offline";
+  const label = state === "online" ? "Connected" : state === "connecting" ? "Connecting" : state === "retrying" ? `Retrying ${retryAttempt}/5` : state === "no_network" ? "No network" : "Offline";
   return <span className={`pwa-connection ${state}`} title={label} aria-label={label}><span className="pwa-status-dot" />{label}</span>;
 }
 
