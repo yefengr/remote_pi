@@ -68,6 +68,12 @@ function isMatchingScope(scope: TimelineScope | null, frame: { session_id: strin
   return scope !== null && scope.sessionId === frame.session_id && scope.historyGeneration === frame.history_generation;
 }
 
+function mergePartial(previous: TimelinePartial | undefined, next: TimelinePartial): TimelinePartial {
+  if (!previous || ("blocks" in next && next.blocks !== undefined)) return next;
+  if (next.delta === undefined) return { ...next, ...(previous.delta === undefined ? {} : { delta: previous.delta }) };
+  return { ...next, delta: `${previous.delta ?? ""}${next.delta}` };
+}
+
 /** In-memory v2 timeline state. It never persists pending or partial output. */
 export class TimelineRuntime {
   private scope: TimelineScope | null = null;
@@ -246,7 +252,12 @@ export class TimelineRuntime {
       if (!isMatchingScope(this.scope, frame)) return this.change();
       try {
         const partial = parseTimelinePartialV2(frame);
-        this.partials.set(partial.partial_id, { kind: "partial", partial, createdAt: Date.now() });
+        const previous = this.partials.get(partial.partial_id);
+        this.partials.set(partial.partial_id, {
+          kind: "partial",
+          partial: mergePartial(previous?.partial, partial),
+          createdAt: previous?.createdAt ?? Date.now(),
+        });
       } catch {
         return this.change();
       }

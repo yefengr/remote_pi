@@ -40,6 +40,18 @@ test("prepends earlier history without clearing recent events", () => {
   assert.deepEqual(changed.items.filter((item) => item.kind === "event").map((item) => item.event.event_id), ["earlier", "recent"]);
 });
 
+test("accumulates deltas for the same assistant partial id", () => {
+  const runtime = new TimelineRuntime();
+  runtime.setScope(scope);
+  for (const delta of ["a", "b", "c"]) {
+    runtime.receive({ protocol_version: 2, type: "timeline_partial", session_id: scope.sessionId, history_generation: scope.historyGeneration, group_id: "assistant-group", partial_id: "assistant-partial", kind: "assistant", status: "delta", delta });
+  }
+
+  const partial = runtime.receive({ protocol_version: 2, type: "session_ready", session_id: scope.sessionId, history_generation: scope.historyGeneration }).items.find((item) => item.kind === "partial");
+  assert.equal(partial?.kind, "partial");
+  assert.equal(partial?.partial.delta, "abc");
+});
+
 test("formal assistant clears assistant and thinking partials from the same group", () => {
   const runtime = new TimelineRuntime();
   runtime.setScope(scope);
