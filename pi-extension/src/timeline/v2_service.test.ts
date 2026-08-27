@@ -106,6 +106,35 @@ describe("TimelineV2Service", () => {
     expect(onListModels).toHaveBeenCalledTimes(1);
   });
 
+  test("accepts typed actions only after hello and generation validation", () => {
+    const session = SessionManager.inMemory(process.cwd());
+    const onAction = vi.fn();
+    const service = new TimelineV2Service({
+      sessionManager: session,
+      senderRef: "owner-1",
+      runtime: new TimelineRuntime(),
+      onUserMessage: () => false,
+      onAction,
+    });
+    const actions: ClientFrame[] = [
+      { protocol_version: 2, type: "session_new", id: "new-1", channel_id: "channel-1", history_generation: service.generation },
+      { protocol_version: 2, type: "session_compact", id: "compact-1", channel_id: "channel-1", history_generation: service.generation },
+      { protocol_version: 2, type: "model_set", id: "model-1", channel_id: "channel-1", history_generation: service.generation, provider: "test", model_id: "model" },
+      { protocol_version: 2, type: "thinking_set", id: "thinking-1", channel_id: "channel-1", history_generation: service.generation, level: "high" },
+    ];
+
+    expect(service.handle(actions[0]!)[0]).toMatchObject({ type: "protocol_error", code: "invalid_channel" });
+    service.handle(hello());
+    expect(service.handle({ ...actions[0]!, history_generation: "old" } as ClientFrame)[0]).toMatchObject({ type: "reset", reason: "generation_changed" });
+    for (const action of actions) expect(service.handle(action)).toEqual([]);
+    expect(onAction.mock.calls.map(([action]) => action.type)).toEqual([
+      "session_new",
+      "session_compact",
+      "model_set",
+      "thinking_set",
+    ]);
+  });
+
   test("redacts list-model failures from directed protocol errors", () => {
     const session = SessionManager.inMemory(process.cwd());
     const service = new TimelineV2Service({

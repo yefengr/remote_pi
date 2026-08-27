@@ -186,6 +186,7 @@ export function handleSessionCompact(
   ctx: ActionCtx | null,
   sender: ActionReplySender,
   msg: SessionCompactMsg,
+  onSettled?: () => void,
 ): void {
   runSync(sender, msg, "session_compact", () => {
     if (!ctx?.compact) throw new Error("compact unavailable (no active session ctx)");
@@ -196,6 +197,7 @@ export function handleSessionCompact(
     ctx.compact({
       customInstructions:
         "Always write the compaction summary in English, even if the conversation is in another language.",
+      ...(onSettled ? { onComplete: onSettled, onError: onSettled } : {}),
     });
   });
 }

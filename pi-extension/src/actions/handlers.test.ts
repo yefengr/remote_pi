@@ -80,6 +80,19 @@ describe("handleSessionCompact", () => {
     ]);
   });
 
+  test("wires the session-action release callback to both compact outcomes", () => {
+    let options: { onComplete?: () => void; onError?: () => void } | undefined;
+    const ctx: ActionCtx = { compact: (value) => { options = value as typeof options; } };
+    const sender = makeSender();
+    let settled = 0;
+
+    handleSessionCompact(ctx, sender, { type: "session_compact", id: "r1" }, () => { settled += 1; });
+    options?.onComplete?.();
+    options?.onError?.();
+
+    expect(settled).toBe(2);
+  });
+
   test("returns action_error when ctx is null", () => {
     const sender = makeSender();
     handleSessionCompact(null, sender, { type: "session_compact", id: "r1" });

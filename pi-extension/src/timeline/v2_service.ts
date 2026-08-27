@@ -12,6 +12,11 @@ import {
 import { TimelineHistoryPager } from "./history.js";
 import type { Correlation, TimelineRuntime, TimelineStarted } from "./runtime.js";
 
+export type V2ActionFrame = Extract<
+  ClientFrame,
+  { type: "session_new" | "session_compact" | "model_set" | "thinking_set" }
+>;
+
 export type V2ServiceOptions = {
   sessionManager: SessionManager;
   senderRef: string;
@@ -22,6 +27,7 @@ export type V2ServiceOptions = {
     correlation: Correlation,
   ) => boolean | "queued" | "rejected";
   onCancel?: () => boolean;
+  onAction?: (frame: V2ActionFrame) => void;
   onQueuedMessageClear?: (targetId?: string) => void;
   onListModels?: () => Pick<Extract<ServerFrame, { type: "models_list" }>, "models" | "current">;
 };
@@ -41,6 +47,7 @@ export class TimelineV2Service {
   private readonly runtime: TimelineRuntime;
   private readonly onUserMessage: V2ServiceOptions["onUserMessage"];
   private readonly onCancel?: V2ServiceOptions["onCancel"];
+  private readonly onAction?: V2ServiceOptions["onAction"];
   private readonly onQueuedMessageClear?: V2ServiceOptions["onQueuedMessageClear"];
   private readonly onListModels?: V2ServiceOptions["onListModels"];
   private readonly requestChannels = new Map<string, string>();
@@ -54,6 +61,7 @@ export class TimelineV2Service {
     this.runtime = options.runtime;
     this.onUserMessage = options.onUserMessage;
     this.onCancel = options.onCancel;
+    this.onAction = options.onAction;
     this.onQueuedMessageClear = options.onQueuedMessageClear;
     this.onListModels = options.onListModels;
     this.pager = new TimelineHistoryPager(
@@ -102,12 +110,13 @@ export class TimelineV2Service {
         return this.handleUserMessage(frame);
       case "user_message_observed":
         return this.handleObserved(frame);
-      case "queued_message_set":
-      case "approve_tool":
       case "session_new":
       case "session_compact":
       case "model_set":
       case "thinking_set":
+        return this.handleAction(frame);
+      case "queued_message_set":
+      case "approve_tool":
       case "extension_ui_response":
         return this.requireReady(frame);
       case "list_models":
@@ -371,6 +380,20 @@ export class TimelineV2Service {
       return this.direct(frame.channel_id, { type: "models_list", ...this.onListModels(), in_reply_to: frame.id });
     } catch {
       return [this.error(frame.id, "internal_error", "Could not list available models.", frame.channel_id)];
+    }
+  }
+
+  private handleAction(frame: V2ActionFrame): ServerFrame[] {
+    const error = this.ensureReady(frame);
+    if (error) return [error];
+    if (!this.onAction) {
+      return [this.error(frame.id, "unsupported_type", "session action is unavailable", frame.channel_id)];
+    }
+    try {
+      this.onAction(frame);
+      return [];
+    } catch {
+      return [this.error(frame.id, "internal_error", "Could not execute session action.", frame.channel_id)];
     }
   }
 

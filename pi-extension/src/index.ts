@@ -82,7 +82,7 @@ import {
 } from "./protocol/v2/index.js";
 import { RelayClient, RoomAlreadyOpenError } from "./transport/relay_client.js";
 import { PlainPeerChannel, V2PeerChannel } from "./transport/peer_channel.js";
-import { TimelineV2Service } from "./timeline/v2_service.js";
+import { TimelineV2Service, type V2ActionFrame } from "./timeline/v2_service.js";
 import {
   createExtensionUiBridge,
   type ExtensionUiBridge,
@@ -98,6 +98,7 @@ import {
   handleListModels,
   getModelsList,
   type ActionCtx,
+  type ActionReplySender,
 } from "./actions/handlers.js";
 import { ensureModelRegistry } from "./actions/registry.js";
 import {
@@ -185,9 +186,13 @@ let _relayUrl: string | null = null;  // URL used by current _relay connection
  *   - `paired` UX state is `_activePeers.size > 0`. The footer and the
  *     `/remote-pi status` output both derive from this.
  */
+type ClientMessageSender = Pick<PlainPeerChannel, "send" | "getPeerId">;
 const _activePeers = new Map<string, PlainPeerChannel>();
 type V2PeerBinding = { channel: V2PeerChannel; service: TimelineV2Service };
 const _v2ActivePeers = new Map<string, V2PeerBinding>();
+type SessionActionName = "session_new" | "session_compact";
+type SessionActionInFlight = { id: string; action: SessionActionName; senderRef: string };
+let _sessionActionInFlight: SessionActionInFlight | null = null;
 let _peerShort = "";  // shortid of the most recently attached peer (UX hint only)
 
 const REMOTE_PI_RECEIVED_IMAGE_TYPE = "remote-pi:received-image";
@@ -689,7 +694,7 @@ function _echoUserMessage(msg: ClientUserMessage, forceSteer = false): void {
 }
 
 async function _deliverImageUserMessage(
-  sender: PlainPeerChannel,
+  sender: ClientMessageSender,
   msg: ClientUserMessage,
   shouldSteer: boolean,
   correlation: Correlation,
@@ -959,6 +964,7 @@ function _ensureV2Service(senderRef: string): TimelineV2Service | null {
       return true;
     },
     onCancel: () => _abortCurrentTurn(_lastEventCtx ?? _lastCtx ?? undefined),
+    onAction: (frame) => _routeV2ActionFrame(senderRef, frame),
     onQueuedMessageClear: (targetId) => _clearV2QueuedUserMessages(senderRef, targetId),
     onListModels: () => getModelsList(
       (_lastEventCtx ?? _lastCtx) as ActionCtx | null,
@@ -967,6 +973,70 @@ function _ensureV2Service(senderRef: string): TimelineV2Service | null {
     ),
   });
   return service;
+}
+
+function _finishSessionAction(requestId?: string): void {
+  if (requestId && _sessionActionInFlight?.id !== requestId) return;
+  _sessionActionInFlight = null;
+}
+
+function _v2ActionSender(
+  senderRef: string,
+  channel: V2PeerChannel,
+  targetChannelId: string,
+  onReply?: (message: Extract<ServerMessage, { type: "action_ok" | "action_error" }>) => void,
+): ClientMessageSender {
+  const sender: ActionReplySender = {
+    send(message) {
+      if (message.type === "action_ok") {
+        channel.sendV2({
+          protocol_version: 2,
+          type: "action_ok",
+          target_channel_id: targetChannelId,
+          in_reply_to: message.in_reply_to,
+          action: message.action,
+        });
+      } else if (message.type === "action_error") {
+        channel.sendV2({
+          protocol_version: 2,
+          type: "action_error",
+          target_channel_id: targetChannelId,
+          in_reply_to: message.in_reply_to,
+          action: message.action,
+          error: message.error,
+        });
+      }
+      if (message.type === "action_ok" || message.type === "action_error") onReply?.(message);
+    },
+  };
+  return { ...sender, getPeerId: () => senderRef };
+}
+
+function _routeV2ActionFrame(senderRef: string, frame: V2ActionFrame): void {
+  const binding = _v2ActivePeers.get(senderRef);
+  if (!binding) return;
+  const sessionAction = frame.type === "session_new" || frame.type === "session_compact";
+  const sender = _v2ActionSender(senderRef, binding.channel, frame.channel_id, (message) => {
+    if (!sessionAction) return;
+    if (message.type === "action_error" || frame.type === "session_new") _finishSessionAction(frame.id);
+  });
+  if (sessionAction && (_sessionActionInFlight || _agentRunActive || _isBusyForQueueDrain())) {
+    sender.send({
+      type: "action_error",
+      in_reply_to: frame.id,
+      action: frame.type,
+      error: _sessionActionInFlight
+        ? "Another session action is still in progress."
+        : "Agent is working; stop or wait before changing the session.",
+    });
+    return;
+  }
+  if (sessionAction) _sessionActionInFlight = { id: frame.id, action: frame.type, senderRef };
+  _routeClientMessageFrom(
+    sender,
+    frame,
+    (_lastEventCtx ?? _lastCtx ?? _noopCtx) as Pick<ExtensionContext, "abort">,
+  );
 }
 
 function _routeV2ClientFrameFrom(senderRef: string, frame: ClientFrame): void {
@@ -1133,7 +1203,7 @@ function _queuedStateMessage(): ServerMessage {
   };
 }
 
-function _sendQueuedState(sender: PlainPeerChannel): void {
+function _sendQueuedState(sender: ClientMessageSender): void {
   sender.send(_queuedStateMessage());
 }
 
@@ -1950,6 +2020,7 @@ function _goIdle(byeReason?: import("./protocol/types.js").ByeReason): void {
   _v2ActivePeers.clear();
   _peerShort = "";
   _currentTurnId = null;
+  _sessionActionInFlight = null;
   _pendingReceivedImagePreviews.length = 0;
   _pendingSteers = [];
   _lastConsumedSteerText = null;
@@ -2945,6 +3016,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     _broadcastToActive({ type: "compaction", summary, tokens_before: tokensBefore, ts });
     // (3) Working ends.
     _publishWorking(false);
+    if (_sessionActionInFlight?.action === "session_compact") _finishSessionAction(_sessionActionInFlight.id);
     _maybeDrainQueuedItem();
     _scheduleV2QueuedUserDrain();
   });
@@ -5025,7 +5097,7 @@ function _abortCurrentTurn(
 }
 
 export function _routeClientMessageFrom(
-  sender: PlainPeerChannel,
+  sender: ClientMessageSender,
   msg: ClientMessage,
   ctx: Pick<ExtensionContext, "abort">,
 ): void {
@@ -5062,7 +5134,17 @@ export function _routeClientMessageFrom(
     _extensionUiBridge?.respond(msg);
     return;
   }
-  if (!_pi) return;
+  if (!_pi) {
+    if (msg.type === "session_new" || msg.type === "session_compact" || msg.type === "model_set" || msg.type === "thinking_set") {
+      sender.send({
+        type: "action_error",
+        in_reply_to: msg.id,
+        action: msg.type,
+        error: "Pi session is unavailable.",
+      });
+    }
+    return;
+  }
   switch (msg.type) {
     case "queued_message_set": {
       const text = msg.text.trim();
@@ -5183,7 +5265,12 @@ export function _routeClientMessageFrom(
       // a prior New session. compact() is a base-ctx method, so the
       // session_start ctx suffices. Fall back to _lastCtx defensively if no
       // session_start has landed yet (keeps the pre-replacement happy path).
-      handleSessionCompact((_lastEventCtx ?? _lastCtx) as ActionCtx | null, sender, msg);
+      handleSessionCompact(
+        (_lastEventCtx ?? _lastCtx) as ActionCtx | null,
+        sender,
+        msg,
+        () => _finishSessionAction(msg.id),
+      );
       break;
     case "session_new": {
       const actionCtx = _lastCtx as ActionCtx | null;
@@ -5303,7 +5390,7 @@ export function routeClientMessage(
  * `in_reply_to`.
  */
 function _handleSessionSync(
-  sender: PlainPeerChannel,
+  sender: ClientMessageSender,
   msg: Extract<ClientMessage, { type: "session_sync" }>,
 ): void {
   _sendQueuedState(sender);

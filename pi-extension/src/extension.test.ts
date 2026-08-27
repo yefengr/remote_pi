@@ -1233,9 +1233,10 @@ describe("multi-channel broadcast (W2D)", () => {
     const { SessionManager } = await import("@earendil-works/pi-coding-agent");
     const sessionManager = SessionManager.inMemory(process.cwd());
     const harness = captureEventHarness();
+    const compact = vi.fn();
     harness.handler("session_start")(
       { type: "session_start", reason: "startup" },
-      { sessionManager, ui: { notify: vi.fn() }, abort: vi.fn(), compact: vi.fn() } as never,
+      { sessionManager, ui: { notify: vi.fn() }, abort: vi.fn(), compact } as never,
     );
     captureHandler("remote-pi");
     await _connectForTest(makeMockCtx());
@@ -1266,7 +1267,7 @@ describe("multi-channel broadcast (W2D)", () => {
       });
       contexts.push({ peer, channelId, historyGeneration: ready!.history_generation });
     }
-    return { sessionManager, harness, contexts };
+    return { sessionManager, harness, contexts, compact };
   }
 
   function sentV2(sendsBefore = 0) {
@@ -1282,6 +1283,118 @@ describe("multi-channel broadcast (W2D)", () => {
       expect.objectContaining({ peer: "owner-b", channelId: "channel-owner-b" }),
     ]);
     expect(new Set(contexts.map((context) => context.historyGeneration)).size).toBe(1);
+  });
+
+  test("v2 compact action invokes the SDK and replies only to the requesting channel", async () => {
+    const { contexts, compact } = await setupV2(["owner-a", "owner-b"]);
+    const [requester] = contexts;
+    if (!requester) throw new Error("missing v2 requester");
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+    relayRef.current!.emit("message", makeV2Line(requester.peer, {
+      protocol_version: 2,
+      type: "session_compact",
+      id: "compact-v2",
+      channel_id: requester.channelId,
+      history_generation: requester.historyGeneration,
+    }));
+
+    await vi.waitFor(() => expect(compact).toHaveBeenCalledTimes(1));
+    const replies = sentV2(sendsBefore).filter((item) => item.frame.type === "action_ok");
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toMatchObject({
+      peer: requester.peer,
+      frame: {
+        type: "action_ok",
+        target_channel_id: requester.channelId,
+        in_reply_to: "compact-v2",
+        action: "session_compact",
+      },
+    });
+    const options = compact.mock.calls[0]?.[0] as { onComplete?: () => void } | undefined;
+    expect(options?.onComplete).toBeTypeOf("function");
+    options?.onComplete?.();
+  });
+
+  test("v2 session actions reject stale UI requests while the agent is working", async () => {
+    const { harness, contexts, compact } = await setupV2(["owner-a", "owner-b"]);
+    const [requester] = contexts;
+    if (!requester) throw new Error("missing v2 requester");
+    harness.handler("agent_start")({ type: "agent_start" });
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+    relayRef.current!.emit("message", makeV2Line(requester.peer, {
+      protocol_version: 2,
+      type: "session_compact",
+      id: "compact-busy",
+      channel_id: requester.channelId,
+      history_generation: requester.historyGeneration,
+    }));
+
+    await vi.waitFor(() => {
+      expect(sentV2(sendsBefore).some((item) => item.frame.type === "action_error")).toBe(true);
+    });
+    const replies = sentV2(sendsBefore).filter((item) => item.frame.type === "action_error");
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toMatchObject({
+      peer: requester.peer,
+      frame: {
+        type: "action_error",
+        target_channel_id: requester.channelId,
+        in_reply_to: "compact-busy",
+        action: "session_compact",
+        error: expect.stringContaining("working"),
+      },
+    });
+    expect(compact).not.toHaveBeenCalled();
+    harness.handler("agent_end")({ type: "agent_end" });
+  });
+
+  test("serializes session lifecycle actions across owners until newSession settles", async () => {
+    const { contexts, compact } = await setupV2(["owner-a", "owner-b"]);
+    const [first, second] = contexts;
+    if (!first || !second) throw new Error("missing v2 channels");
+    const replacement = deferred<{ cancelled: boolean }>();
+    const newSession = vi.fn(() => replacement.promise);
+    const status = captureHandler("remote-pi status");
+    await status("", { ...makeMockCtx(), newSession } as never);
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+    relayRef.current!.emit("message", makeV2Line(first.peer, {
+      protocol_version: 2,
+      type: "session_new",
+      id: "new-owner-a",
+      channel_id: first.channelId,
+      history_generation: first.historyGeneration,
+    }));
+    await vi.waitFor(() => expect(newSession).toHaveBeenCalledTimes(1));
+
+    relayRef.current!.emit("message", makeV2Line(second.peer, {
+      protocol_version: 2,
+      type: "session_compact",
+      id: "compact-owner-b",
+      channel_id: second.channelId,
+      history_generation: second.historyGeneration,
+    }));
+    await vi.waitFor(() => {
+      expect(sentV2(sendsBefore).some((item) => item.frame.type === "action_error" && item.frame.in_reply_to === "compact-owner-b")).toBe(true);
+    });
+    expect(compact).not.toHaveBeenCalled();
+    expect(sentV2(sendsBefore).filter((item) => item.frame.type === "action_error" && item.frame.in_reply_to === "compact-owner-b")).toEqual([
+      expect.objectContaining({
+        peer: second.peer,
+        frame: expect.objectContaining({
+          target_channel_id: second.channelId,
+          action: "session_compact",
+          error: expect.stringContaining("in progress"),
+        }),
+      }),
+    ]);
+
+    replacement.resolve({ cancelled: false });
+    await vi.waitFor(() => {
+      expect(sentV2(sendsBefore).some((item) => item.frame.type === "action_ok" && item.frame.in_reply_to === "new-owner-a")).toBe(true);
+    });
   });
 
   test("/remote-pi pair without config stays idle and does not issue a QR", async () => {

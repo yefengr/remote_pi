@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownToLine, Activity, MessageSquare, RefreshCw, Settings, X } from "lucide-react";
 import { MessageComposer } from "@/components/pwa/message-composer";
+import { COMPOSER_THINKING_LEVELS, type ComposerCommandAction } from "@/components/pwa/composer-command-menu";
 import { MessageList } from "@/components/pwa/message-list";
 import { describeStartupFailure, PairingDialog, StartupErrorView, StartupLoading, type StartupError } from "@/components/pwa/pwa-startup";
 import { MobileTopbarMenu } from "@/components/pwa/mobile-topbar-menu";
@@ -24,7 +25,7 @@ import { HistoryWindowAssembler, TimelineEventFragmentAssembler } from "@/lib/pw
 import { commitRealtime, loadRecent, replaceRecentWindow, TimelineStoreConflictError } from "@/lib/pwa/timeline-store";
 import type { TimelineEvent } from "@/lib/remote-pi/protocol-v2/schema";
 import { refreshPwaApp } from "@/lib/pwa/service-worker-update";
-import type { ControlFrame, OwnerKeyPair, WireImage } from "@/lib/remote-pi/types";
+import type { ControlFrame, OwnerKeyPair, ThinkingLevel, WireImage, WireModel } from "@/lib/remote-pi/types";
 import type { ClientFrame, ServerFrame } from "@/lib/remote-pi/protocol-v2/frames";
 import {
   clearPwaData,
@@ -50,12 +51,20 @@ const STREAM_DISPLAY_CADENCE_MS = 36;
 type PairState = "idle" | "scanning" | "pairing";
 type StartupState = "loading" | "ready" | "error";
 type ImageAttachment = { source: Blob; previewUrl: string; label: string };
+type ComposerCommandRequest =
+  | { action: "session_new" | "session_compact" }
+  | { action: "model_set"; provider: string; modelId: string }
+  | { action: "thinking_set"; level: ThinkingLevel };
 function id(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 function formatSyncTime(timestamp: number | undefined): string {
   return timestamp ? new Date(timestamp).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : "never";
+}
+
+function safeThinkingLevel(value: unknown): ThinkingLevel {
+  return typeof value === "string" && COMPOSER_THINKING_LEVELS.includes(value as ThinkingLevel) ? value as ThinkingLevel : "off";
 }
 
 export function PwaApp() {
@@ -76,6 +85,9 @@ export function PwaApp() {
   const [sendingImage, setSendingImage] = useState(false);
   const [stopRequestId, setStopRequestId] = useState<string | null>(null);
   const [visionAvailable, setVisionAvailable] = useState<boolean | null>(null);
+  const [models, setModels] = useState<WireModel[]>([]);
+  const [currentModel, setCurrentModel] = useState<WireModel | null>(null);
+  const [pendingAction, setPendingAction] = useState<{ id: string; action: ComposerCommandAction } | null>(null);
   const [pairState, setPairState] = useState<PairState>("idle");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sessionSheetOpen, setSessionSheetOpen] = useState(false);
@@ -127,6 +139,7 @@ export function PwaApp() {
   const scrollOnNextMessagesRef = useRef(false);
   const modelRequestRef = useRef<string | null>(null);
   const stopRequestIdRef = useRef<string | null>(null);
+  const pendingActionRef = useRef<{ id: string; action: ComposerCommandAction } | null>(null);
 
   useEffect(() => { roomsRef.current = rooms; }, [rooms]);
   useEffect(() => { roomIdRef.current = roomId; }, [roomId]);
@@ -148,10 +161,16 @@ export function PwaApp() {
     () => activeRooms.find((room) => room.roomId === roomId) ?? null,
     [activeRooms, roomId],
   );
+  const activeThinking = useMemo(() => safeThinkingLevel(activeRoom?.thinking), [activeRoom?.thinking]);
   const clearStopRequest = useCallback((requestId?: string) => {
     if (requestId && stopRequestIdRef.current !== requestId) return;
     stopRequestIdRef.current = null;
     setStopRequestId(null);
+  }, []);
+  const clearPendingAction = useCallback((requestId?: string) => {
+    if (requestId && pendingActionRef.current?.id !== requestId) return;
+    pendingActionRef.current = null;
+    setPendingAction(null);
   }, []);
   useEffect(() => {
     if (connection !== "online" || activeRoom?.working !== true) clearStopRequest();
@@ -243,11 +262,12 @@ export function PwaApp() {
     fragmentAssemblerRef.current = null;
     realtimeJournalRef.current.clear();
     modelRequestRef.current = null;
+    clearPendingAction();
     setVisionAvailable(null);
     setNextBefore(null);
     setLoadingEarlier(false);
     applyTimelineChange(timelineRuntimeRef.current.markDisconnected());
-  }, [applyTimelineChange]);
+  }, [applyTimelineChange, clearPendingAction]);
 
   const markPeerRoomsOffline = useCallback(async (peerEpk: string) => {
     if (suppressRoomPersistenceRef.current.has(makePwaPeerId(peerEpk, roomIdRef.current))) return;
@@ -312,22 +332,54 @@ export function PwaApp() {
     if (followOutputRef.current) scrollToLatest(false);
   }, [scrollToLatest, timelineItems]);
 
+  const refreshModels = useCallback(() => {
+    const peer = activePeerRef.current;
+    const channel = channelRef.current;
+    const generation = selectionGenerationRef.current;
+    const selectedRoom = roomIdRef.current;
+    const scope = timelineRuntimeRef.current.currentScope;
+    if (!peer || !channel || !scope || connectionRef.current !== "online" || !isCurrentSelection(generation, peer.id, peer.remoteEpk, selectedRoom, channel, relayRef.current || undefined)) return;
+    const requestId = id();
+    modelRequestRef.current = requestId;
+    if (!channel.send({ protocol_version: 2, type: "list_models", id: requestId, channel_id: scope.channelId, history_generation: scope.historyGeneration })) {
+      if (modelRequestRef.current === requestId) modelRequestRef.current = null;
+      setError("Relay is not connected.");
+    }
+  }, [isCurrentSelection]);
+
   const handleServerFrame = useCallback((frame: ServerFrame, context: ConnectionContext) => {
     if (!isCurrentSelection(context.generation, context.peerId, context.peerEpk, context.roomId, context.channel, context.relay)) return;
     if (frame.type === "models_list") {
-      if (frame.in_reply_to === modelRequestRef.current) setVisionAvailable(frame.current?.vision ?? null);
+      if (frame.in_reply_to !== modelRequestRef.current) return;
+      modelRequestRef.current = null;
+      setModels(frame.models);
+      setCurrentModel(frame.current ?? null);
+      setVisionAvailable(frame.current?.vision ?? null);
+      return;
+    }
+    if (frame.type === "action_ok" || frame.type === "action_error") {
+      const pending = pendingActionRef.current;
+      if (!pending || pending.id !== frame.in_reply_to || pending.action !== frame.action) return;
+      clearPendingAction(frame.in_reply_to);
+      if (frame.type === "action_error") {
+        setError(frame.error);
+      } else if (frame.action === "model_set") {
+        refreshModels();
+      }
       return;
     }
     if (frame.type === "cancelled") {
       clearStopRequest(frame.in_reply_to);
       return;
     }
-    if (frame.type === "protocol_error" && frame.in_reply_to === stopRequestIdRef.current) {
-      clearStopRequest(frame.in_reply_to);
+    if (frame.type === "protocol_error") {
+      if (frame.in_reply_to === stopRequestIdRef.current) clearStopRequest(frame.in_reply_to);
+      if (frame.in_reply_to === pendingActionRef.current?.id) clearPendingAction(frame.in_reply_to);
     }
     if (frame.type === "session_ready") {
       if (frame.in_reply_to !== helloRequestRef.current) return;
       helloRequestRef.current = null;
+      clearPendingAction();
       const scope: TimelineScope = { peerEpk: context.peerEpk, roomId: context.roomId, sessionId: frame.session_id, historyGeneration: frame.history_generation, selfSenderRef: frame.self_sender_ref, channelId: context.channel.channelId };
       applyTimelineChange(timelineRuntimeRef.current.setScope(scope));
       realtimeJournalRef.current.clear();
@@ -344,6 +396,8 @@ export function PwaApp() {
       }).catch(() => setError("Could not read local history."));
       context.channel.send({ protocol_version: 2, type: "session_sync", id: requestId, channel_id: context.channel.channelId, history_generation: frame.history_generation, before: null, limit: 5 });
       setVisionAvailable(null);
+      setModels([]);
+      setCurrentModel(null);
       const modelRequestId = id();
       modelRequestRef.current = modelRequestId;
       context.channel.send({ protocol_version: 2, type: "list_models", id: modelRequestId, channel_id: context.channel.channelId, history_generation: frame.history_generation });
@@ -363,6 +417,7 @@ export function PwaApp() {
         networkSnapshotAppliedEpochRef.current = 0;
         helloRequestRef.current = null;
         clearStopRequest();
+        clearPendingAction();
       },
       rehello: () => {
         setConnection("connecting");
@@ -443,7 +498,7 @@ export function PwaApp() {
       return;
     }
     applyTimelineChange(changed);
-  }, [applyTimelineChange, clearStopRequest, isCurrentSelection, noteIncomingOutput, reportTimelineWrite]);
+  }, [applyTimelineChange, clearPendingAction, clearStopRequest, isCurrentSelection, noteIncomingOutput, refreshModels, reportTimelineWrite]);
 
   const loadEarlier = useCallback(() => {
     const scope = timelineRuntimeRef.current.currentScope;
@@ -554,6 +609,7 @@ export function PwaApp() {
   }, [handleControlFrame, handleServerFrame, identity, interruptStreamingOutput, isCurrentSelection, markPeerRoomsOffline, relayUrl, requestReconnect]);
 
   const invalidateConnection = useCallback((resetRetries = true) => {
+    clearPendingAction();
     const previousPeer = activePeerRef.current;
     if (previousPeer) {
       interruptStreamingOutput();
@@ -576,7 +632,7 @@ export function PwaApp() {
     channelRef.current = null;
     relayRef.current = null;
     return generation;
-  }, [interruptStreamingOutput, markPeerRoomsOffline]);
+  }, [clearPendingAction, interruptStreamingOutput, markPeerRoomsOffline]);
 
   const restartActiveConnection = useCallback((resetRetries = true) => {
     const lock = relayLockRef.current;
@@ -662,6 +718,8 @@ export function PwaApp() {
     setDraft("");
     setAttachment(null);
     setVisionAvailable(null);
+    setModels([]);
+    setCurrentModel(null);
     setUnreadOutput(0);
     scheduleScrollToLatest();
     setConnection(peerId ? (typeof navigator !== "undefined" && navigator.onLine ? "connecting" : "no_network") : "offline");
@@ -681,6 +739,8 @@ export function PwaApp() {
     setDraft("");
     setAttachment(null);
     setVisionAvailable(null);
+    setModels([]);
+    setCurrentModel(null);
     setUnreadOutput(0);
     scheduleScrollToLatest();
     setConnection(typeof navigator !== "undefined" && navigator.onLine ? "connecting" : "no_network");
@@ -957,6 +1017,53 @@ export function PwaApp() {
     }
   }, [clearStopRequest, isCurrentSelection]);
 
+  const sendCommandAction = useCallback((request: ComposerCommandRequest) => {
+    const peer = activePeerRef.current;
+    const channel = channelRef.current;
+    const generation = selectionGenerationRef.current;
+    const selectedRoom = roomIdRef.current;
+    const scope = timelineRuntimeRef.current.currentScope;
+    const blocksWhileWorking = request.action === "session_new" || request.action === "session_compact";
+    if (pendingActionRef.current || (blocksWhileWorking && activeRoom?.working === true) || !peer || !channel || !scope || connectionRef.current !== "online" || !isCurrentSelection(generation, peer.id, peer.remoteEpk, selectedRoom, channel, relayRef.current || undefined)) return;
+    const requestId = id();
+    let frame: ClientFrame;
+    switch (request.action) {
+      case "session_new":
+      case "session_compact":
+        frame = { protocol_version: 2, type: request.action, id: requestId, channel_id: scope.channelId, history_generation: scope.historyGeneration };
+        break;
+      case "model_set":
+        frame = { protocol_version: 2, type: "model_set", id: requestId, channel_id: scope.channelId, history_generation: scope.historyGeneration, provider: request.provider, model_id: request.modelId };
+        break;
+      case "thinking_set":
+        frame = { protocol_version: 2, type: "thinking_set", id: requestId, channel_id: scope.channelId, history_generation: scope.historyGeneration, level: request.level };
+        break;
+    }
+    pendingActionRef.current = { id: requestId, action: request.action };
+    setPendingAction(pendingActionRef.current);
+    if (!channel.send(frame)) {
+      clearPendingAction(requestId);
+      setError("Relay is not connected.");
+    }
+  }, [activeRoom?.working, clearPendingAction, isCurrentSelection]);
+
+  const startNewSession = useCallback(() => {
+    if (pendingActionRef.current || activeRoom?.working === true) return;
+    if (window.confirm("Start a fresh session? All Owners in this Room will switch to a fresh session.")) sendCommandAction({ action: "session_new" });
+  }, [activeRoom?.working, sendCommandAction]);
+
+  const compactSession = useCallback(() => {
+    sendCommandAction({ action: "session_compact" });
+  }, [sendCommandAction]);
+
+  const setCommandModel = useCallback((model: WireModel) => {
+    sendCommandAction({ action: "model_set", provider: model.provider, modelId: model.id });
+  }, [sendCommandAction]);
+
+  const setCommandThinking = useCallback((level: ThinkingLevel) => {
+    sendCommandAction({ action: "thinking_set", level });
+  }, [sendCommandAction]);
+
   const retryUnknownMessage = useCallback((clientRequestId: string) => {
     const peer = activePeerRef.current;
     const channel = channelRef.current;
@@ -1135,7 +1242,7 @@ export function PwaApp() {
                 {connection !== "no_network" && (connection === "retrying" || connection === "offline") ? <button className="pwa-latest-button" type="button" onClick={() => restartActiveConnection(true)}><RefreshCw size={16} />Try again</button> : null}
                 {!followingOutput || unreadOutput > 0 ? <button className="pwa-latest-button" type="button" onClick={() => { scrollToLatest(true); resumeFollowingOutput(); }}><ArrowDownToLine size={16} />{unreadOutput > 0 ? `${unreadOutput} new output` : "Latest"}</button> : null}
               </div> : null}
-              <MessageComposer attachment={attachment} canAttachImage={canAttachImage} sendingImage={sendingImage} isOnline={connection === "online"} isWorking={activeRoom?.working === true} stopping={stopRequestId !== null} draft={draft} onDraftChange={setDraft} onSend={sendMessage} onStop={stopCurrentTask} onSetAttachment={setImageAttachment} onClearAttachment={() => setAttachment(null)} />
+              <MessageComposer attachment={attachment} canAttachImage={canAttachImage} sendingImage={sendingImage} isOnline={connection === "online"} isWorking={activeRoom?.working === true} stopping={stopRequestId !== null} draft={draft} onDraftChange={setDraft} onSend={sendMessage} onStop={stopCurrentTask} onSetAttachment={setImageAttachment} onClearAttachment={() => setAttachment(null)} commandModels={models} commandCurrentModel={currentModel} commandThinking={activeThinking} commandPendingAction={pendingAction?.action ?? null} onNewSession={startNewSession} onCompactSession={compactSession} onSetModel={setCommandModel} onSetThinking={setCommandThinking} onCommandsOpen={refreshModels} />
             </div>
           </> : <EmptyWorkspace onPair={() => setPairState("scanning")} />}
         </main>

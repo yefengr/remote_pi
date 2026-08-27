@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type FormEvent } from "react";
-import { Camera, ImagePlus, LoaderCircle, Plus, Send, Square, X } from "lucide-react";
+import { Camera, ImagePlus, LoaderCircle, Plus, Send, Slash, Square, X } from "lucide-react";
+import { ComposerCommandMenu, type ComposerCommandAction } from "./composer-command-menu";
+import type { ThinkingLevel, WireModel } from "@/lib/remote-pi/types";
 
 export type MessageComposerAttachment = {
   source: Blob;
@@ -22,6 +24,15 @@ type MessageComposerProps = {
   onStop: () => void;
   onSetAttachment: (source: Blob, label: string) => void;
   onClearAttachment: () => void;
+  commandModels: WireModel[];
+  commandCurrentModel: WireModel | null;
+  commandThinking: ThinkingLevel;
+  commandPendingAction: ComposerCommandAction | null;
+  onNewSession: () => void;
+  onCompactSession: () => void;
+  onSetModel: (model: WireModel) => void;
+  onSetThinking: (level: ThinkingLevel) => void;
+  onCommandsOpen: () => void;
 };
 
 export function MessageComposer({
@@ -37,12 +48,23 @@ export function MessageComposer({
   onStop,
   onSetAttachment,
   onClearAttachment,
+  commandModels,
+  commandCurrentModel,
+  commandThinking,
+  commandPendingAction,
+  onNewSession,
+  onCompactSession,
+  onSetModel,
+  onSetThinking,
+  onCommandsOpen,
 }: MessageComposerProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const commandMenuRef = useRef<HTMLDivElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [commandMenuOpen, setCommandMenuOpen] = useState(false);
 
   const resizeTextarea = () => {
     const textarea = textareaRef.current;
@@ -58,12 +80,18 @@ export function MessageComposer({
   }, [draft]);
 
   useEffect(() => {
-    if (!menuOpen) return;
+    if (!menuOpen && !commandMenuOpen) return;
     const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (event.target instanceof Node && !menuRef.current?.contains(event.target)) setMenuOpen(false);
+      if (event.target instanceof Node && !menuRef.current?.contains(event.target) && !commandMenuRef.current?.contains(event.target)) {
+        setMenuOpen(false);
+        setCommandMenuOpen(false);
+      }
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenuOpen(false);
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+        setCommandMenuOpen(false);
+      }
     };
     document.addEventListener("pointerdown", closeOnOutsidePointer);
     document.addEventListener("keydown", closeOnEscape);
@@ -71,7 +99,7 @@ export function MessageComposer({
       document.removeEventListener("pointerdown", closeOnOutsidePointer);
       document.removeEventListener("keydown", closeOnEscape);
     };
-  }, [menuOpen]);
+  }, [commandMenuOpen, menuOpen]);
 
   const hasMessage = Boolean(draft.trim() || attachment);
   const showStop = isOnline && isWorking;
@@ -98,6 +126,16 @@ export function MessageComposer({
     cameraInputRef.current?.click();
   };
 
+  const toggleCommands = () => {
+    if (commandMenuOpen) {
+      setCommandMenuOpen(false);
+      return;
+    }
+    setMenuOpen(false);
+    setCommandMenuOpen(true);
+    onCommandsOpen();
+  };
+
   return (
     <form className="pwa-composer" onSubmit={handleSubmit}>
       <input ref={fileInputRef} className="pwa-image-input" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) onSetAttachment(file, file.name || "Image attachment"); event.currentTarget.value = ""; }} />
@@ -106,12 +144,29 @@ export function MessageComposer({
         {attachment ? <div className="pwa-composer-preview"><img src={attachment.previewUrl} alt={attachment.label} /><button type="button" onClick={onClearAttachment} disabled={sendingImage} aria-label="Remove image" title="Remove image"><X size={14} /></button></div> : null}
         <textarea ref={textareaRef} value={draft} onChange={(event) => onDraftChange(event.target.value)} onPaste={handlePaste} placeholder={isOnline ? "Message your agent…" : "Reconnect to send a message"} disabled={!isOnline || sendingImage} rows={1} />
         <div className="pwa-composer-footer">
-          <div className="pwa-composer-menu" ref={menuRef}>
-            <button className="pwa-composer-icon" type="button" onClick={() => setMenuOpen((open) => !open)} disabled={!canAttachImage} aria-haspopup="menu" aria-expanded={menuOpen} aria-label="Add image" title="Add image"><Plus size={19} /></button>
-            {menuOpen ? <div className="pwa-composer-menu-panel">
-              <button type="button" onClick={chooseImage}><ImagePlus size={17} />Choose image</button>
-              <button type="button" onClick={useCamera}><Camera size={17} />Use camera</button>
-            </div> : null}
+          <div className="pwa-composer-tools">
+            <div className="pwa-composer-menu" ref={menuRef}>
+              <button className="pwa-composer-icon" type="button" onClick={() => { setCommandMenuOpen(false); setMenuOpen((open) => !open); }} disabled={!canAttachImage} aria-haspopup="menu" aria-expanded={menuOpen} aria-label="Add image" title="Add image"><Plus size={19} /></button>
+              {menuOpen ? <div className="pwa-composer-menu-panel">
+                <button type="button" onClick={chooseImage}><ImagePlus size={17} />Choose image</button>
+                <button type="button" onClick={useCamera}><Camera size={17} />Use camera</button>
+              </div> : null}
+            </div>
+            <div className="pwa-composer-command" ref={commandMenuRef}>
+              <button className="pwa-composer-icon" type="button" onClick={toggleCommands} disabled={!isOnline} aria-haspopup="menu" aria-expanded={commandMenuOpen} aria-label="Pi commands" title="Pi commands"><Slash size={19} /></button>
+              {commandMenuOpen ? <ComposerCommandMenu
+                isOnline={isOnline}
+                isWorking={isWorking}
+                pendingAction={commandPendingAction}
+                models={commandModels}
+                currentModel={commandCurrentModel}
+                thinking={commandThinking}
+                onNewSession={() => { setCommandMenuOpen(false); onNewSession(); }}
+                onCompactSession={() => { setCommandMenuOpen(false); onCompactSession(); }}
+                onSetModel={(model) => { setCommandMenuOpen(false); onSetModel(model); }}
+                onSetThinking={(level) => { setCommandMenuOpen(false); onSetThinking(level); }}
+              /> : null}
+            </div>
           </div>
           <div className="pwa-composer-actions">
             {showStop ? <button className={`pwa-stop-button${hasMessage ? "" : " primary"}`} type="button" onClick={onStop} disabled={stopping} aria-label={stopping ? "Stopping current task" : "Stop current task"} title={stopping ? "Stopping current task" : "Stop current task"}>{stopping ? <LoaderCircle className="pwa-spin" size={16} /> : <Square size={15} fill="currentColor" />}<span>{stopping ? "Stopping…" : "Stop"}</span></button> : null}
