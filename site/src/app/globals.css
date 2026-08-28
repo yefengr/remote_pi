@@ -2102,7 +2102,8 @@ a {
 .pwa-stop-button.primary:hover:not(:disabled) { background: #ff8585; }
 .pwa-stop-button:disabled { opacity: .55; cursor: wait; }
 .pwa-composer-menu, .pwa-composer-command { position: relative; flex: 0 0 auto; }
-.pwa-composer-menu-panel, .pwa-mobile-menu-panel { position: absolute; z-index: 7; min-width: 190px; padding: 6px; border: 1px solid var(--pwa-line-strong); border-radius: 10px; background: #0a0e10; box-shadow: 0 18px 45px rgba(0,0,0,.45); }
+.pwa-root .pwa-composer-menu-panel, .pwa-mobile-menu-panel { z-index: 7; min-width: 190px; padding: 6px; border: 1px solid var(--pwa-line-strong); border-radius: 10px; background: #0a0e10; box-shadow: 0 18px 45px rgba(0,0,0,.45); }
+.pwa-mobile-menu-panel { position: absolute; }
 .pwa-composer-menu-panel { bottom: calc(100% + 8px); left: 0; }
 .pwa-composer-menu-panel button, .pwa-mobile-menu-panel button { width: 100%; min-height: 44px; display: flex; align-items: center; gap: 9px; padding: 0 11px; border: 0; border-radius: 7px; color: var(--pwa-ink); background: transparent; font: 11px var(--ff-mono); text-align: left; cursor: pointer; }
 .pwa-composer-menu-panel button:hover, .pwa-mobile-menu-panel button:hover { color: var(--pwa-accent); background: rgba(79,195,247,.08); }

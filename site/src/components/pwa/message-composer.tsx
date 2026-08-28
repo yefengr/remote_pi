@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type FormEvent } from "react";
-import { ActionIcon, Popover, Textarea } from "@mantine/core";
+import { ActionIcon, Button, Menu, Popover, Textarea } from "@mantine/core";
 import { Camera, ImagePlus, LoaderCircle, Plus, Send, Slash, Square, X } from "lucide-react";
 import { ComposerCommandMenu, type ComposerCommandAction } from "./composer-command-menu";
 import type { ThinkingLevel, WireModel } from "@/lib/remote-pi/types";
@@ -11,6 +11,38 @@ export type MessageComposerAttachment = {
   previewUrl: string;
   label: string;
 };
+
+type ComposerImageMenuProps = {
+  disabled: boolean;
+  opened: boolean;
+  onChange: (opened: boolean) => void;
+  onChooseImage: () => void;
+  onUseCamera: () => void;
+  withinPortal?: boolean;
+};
+
+export function ComposerImageMenu({ disabled, opened, onChange, onChooseImage, onUseCamera, withinPortal = true }: ComposerImageMenuProps) {
+  return <Menu
+    closeOnEscape
+    closeOnClickOutside
+    floatingStrategy="fixed"
+    onChange={onChange}
+    opened={opened}
+    portalProps={{ target: ".pwa-root" }}
+    position="top-start"
+    transitionProps={{ duration: 0 }}
+    withinPortal={withinPortal}
+    zIndex={21}
+  >
+    <Menu.Target>
+      <ActionIcon className="pwa-composer-icon" type="button" size="lg" variant="subtle" disabled={disabled} aria-label="Add image" title="Add image"><Plus size={19} /></ActionIcon>
+    </Menu.Target>
+    <Menu.Dropdown className="pwa-composer-menu-panel" style={{ bottom: "auto" }}>
+      <Menu.Item leftSection={<ImagePlus size={17} />} onClick={onChooseImage}>Choose image</Menu.Item>
+      <Menu.Item leftSection={<Camera size={17} />} onClick={onUseCamera}>Use camera</Menu.Item>
+    </Menu.Dropdown>
+  </Menu>;
+}
 
 type MessageComposerProps = {
   attachment: MessageComposerAttachment | null;
@@ -64,7 +96,6 @@ export function MessageComposer({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const menuRef = useRef<HTMLDivElement | null>(null);
   const commandMenuOpenRef = useRef(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [commandMenuOpen, setCommandMenuOpen] = useState(false);
@@ -86,22 +117,6 @@ export function MessageComposer({
   useLayoutEffect(() => {
     resizeTextarea();
   }, [draft]);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (event.target instanceof Node && !menuRef.current?.contains(event.target)) setMenuOpen(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenuOpen(false);
-    };
-    document.addEventListener("pointerdown", closeOnOutsidePointer);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutsidePointer);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [menuOpen]);
 
   useEffect(() => {
     if (!commandMenuOpen) return;
@@ -153,12 +168,17 @@ export function MessageComposer({
         <Textarea ref={textareaRef} classNames={{ root: "pwa-composer-textarea", input: "pwa-composer-input" }} resize="none" value={draft} onChange={(event) => onDraftChange(event.target.value)} onPaste={handlePaste} placeholder={isOnline ? "Message your agent…" : "Reconnect to send a message"} disabled={!isOnline || sendingImage} rows={1} />
         <div className="pwa-composer-footer">
           <div className="pwa-composer-tools">
-            <div className="pwa-composer-menu" ref={menuRef}>
-              <ActionIcon className="pwa-composer-icon" type="button" size="lg" variant="subtle" onClick={() => { setCommandMenuOpened(false); setMenuOpen((open) => !open); }} disabled={!canAttachImage} aria-haspopup="menu" aria-expanded={menuOpen} aria-label="Add image" title="Add image"><Plus size={19} /></ActionIcon>
-              {menuOpen ? <div className="pwa-composer-menu-panel">
-                <button type="button" onClick={chooseImage}><ImagePlus size={17} />Choose image</button>
-                <button type="button" onClick={useCamera}><Camera size={17} />Use camera</button>
-              </div> : null}
+            <div className="pwa-composer-menu">
+              <ComposerImageMenu
+                disabled={!canAttachImage}
+                opened={menuOpen}
+                onChange={(opened) => {
+                  if (opened) setCommandMenuOpened(false);
+                  setMenuOpen(opened);
+                }}
+                onChooseImage={chooseImage}
+                onUseCamera={useCamera}
+              />
             </div>
             <div className="pwa-composer-command">
               <Popover opened={commandMenuOpen} onChange={setCommandMenuOpened} closeOnClickOutside closeOnEscape position="top-start" offset={{ mainAxis: 8, crossAxis: -52 }} transitionProps={{ duration: 0 }} floatingStrategy="fixed" withinPortal portalProps={{ target: ".pwa-root" }} zIndex={8}>
@@ -184,8 +204,8 @@ export function MessageComposer({
             </div>
           </div>
           <div className="pwa-composer-actions">
-            {showStop ? <button className={`pwa-stop-button${hasMessage ? "" : " primary"}`} type="button" onClick={onStop} disabled={stopping} aria-label={stopping ? "Stopping current task" : "Stop current task"} title={stopping ? "Stopping current task" : "Stop current task"}>{stopping ? <LoaderCircle className="pwa-spin" size={16} /> : <Square size={15} fill="currentColor" />}<span>{stopping ? "Stopping…" : "Stop"}</span></button> : null}
-            {hasMessage || !showStop ? <button className="pwa-primary-button" type="submit" disabled={!isOnline || sendingImage || !hasMessage || (attachment !== null && !canAttachImage)} aria-label="Send message" title="Send message"><Send size={17} /></button> : null}
+            {showStop ? <Button className={`pwa-stop-button${hasMessage ? "" : " primary"}`} type="button" onClick={onStop} disabled={stopping} aria-label={stopping ? "Stopping current task" : "Stop current task"} title={stopping ? "Stopping current task" : "Stop current task"} leftSection={stopping ? <LoaderCircle className="pwa-spin" size={16} /> : <Square size={15} fill="currentColor" />}><span>{stopping ? "Stopping…" : "Stop"}</span></Button> : null}
+            {hasMessage || !showStop ? <ActionIcon className="pwa-primary-button" type="submit" size={44} disabled={!isOnline || sendingImage || !hasMessage || (attachment !== null && !canAttachImage)} aria-label="Send message" title="Send message"><Send size={17} /></ActionIcon> : null}
           </div>
         </div>
       </div>
