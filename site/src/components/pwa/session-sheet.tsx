@@ -1,6 +1,6 @@
 "use client";
 
-import { Badge, Drawer } from "@mantine/core";
+import { ActionIcon, Badge, Button, Drawer } from "@mantine/core";
 import { MessageSquare, Pencil, Plus, Trash2 } from "lucide-react";
 import { displayPeer, type PairingPresence, type PairingStatus } from "@/components/pwa/workspace-view";
 import type { PwaPeerRecord, PwaRoomRecord } from "@/lib/pwa/db";
@@ -75,7 +75,7 @@ export function SessionSheet({ peers, rooms, activePeerId, activeRoomId, pairing
           <Drawer.CloseButton aria-label="Close sessions" title="Close sessions" />
         </Drawer.Header>
         <Drawer.Body>
-          <div className="pwa-sheet-section-head"><span>Pairing records</span><button className="pwa-secondary-button" type="button" onClick={() => { onPair(); onClose(); }}><Plus size={15} /> Pair a Pi</button></div>
+          <div className="pwa-sheet-section-head"><span>Pairing records</span><Button className="pwa-secondary-button" type="button" variant="default" onClick={() => { onPair(); onClose(); }} leftSection={<Plus size={15} />}>Pair a Pi</Button></div>
           {peers.length ? peers.map((peer) => {
             const active = peer.id === activePeerId;
             const presence = pairingPresence[peer.id];
@@ -89,8 +89,8 @@ export function SessionSheet({ peers, rooms, activePeerId, activeRoomId, pairing
                   <span className="pwa-peer-copy"><strong>{displayPeer(peer)}</strong><small className="pwa-peer-technical">Pi key {peer.remoteEpk.slice(0, 8)}…</small><span className="pwa-peer-presence"><Badge className={`pwa-presence-label ${status}`} variant="light">{pairingStatusLabel(status)}</Badge><span>{onlineSessions}/{totalSessions} SESSIONS</span></span></span>
                   {active ? <Badge className="pwa-current-label" variant="light">CURRENT</Badge> : null}
                 </button>
-                <button className="pwa-peer-action" type="button" onClick={() => onRename(peer)} aria-label={`Rename ${displayPeer(peer)}`} title="Rename pairing"><Pencil size={16} /></button>
-                <button className="pwa-peer-remove" type="button" onClick={() => onRemove(peer)} aria-label={`Delete ${displayPeer(peer)}`} title="Delete pairing"><Trash2 size={16} /></button>
+                <ActionIcon className="pwa-peer-action" type="button" size={44} variant="subtle" onClick={() => onRename(peer)} aria-label={`Rename ${displayPeer(peer)}`} title="Rename pairing"><Pencil size={16} /></ActionIcon>
+                <ActionIcon className="pwa-peer-remove" type="button" size={44} variant="subtle" onClick={() => onRemove(peer)} aria-label={`Delete ${displayPeer(peer)}`} title="Delete pairing"><Trash2 size={16} /></ActionIcon>
               </div>
             );
           }) : <p className="pwa-muted">No pairing records yet.</p>}

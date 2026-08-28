@@ -40,8 +40,18 @@ test("labels rooms as sessions and keeps offline history read-only", () => {
     </PwaUiProvider>,
   );
 
+  const pairButton = html.match(/<button[^>]*>.*?Pair a Pi.*?<\/button>/)?.[0] ?? "";
+  const renameAction = html.match(/<button[^>]*aria-label="Rename Remote Pi · e5FRoCab"[^>]*>/)?.[0] ?? "";
+  const deleteAction = html.match(/<button[^>]*aria-label="Delete Remote Pi · e5FRoCab"[^>]*>/)?.[0] ?? "";
+
   assert.match(html, /mantine-Drawer-root/);
   assert.match(html, /mantine-Badge-root/);
+  assert.match(pairButton, /mantine-Button-root/);
+  assert.match(pairButton, /pwa-secondary-button/);
+  assert.match(renameAction, /mantine-ActionIcon-root/);
+  assert.match(renameAction, /title="Rename pairing"/);
+  assert.match(deleteAction, /mantine-ActionIcon-root/);
+  assert.match(deleteAction, /title="Delete pairing"/);
   assert.match(html, /role="dialog"/);
   assert.match(html, /Pairing records/);
   assert.match(html, /Sessions in/);
