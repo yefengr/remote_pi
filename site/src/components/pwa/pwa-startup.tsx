@@ -30,7 +30,7 @@ export function StartupLoading() {
 }
 
 export function StartupErrorView({ error, onRetry }: { error: StartupError | null; onRetry: () => void }) {
-  return <main className="pwa-startup-error"><div className="pwa-startup-card"><span className="pwa-startup-icon"><WifiOff size={22} /></span><span className="pwa-kicker">Remote Pi / browser workspace</span><h1>{error?.title || "PWA unavailable"}</h1><p>{error?.message || "The browser could not start the local workspace."}</p>{error?.action ? <p className="pwa-startup-action-note">{error.action}</p> : null}<div className="pwa-startup-actions"><button className="pwa-primary-button" type="button" onClick={onRetry}><RefreshCw size={16} /> Reload</button></div></div></main>;
+  return <main className="pwa-startup-error"><div className="pwa-startup-card"><span className="pwa-startup-icon"><WifiOff size={22} /></span><span className="pwa-kicker">Remote Pi / browser workspace</span><h1>{error?.title || "PWA unavailable"}</h1><p>{error?.message || "The browser could not start the local workspace."}</p>{error?.action ? <p className="pwa-startup-action-note">{error.action}</p> : null}<div className="pwa-startup-actions"><Button className="pwa-primary-button" type="button" onClick={onRetry} leftSection={<RefreshCw size={16} />}>Reload</Button></div></div></main>;
 }
 
 export function PairingDialog({ onScan, onClose }: { onScan: (value: string) => void; onClose: () => void }) {
