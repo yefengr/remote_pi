@@ -1,5 +1,6 @@
 "use client";
 
+import { ActionIcon, Button } from "@mantine/core";
 import { Download, RefreshCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { refreshPwaApp } from "@/lib/pwa/service-worker-update";
@@ -10,6 +11,39 @@ type BeforeInstallPromptEvent = Event & {
 };
 
 const DEV_SW_CLEANUP_KEY = "remote-pi-dev-sw-cleanup-v1";
+
+type ServiceWorkerNoticeProps = {
+  installPrompt: boolean;
+  updateReady: boolean;
+  unsupported: boolean;
+  updateRequested: boolean;
+  onInstall: () => void;
+  onUpdate: () => void;
+  onDismiss: () => void;
+};
+
+export function ServiceWorkerNotice({
+  installPrompt,
+  updateReady,
+  unsupported,
+  updateRequested,
+  onInstall,
+  onUpdate,
+  onDismiss,
+}: ServiceWorkerNoticeProps) {
+  return (
+    <div className="pwa-runtime-notice" role="status">
+      <div className="pwa-runtime-notice-copy">
+        {unsupported ? <><strong>Offline app mode unavailable</strong><span>This browser can still use Remote Pi online, but it cannot provide PWA offline startup.</span></> : updateReady ? <><strong>Remote Pi update ready</strong><span>Refresh when you are ready to use the new app version.</span></> : <><strong>Install Remote Pi</strong><span>Open this workspace from your device launcher.</span></>}
+      </div>
+      <div className="pwa-runtime-notice-actions">
+        {installPrompt ? <Button className="pwa-secondary-button" type="button" onClick={onInstall} leftSection={<Download size={15} />}>Install app</Button> : null}
+        {updateReady ? <Button className="pwa-primary-button" type="button" onClick={onUpdate} disabled={updateRequested} leftSection={<RefreshCw size={15} />}>{updateRequested ? "Updating" : "Refresh"}</Button> : null}
+        <ActionIcon className="pwa-icon-button" type="button" size={36} variant="subtle" onClick={onDismiss} aria-label="Dismiss PWA notice" title="Dismiss"><X size={16} /></ActionIcon>
+      </div>
+    </div>
+  );
+}
 
 export function ServiceWorkerRegister() {
   const [registration, setRegistration] = useState<ServiceWorkerRegistration | null>(null);
@@ -92,16 +126,13 @@ export function ServiceWorkerRegister() {
     void refreshPwaApp(registration);
   };
 
-  return (
-    <div className="pwa-runtime-notice" role="status">
-      <div className="pwa-runtime-notice-copy">
-        {unsupported ? <><strong>Offline app mode unavailable</strong><span>This browser can still use Remote Pi online, but it cannot provide PWA offline startup.</span></> : updateReady ? <><strong>Remote Pi update ready</strong><span>Refresh when you are ready to use the new app version.</span></> : <><strong>Install Remote Pi</strong><span>Open this workspace from your device launcher.</span></>}
-      </div>
-      <div className="pwa-runtime-notice-actions">
-        {installPrompt ? <button className="pwa-secondary-button" type="button" onClick={() => void install()}><Download size={15} /> Install app</button> : null}
-        {updateReady ? <button className="pwa-primary-button" type="button" onClick={applyUpdate} disabled={updateRequested}><RefreshCw size={15} /> {updateRequested ? "Updating" : "Refresh"}</button> : null}
-        <button className="pwa-icon-button" type="button" onClick={() => setDismissed(true)} aria-label="Dismiss PWA notice" title="Dismiss"><X size={16} /></button>
-      </div>
-    </div>
-  );
+  return <ServiceWorkerNotice
+    installPrompt={Boolean(installPrompt)}
+    updateReady={updateReady}
+    unsupported={unsupported}
+    updateRequested={updateRequested}
+    onInstall={() => void install()}
+    onUpdate={applyUpdate}
+    onDismiss={() => setDismissed(true)}
+  />;
 }
