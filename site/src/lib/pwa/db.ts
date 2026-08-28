@@ -20,6 +20,8 @@ export type PwaPeerRecord = {
   relayUrl: string;
   pairedAt: string;
   nickname?: string;
+  hostname?: string;
+  harness?: { name: string; version: string };
   roomId: string;
 };
 
@@ -33,7 +35,8 @@ export type PwaRoomRecord = {
   model?: string;
   thinking?: string;
   working?: boolean;
-  online: boolean;
+  /** Runtime-only presence; never persisted to IndexedDB. */
+  online?: boolean;
   updatedAt: number;
 };
 
