@@ -1,13 +1,14 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Select } from "@mantine/core";
-import { ArrowDownToLine, Activity, MessageSquare, RefreshCw, Settings, X } from "lucide-react";
+import { Activity } from "lucide-react";
 import { MessageComposer } from "@/components/pwa/message-composer";
 import { RenamePairingDialog } from "@/components/pwa/rename-pairing-dialog";
 import { COMPOSER_THINKING_LEVELS, type ComposerCommandAction } from "@/components/pwa/composer-command-menu";
 import { MessageList } from "@/components/pwa/message-list";
 import { describeStartupFailure, PairingDialog, StartupErrorView, StartupLoading, type StartupError } from "@/components/pwa/pwa-startup";
 import { MobileTopbarMenu } from "@/components/pwa/mobile-topbar-menu";
+import { DesktopTopbarActions, PwaMessageActions, PwaStatusToast, SessionSwitcherTrigger } from "@/components/pwa/pwa-app-actions";
 import { SessionSheet } from "@/components/pwa/session-sheet";
 import { SettingsPanel } from "@/components/pwa/settings-panel";
 import { ConnectionStatus, DesktopSidebar, EmptyWorkspace, displayPeer, type ConnectionViewState, type PairingPresence } from "@/components/pwa/workspace-view";
@@ -1347,12 +1348,9 @@ export function PwaApp() {
       <header className="pwa-topbar">
         <div className="pwa-brand"><span className="pwa-brand-mark">π</span><span>Remote Pi</span><span className="pwa-brand-tag">BROWSER APP</span></div>
         <div className="pwa-topbar-actions">
-          {activePeer ? <button className="pwa-session-trigger" type="button" onClick={() => setSessionSheetOpen(true)} aria-label="Open session switcher" aria-haspopup="dialog" aria-expanded={sessionSheetOpen}><MessageSquare size={16} /><span>Session: {displayPeer(activePeer)} / {roomId}</span></button> : null}
+          <SessionSwitcherTrigger label={activePeer ? `Session: ${displayPeer(activePeer)} / ${roomId}` : null} expanded={sessionSheetOpen} onOpen={() => setSessionSheetOpen(true)} />
           <ConnectionStatus state={connection} retryAttempt={retryAttempt} />
-          <div className="pwa-desktop-actions">
-            <button className="pwa-icon-button" type="button" onClick={() => void refreshPwaApp()} aria-label="Refresh app" title="Refresh app"><RefreshCw size={18} /></button>
-            <button className="pwa-icon-button" type="button" onClick={() => setSettingsOpen((open) => !open)} aria-label="Open settings" title="Settings"><Settings size={18} /></button>
-          </div>
+          <DesktopTopbarActions onRefresh={refreshPwaApp} onToggleSettings={() => setSettingsOpen((open) => !open)} />
           <MobileTopbarMenu onRefresh={() => { void refreshPwaApp(); }} onOpenSettings={() => setSettingsOpen((open) => !open)} />
         </div>
       </header>
@@ -1363,10 +1361,14 @@ export function PwaApp() {
             <div className="pwa-chat-head"><div><span className="pwa-kicker">Active session</span><h2>{displayPeer(activePeer)}</h2><span className="pwa-chat-meta"><span className={connection === "online" ? "pwa-status-dot online" : "pwa-status-dot"} />{connection === "online" ? "Live" : "Local history"} <span className="pwa-separator">/</span> session <code>{roomId}</code> <span className="pwa-separator">/</span> last synced <time dateTime={lastSyncedAt ? new Date(lastSyncedAt).toISOString() : undefined}>{formatSyncTime(lastSyncedAt)}</time></span></div><div className="pwa-room-control"><Select id="room-id" label="Session" value={roomId} disabled={connection !== "online"} allowDeselect={false} data={[{ value: roomId, label: roomId }, ...activeRooms.filter((room) => room.roomId !== roomId).map((room) => ({ value: room.roomId, label: room.name || room.cwd || room.roomId }))]} onChange={(nextRoom) => { if (nextRoom !== null) selectRoom(nextRoom); }} comboboxProps={{ withinPortal: false }} /></div></div>
             <MessageList items={timelineItems} hasEarlier={nextBefore !== null} loadingEarlier={loadingEarlier} onLoadEarlier={loadEarlier} listRef={messageListRef} bottomSentinelRef={bottomSentinelRef} onScroll={handleMessageListScroll} onRetryUnknown={retryUnknownMessage} onCancelQueued={cancelQueuedMessage} />
             <div className="pwa-chat-footer">
-              {((connection !== "no_network" && (connection === "retrying" || connection === "offline")) || !followingOutput || unreadOutput > 0) ? <div className="pwa-message-actions">
-                {connection !== "no_network" && (connection === "retrying" || connection === "offline") ? <button className="pwa-latest-button" type="button" onClick={() => restartActiveConnection(true)}><RefreshCw size={16} />Try again</button> : null}
-                {!followingOutput || unreadOutput > 0 ? <button className="pwa-latest-button" type="button" onClick={() => { scrollToLatest(true); resumeFollowingOutput(); }}><ArrowDownToLine size={16} />{unreadOutput > 0 ? `${unreadOutput} new output` : "Latest"}</button> : null}
-              </div> : null}
+              <PwaMessageActions
+                show={(connection !== "no_network" && (connection === "retrying" || connection === "offline")) || !followingOutput || unreadOutput > 0}
+                showRetry={connection !== "no_network" && (connection === "retrying" || connection === "offline")}
+                showLatest={!followingOutput || unreadOutput > 0}
+                unreadOutput={unreadOutput}
+                onRetry={() => restartActiveConnection(true)}
+                onLatest={() => { scrollToLatest(true); resumeFollowingOutput(); }}
+              />
               <MessageComposer attachment={attachment} canAttachImage={canAttachImage} sendingImage={sendingImage} isOnline={connection === "online"} isWorking={activeRoom?.working === true} stopping={stopRequestId !== null} draft={draft} onDraftChange={setDraft} onSend={sendMessage} onStop={stopCurrentTask} onSetAttachment={setImageAttachment} onClearAttachment={() => setAttachment(null)} commandModels={models} commandCurrentModel={currentModel} commandCurrentModelFallback={activeRoom?.model ?? null} commandThinking={activeThinking} commandPendingAction={pendingAction?.action ?? null} onNewSession={startNewSession} onCompactSession={compactSession} onSetModel={setCommandModel} onSetThinking={setCommandThinking} onCommandsOpen={refreshModels} />
             </div>
           </> : <EmptyWorkspace onPair={() => setPairState("scanning")} />}
@@ -1376,7 +1378,7 @@ export function PwaApp() {
       {sessionSheetOpen ? <SessionSheet peers={peers} rooms={rooms} activePeerId={activePeerId} activeRoomId={roomId} pairingPresence={pairingPresence} onSelectPeer={selectPeer} onSelectRoom={selectRoom} onPair={() => setPairState("scanning")} onRename={openRenamePeer} onRemove={(peer) => void removePeer(peer)} onClose={closeSessionSheet} /> : null}
       {renamingPeer ? <RenamePairingDialog peer={renamingPeer} onSave={(nickname) => savePeerNickname(renamingPeer, nickname)} onClose={() => setRenamingPeer(null)} /> : null}
       {pairState !== "idle" ? <div className="pwa-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && pairState === "scanning") setPairState("idle"); }} role="presentation">{pairState === "scanning" ? <PairingDialog onScan={pairFromQr} onClose={() => setPairState("idle")} /> : <div className="pwa-pairing-card"><Activity className="pwa-spin" /><span className="pwa-kicker">Pairing</span><h2>Connecting to your Pi</h2><p>Waiting for the Pi to confirm this browser.</p></div>}</div> : null}
-      {error ? <div className="pwa-toast" role="status"><span>{error}</span><button type="button" onClick={() => setError(null)} aria-label="Dismiss"><X size={15} /></button></div> : null}
+      <PwaStatusToast message={error} onDismiss={() => setError(null)} />
     </div>
   );
 }
