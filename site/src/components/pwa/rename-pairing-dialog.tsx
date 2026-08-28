@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Button, Group, Modal, Stack, Text, TextInput } from "@mantine/core";
 import type { PwaPeerRecord } from "@/lib/pwa/db";
 import { displayPeer } from "@/components/pwa/workspace-view";
 
@@ -19,23 +19,12 @@ export function RenamePairingDialog({ peer, onSave, onClose }: RenamePairingDial
   const [value, setValue] = useState(() => suggestedName(peer));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
   useEffect(() => {
-    inputRef.current?.focus();
-    inputRef.current?.select();
+    const input = document.getElementById("pwa-rename-input") as HTMLInputElement | null;
+    input?.focus();
+    input?.select();
   }, []);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !saving) {
-        event.preventDefault();
-        onClose();
-      }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose, saving]);
 
   const nickname = value.trim();
   const submit = async () => {
@@ -52,26 +41,46 @@ export function RenamePairingDialog({ peer, onSave, onClose }: RenamePairingDial
     }
   };
 
-  return <div className="pwa-rename-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) onClose(); }}>
-    <div className="pwa-rename-dialog" role="dialog" aria-modal="true" aria-labelledby="pwa-rename-title" aria-describedby="pwa-rename-description">
-      <div className="pwa-rename-head">
-        <div>
-          <span className="pwa-kicker">Pairing record</span>
-          <h2 id="pwa-rename-title">Rename pairing</h2>
-        </div>
-        <button className="pwa-icon-button" type="button" onClick={onClose} disabled={saving} aria-label="Close rename dialog" title="Close"><X size={18} /></button>
-      </div>
-      <p id="pwa-rename-description" className="pwa-rename-description">Choose a local name for <strong>{displayPeer(peer)}</strong>. This only changes the label in this browser.</p>
+  return <Modal
+    opened
+    onClose={onClose}
+    title={<div><span className="pwa-kicker">Pairing record</span><Text component="h2" id="pwa-rename-title">Rename pairing</Text></div>}
+    aria-labelledby="pwa-rename-title"
+    aria-describedby="pwa-rename-description"
+    centered
+    size={420}
+    withinPortal={false}
+    trapFocus
+    returnFocus
+    closeOnClickOutside={!saving}
+    closeOnEscape={!saving}
+    closeButtonProps={{ disabled: saving, "aria-label": "Close rename dialog", title: "Close" }}
+    overlayProps={{ backgroundOpacity: 0.74, blur: 10 }}
+    classNames={{ content: "pwa-rename-dialog", header: "pwa-rename-head", close: "pwa-icon-button" }}
+    styles={{ header: { padding: 0 }, body: { padding: 0 } }}
+  >
+    <Stack gap={0}>
+      <Text component="p" id="pwa-rename-description" className="pwa-rename-description">Choose a local name for <Text component="strong">{displayPeer(peer)}</Text>. This only changes the label in this browser.</Text>
       <form onSubmit={(event) => { event.preventDefault(); void submit(); }}>
-        <label className="pwa-rename-field" htmlFor="pwa-rename-input">Pairing name
-          <input ref={inputRef} id="pwa-rename-input" value={value} onChange={(event) => setValue(event.target.value)} maxLength={80} autoCapitalize="words" autoCorrect="off" spellCheck={false} disabled={saving} />
-        </label>
-        {saveError ? <p className="pwa-error" role="alert">{saveError}</p> : null}
-        <div className="pwa-rename-actions">
-          <button className="pwa-secondary-button" type="button" onClick={onClose} disabled={saving}>Cancel</button>
-          <button className="pwa-primary-button" type="submit" disabled={!nickname || saving}>{saving ? "Saving…" : "Save"}</button>
-        </div>
+        <TextInput
+          className="pwa-rename-field"
+          id="pwa-rename-input"
+          label="Pairing name"
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          maxLength={80}
+          autoCapitalize="words"
+          autoCorrect="off"
+          spellCheck={false}
+          autoFocus
+          disabled={saving}
+        />
+        {saveError ? <Text component="p" className="pwa-error" role="alert">{saveError}</Text> : null}
+        <Group className="pwa-rename-actions" justify="flex-end" gap="xs">
+          <Button className="pwa-secondary-button" type="button" variant="default" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button className="pwa-primary-button" type="submit" disabled={!nickname || saving}>{saving ? "Saving…" : "Save"}</Button>
+        </Group>
       </form>
-    </div>
-  </div>;
+    </Stack>
+  </Modal>;
 }

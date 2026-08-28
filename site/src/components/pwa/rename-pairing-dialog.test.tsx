@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { RenamePairingDialog } from "./rename-pairing-dialog";
+import { PwaUiProvider } from "./pwa-ui-provider";
 import type { PwaPeerRecord } from "@/lib/pwa/db";
 
 const peer: PwaPeerRecord = {
@@ -14,12 +15,16 @@ const peer: PwaPeerRecord = {
   hostname: "office",
 };
 
-test("renders a themed rename dialog instead of a browser prompt", () => {
-  const html = renderToStaticMarkup(<RenamePairingDialog peer={peer} onSave={async () => {}} onClose={() => {}} />);
+test("renders the rename dialog with Mantine controls instead of a browser prompt", () => {
+  const html = renderToStaticMarkup(<PwaUiProvider><RenamePairingDialog peer={peer} onSave={async () => {}} onClose={() => {}} /></PwaUiProvider>);
 
-  assert.match(html, /pwa-rename-dialog/);
+  assert.match(html, /mantine-Modal-content/);
+  assert.match(html, /mantine-TextInput-input/);
+  assert.match(html, /mantine-Button-root/);
   assert.match(html, /Rename pairing/);
   assert.match(html, /Pairing name/);
+  assert.match(html, /Choose a local name for/);
+  assert.match(html, /This only changes the label in this browser/);
   assert.match(html, /value="Pi on office"/);
   assert.match(html, />Cancel</);
   assert.match(html, />Save</);

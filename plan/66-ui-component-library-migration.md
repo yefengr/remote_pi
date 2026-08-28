@@ -1,6 +1,6 @@
 # 计划 66 — Site UI 组件库引入与 PWA 迁移
 
-**状态：已确认，迁移未开始**
+**状态：进行中（Phase 0 已完成，Phase 1 已完成）**
 **范围：`site/` 前端，优先 PWA**
 **基线：Next.js 16、React 19、TypeScript、Tailwind CSS 4**
 
@@ -164,7 +164,7 @@ wrapper 必须保持轻量。简单的 `Button` 或 `Badge` 可以直接导出 M
 
 ### Phase 0 — 基线与 spike
 
-**状态：待开始**
+**状态：已完成（2026-08-28）**
 
 1. 锁定当前 site 构建、类型检查、Lint、组件测试和 `/app` 浏览器 smoke 基线；
 2. 安装时核对 Mantine 当前版本与 React 19、Next 16、Tailwind 4 的 peer 兼容性；
@@ -174,11 +174,11 @@ wrapper 必须保持轻量。简单的 `Button` 或 `Badge` 可以直接导出 M
 6. 验证 PWA standalone、iOS/Android viewport、safe-area、键盘弹起、背景滚动锁定、Portal 层级和焦点返回；
 7. 若 Mantine 与当前构建或样式边界存在不可接受冲突，停止扩大迁移，记录 finding 后重新评估 Base UI 或 Radix。
 
-**验收：**不影响 Landing/Docs；PWA 构建成功；试点组件能在桌面和移动 viewport 正常工作；不存在第二套全局 reset 导致的明显回归。
+**验收：**已通过 Mantine 9.5.2 与 React 19 / Next 16 的兼容核对；PWA 局部 Provider 与主题构建成功；`Drawer`、`Modal`、`Menu`、`Button`、`TextInput` 试点可静态渲染；Landing/Docs `/app` smoke 正常。实际 iOS/Android 真机交互仍在 Phase 1 验收中持续覆盖。
 
 ### Phase 1 — Overlay 基础设施
 
-**状态：待开始**
+**状态：已完成（2026-08-28）**
 
 按当前问题优先迁移：
 
@@ -197,11 +197,11 @@ wrapper 必须保持轻量。简单的 `Button` 或 `Badge` 可以直接导出 M
 - 重命名打开时不再同时保留 Session overlay；
 - 不依赖原生 `<dialog>.showModal()`。
 
-**验收：**Session、重命名和 Settings 不发生层级遮挡；关闭后焦点返回触发源；背景页面不滚动；离线 Session、CURRENT 和 Pairing 状态语义不变。
+**验收：**已将 Session 管理迁移为左侧 Mantine Drawer，重命名迁移为 Mantine Modal，Settings 迁移为 Mantine Drawer，移动菜单迁移为 Mantine Menu；移除相关手写焦点/Escape/outside-click 逻辑；保留 Pairing、Session、CURRENT、离线不可切换和本地重命名语义；补齐 PWA 主题作用域、Portal 边界、重置布局稳定性和移动端 safe-area。真实移动设备手势、键盘和焦点体验需在测试环境继续验收。
 
 ### Phase 2 — 基础控件
 
-**状态：待开始**
+**状态：进行中，待后续提交**
 
 迁移 Button、ActionIcon、TextInput、Textarea、Select、Badge、Tooltip，并逐步删除对应的重复样式。
 

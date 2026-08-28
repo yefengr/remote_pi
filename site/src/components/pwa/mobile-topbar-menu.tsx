@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
+import { ActionIcon, Menu } from "@mantine/core";
 import { MoreHorizontal, RefreshCw, Settings } from "lucide-react";
 
 type MobileTopbarMenuProps = {
@@ -10,29 +11,44 @@ type MobileTopbarMenuProps = {
 
 export function MobileTopbarMenu({ onRefresh, onOpenSettings }: MobileTopbarMenuProps) {
   const [open, setOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (event.target instanceof Node && !menuRef.current?.contains(event.target)) setOpen(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", closeOnOutsidePointer);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutsidePointer);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [open]);
-
-  return <div className="pwa-mobile-menu" ref={menuRef}>
-    <button className="pwa-icon-button" type="button" onClick={() => setOpen((value) => !value)} aria-haspopup="menu" aria-expanded={open} aria-label="More options" title="More options"><MoreHorizontal size={20} /></button>
-    {open ? <div className="pwa-mobile-menu-panel">
-      <button type="button" onClick={() => { setOpen(false); void onRefresh(); }}><RefreshCw size={17} />Refresh app</button>
-      <button type="button" onClick={() => { setOpen(false); onOpenSettings(); }}><Settings size={17} />Settings</button>
-    </div> : null}
+  return <div className="pwa-mobile-menu">
+    <Menu
+      closeOnEscape
+      closeOnClickOutside
+      keepMounted
+      keepMountedMode="display-none"
+      onChange={setOpen}
+      opened={open}
+      position="bottom-end"
+      transitionProps={{ duration: 0 }}
+      withinPortal={false}
+    >
+      <Menu.Target>
+        <ActionIcon className="pwa-icon-button" aria-label="More options" title="More options">
+          <MoreHorizontal size={20} />
+        </ActionIcon>
+      </Menu.Target>
+      <Menu.Dropdown>
+        <Menu.Item
+          leftSection={<RefreshCw size={17} />}
+          onClick={() => {
+            setOpen(false);
+            void onRefresh();
+          }}
+        >
+          Refresh app
+        </Menu.Item>
+        <Menu.Item
+          leftSection={<Settings size={17} />}
+          onClick={() => {
+            setOpen(false);
+            onOpenSettings();
+          }}
+        >
+          Settings
+        </Menu.Item>
+      </Menu.Dropdown>
+    </Menu>
   </div>;
 }

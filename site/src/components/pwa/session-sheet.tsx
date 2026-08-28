@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
-import { MessageSquare, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Drawer } from "@mantine/core";
+import { MessageSquare, Pencil, Plus, Trash2 } from "lucide-react";
 import { displayPeer, type PairingPresence, type PairingStatus } from "@/components/pwa/workspace-view";
 import type { PwaPeerRecord, PwaRoomRecord } from "@/lib/pwa/db";
 
@@ -17,6 +17,7 @@ type SessionSheetProps = {
   onRename: (peer: PwaPeerRecord) => void;
   onRemove: (peer: PwaPeerRecord) => void;
   onClose: () => void;
+  withinPortal?: boolean;
 };
 
 function pairingStatusLabel(status: PairingStatus): string {
@@ -29,40 +30,7 @@ function sessionLabel(session: PwaRoomRecord): string {
   return folder ? `Session · ${folder}` : "Session";
 }
 
-export function SessionSheet({ peers, rooms, activePeerId, activeRoomId, pairingPresence = {}, onSelectPeer, onSelectRoom, onPair, onRename, onRemove, onClose }: SessionSheetProps) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
-  const returnFocusRef = useRef<HTMLElement | null>(null);
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    dialog?.showModal();
-    closeButtonRef.current?.focus();
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onClose();
-        return;
-      }
-      if (event.key !== "Tab" || !dialogRef.current) return;
-      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])")).filter((element) => !element.hasAttribute("disabled"));
-      if (!focusable.length) return;
-      const current = document.activeElement;
-      const index = focusable.indexOf(current as HTMLElement);
-      const nextIndex = event.shiftKey ? (index <= 0 ? focusable.length - 1 : index - 1) : (index === focusable.length - 1 ? 0 : index + 1);
-      if (index < 0 || (event.shiftKey && index === 0) || (!event.shiftKey && index === focusable.length - 1)) {
-        event.preventDefault();
-        focusable[nextIndex]?.focus();
-      }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      if (dialog?.open) dialog.close();
-      returnFocusRef.current?.focus();
-    };
-  }, [onClose]);
+export function SessionSheet({ peers, rooms, activePeerId, activeRoomId, pairingPresence = {}, onSelectPeer, onSelectRoom, onPair, onRename, onRemove, onClose, withinPortal = true }: SessionSheetProps) {
 
   const activePeer = peers.find((peer) => peer.id === activePeerId);
   const activeSessions = activePeer
@@ -88,13 +56,25 @@ export function SessionSheet({ peers, rooms, activePeerId, activeRoomId, pairing
   };
 
   return (
-    <dialog className="pwa-session-backdrop" ref={dialogRef} onCancel={(event) => { event.preventDefault(); onClose(); }} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }} aria-labelledby="pwa-session-sheet-title">
-      <div className="pwa-session-sheet">
-        <div className="pwa-session-sheet-head">
-          <div><span className="pwa-kicker">Pairing records · {peers.length}</span><h2 id="pwa-session-sheet-title">Sessions</h2><p className="pwa-sheet-summary"><span className="pwa-summary-online">{onlinePairingCount} ONLINE</span><span>·</span><span>{offlinePairingCount} OFFLINE</span>{checkingPairingCount ? <><span>·</span><span>{checkingPairingCount} CHECKING</span></> : null}<small>{onlineSessionCount} of {totalSessionCount} sessions online</small></p></div>
-          <button className="pwa-icon-button" ref={closeButtonRef} type="button" onClick={onClose} aria-label="Close sessions" title="Close sessions"><X size={19} /></button>
-        </div>
-        <div className="pwa-session-sheet-body">
+    <Drawer.Root
+      opened
+      onClose={onClose}
+      position="left"
+      size="min(420px, 100vw)"
+      withinPortal={withinPortal}
+      portalProps={{ target: ".pwa-root" }}
+      zIndex={30}
+      padding={0}
+      classNames={{ content: "pwa-session-sheet", header: "pwa-session-sheet-head", body: "pwa-session-sheet-body", close: "pwa-icon-button" }}
+      styles={{ content: { height: "100%", maxHeight: "100%", borderRadius: 0 }, header: { paddingTop: "calc(20px + var(--pwa-safe-top))" } }}
+    >
+      <Drawer.Overlay backgroundOpacity={0.7} blur={7} />
+      <Drawer.Content role="dialog" aria-modal="true" aria-labelledby="pwa-session-sheet-title">
+        <Drawer.Header>
+          <div><span className="pwa-kicker">Pairing records · {peers.length}</span><Drawer.Title id="pwa-session-sheet-title">Sessions</Drawer.Title><p className="pwa-sheet-summary"><span className="pwa-summary-online">{onlinePairingCount} ONLINE</span><span>·</span><span>{offlinePairingCount} OFFLINE</span>{checkingPairingCount ? <><span>·</span><span>{checkingPairingCount} CHECKING</span></> : null}<small>{onlineSessionCount} of {totalSessionCount} sessions online</small></p></div>
+          <Drawer.CloseButton aria-label="Close sessions" title="Close sessions" />
+        </Drawer.Header>
+        <Drawer.Body>
           <div className="pwa-sheet-section-head"><span>Pairing records</span><button className="pwa-secondary-button" type="button" onClick={() => { onPair(); onClose(); }}><Plus size={15} /> Pair a Pi</button></div>
           {peers.length ? peers.map((peer) => {
             const active = peer.id === activePeerId;
@@ -130,8 +110,8 @@ export function SessionSheet({ peers, rooms, activePeerId, activeRoomId, pairing
               </>}
             </div>
           ) : null}
-        </div>
-      </div>
-    </dialog>
+        </Drawer.Body>
+      </Drawer.Content>
+    </Drawer.Root>
   );
 }
