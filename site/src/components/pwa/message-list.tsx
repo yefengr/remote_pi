@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type RefObject } from "react";
+import { ActionIcon, Button } from "@mantine/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ChevronDown, MessageSquare, RefreshCw, X } from "lucide-react";
@@ -49,7 +50,7 @@ function EventCard({ event }: { event: TimelineEvent }) {
   const label = event.kind === "user" ? userLabel(event) : event.kind === "assistant" ? "Agent" : event.kind === "tool" ? `Tool / ${event.tool}` : event.kind === "provider_error" ? "Provider error" : "System";
   const text = eventText(event);
   return <article className={`pwa-message ${event.kind}`}>
-    <div className="pwa-message-label">{label}{event.kind === "tool" ? <span className={`pwa-interrupted ${event.status}`}>{event.status}</span> : null}{collapsible ? <button type="button" className="pwa-message-toggle" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}><ChevronDown size={14} /></button> : null}</div>
+    <div className="pwa-message-label">{label}{event.kind === "tool" ? <span className={`pwa-interrupted ${event.status}`}>{event.status}</span> : null}{collapsible ? <ActionIcon className="pwa-message-toggle" type="button" size={24} variant="subtle" onClick={() => setExpanded((value) => !value)} aria-label={expanded ? "Collapse message" : "Expand message"} title={expanded ? "Collapse message" : "Expand message"} aria-expanded={expanded}><ChevronDown size={14} /></ActionIcon> : null}</div>
     {expanded || !collapsible ? event.kind === "user" ? <UserBlocks event={event} /> : event.kind === "assistant" || event.kind === "provider_error" ? <div className="pwa-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown></div> : <p>{text}</p> : null}
     <time>{new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
   </article>;
@@ -58,7 +59,7 @@ function EventCard({ event }: { event: TimelineEvent }) {
 function PendingCard({ pending, onRetryUnknown, onCancelQueued }: { pending: TimelinePending; onRetryUnknown?: (clientRequestId: string) => void; onCancelQueued?: (clientRequestId: string) => void }) {
   const label = pending.delivery === "unknown_delivery" ? "Unknown" : pending.delivery === "accepted" ? "Queued" : "You";
   const queued = pending.delivery === "accepted" && pending.messageId === undefined && pending.cancelable === true;
-  return <article className="pwa-message user pending"><div className="pwa-message-label">{label}<span className="pwa-streaming"><span /> {pending.delivery === "unknown_delivery" ? "delivery unknown" : pending.delivery}</span>{pending.delivery === "unknown_delivery" && onRetryUnknown ? <button className="pwa-pending-retry" type="button" onClick={() => onRetryUnknown(pending.clientRequestId)} aria-label="Retry delivery" title="Retry delivery"><RefreshCw size={14} /></button> : null}{queued && onCancelQueued ? <button className="pwa-pending-retry" type="button" onClick={() => onCancelQueued(pending.clientRequestId)} aria-label="Cancel queued message" title="Cancel queued message"><X size={14} /></button> : null}</div><div className="pwa-user-blocks">{pending.text ? <p>{pending.text}</p> : null}{pending.images?.map((image, index) => <img className="pwa-message-image" key={index} src={`data:${image.mime};base64,${image.data}`} alt={`User attachment ${index + 1}`} />)}</div><time>{new Date(pending.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></article>;
+  return <article className="pwa-message user pending"><div className="pwa-message-label">{label}<span className="pwa-streaming"><span /> {pending.delivery === "unknown_delivery" ? "delivery unknown" : pending.delivery}</span>{pending.delivery === "unknown_delivery" && onRetryUnknown ? <ActionIcon className="pwa-pending-retry" type="button" size={24} variant="outline" onClick={() => onRetryUnknown(pending.clientRequestId)} aria-label="Retry delivery" title="Retry delivery"><RefreshCw size={14} /></ActionIcon> : null}{queued && onCancelQueued ? <ActionIcon className="pwa-pending-retry" type="button" size={24} variant="outline" onClick={() => onCancelQueued(pending.clientRequestId)} aria-label="Cancel queued message" title="Cancel queued message"><X size={14} /></ActionIcon> : null}</div><div className="pwa-user-blocks">{pending.text ? <p>{pending.text}</p> : null}{pending.images?.map((image, index) => <img className="pwa-message-image" key={index} src={`data:${image.mime};base64,${image.data}`} alt={`User attachment ${index + 1}`} />)}</div><time>{new Date(pending.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></article>;
 }
 
 function PartialCard({ partial }: { partial: TimelinePartial }) {
@@ -69,7 +70,7 @@ function PartialCard({ partial }: { partial: TimelinePartial }) {
 
 export function MessageList({ items, hasEarlier, loadingEarlier, onLoadEarlier, listRef, bottomSentinelRef, onScroll, onRetryUnknown, onCancelQueued }: MessageListProps) {
   return <div className="pwa-message-list" ref={listRef} onScroll={onScroll}>
-    {hasEarlier ? <button className="pwa-secondary-button pwa-earlier-button" type="button" onClick={onLoadEarlier} disabled={loadingEarlier}>{loadingEarlier ? "Loading earlier records…" : "Load earlier records"}</button> : null}
+    {hasEarlier ? <Button className="pwa-secondary-button pwa-earlier-button" type="button" variant="default" onClick={onLoadEarlier} disabled={loadingEarlier}>{loadingEarlier ? "Loading earlier records…" : "Load earlier records"}</Button> : null}
     {items.length === 0 ? <div className="pwa-chat-empty"><div className="pwa-chat-empty-icon"><MessageSquare size={21} /></div><h3>Ready when you are.</h3><p>Your local session history will appear here.</p></div> : items.map((item) => item.kind === "event" ? <EventCard event={item.event} key={item.event.event_id} /> : item.kind === "pending" ? <PendingCard pending={item} key={item.id} onRetryUnknown={onRetryUnknown} onCancelQueued={onCancelQueued} /> : <PartialCard partial={item.partial} key={item.partial.partial_id} />)}
     <div ref={bottomSentinelRef} aria-hidden="true" className="pwa-bottom-sentinel" />
   </div>;

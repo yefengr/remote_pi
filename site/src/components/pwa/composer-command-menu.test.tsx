@@ -3,6 +3,7 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { WireModel } from "@/lib/remote-pi/types";
 import { ComposerCommandMenuPanel, type ComposerCommandMenuPanelProps } from "./composer-command-menu";
+import { PwaUiProvider } from "./pwa-ui-provider";
 
 const model: WireModel = {
   id: "claude-sonnet-4",
@@ -31,12 +32,13 @@ const panelProps: Omit<ComposerCommandMenuPanelProps, "view"> = {
 };
 
 function renderPanel(view: ComposerCommandMenuPanelProps["view"], overrides: Partial<ComposerCommandMenuPanelProps> = {}): string {
-  return renderToStaticMarkup(<ComposerCommandMenuPanel {...panelProps} {...overrides} view={view} />);
+  return renderToStaticMarkup(<PwaUiProvider><ComposerCommandMenuPanel {...panelProps} {...overrides} view={view} /></PwaUiProvider>);
 }
 
-test("renders all root Pi commands", () => {
+test("renders all root Pi commands with Mantine unstyled controls", () => {
   const html = renderPanel("root");
 
+  assert.match(html, /mantine-UnstyledButton-root/);
   assert.match(html, /\/new/);
   assert.match(html, /New session/);
   assert.match(html, /\/compact/);
@@ -81,6 +83,8 @@ test("disables every command while another action is pending", () => {
 test("renders the model chooser with provider, name, and current model", () => {
   const html = renderPanel("models");
 
+  assert.match(html, /role="group" aria-label="Change model"/);
+  assert.match(html, /role="menuitem"/);
   assert.match(html, /Back/);
   assert.match(html, /Change model/);
   assert.match(html, /anthropic \/ Claude Sonnet 4/);

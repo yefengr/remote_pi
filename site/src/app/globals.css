@@ -2052,7 +2052,7 @@ a {
 .pwa-user-blocks { display: grid; gap: 10px; justify-items: end; }
 .pwa-message-image { display: block; width: min(420px, 100%); max-height: 360px; object-fit: contain; border: 1px solid var(--pwa-line); border-radius: 10px; background: #040606; }
 .pwa-image-omitted { padding: 10px 12px; border: 1px dashed var(--pwa-line-strong); border-radius: 8px; color: var(--pwa-dim); font: 10px/1.5 var(--ff-mono); }
-.pwa-message-toggle { margin-left: 8px; padding: 0; border: 0; color: var(--pwa-dim); background: transparent; cursor: pointer; vertical-align: middle; }
+.pwa-message-toggle { margin-left: 8px; color: var(--pwa-dim); vertical-align: middle; }
 .pwa-earlier-button { justify-self: center; }
 .pwa-markdown { color: var(--pwa-ink); font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
 .pwa-stream-text { color: var(--pwa-ink); font-size: 15px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -2068,8 +2068,8 @@ a {
 .pwa-streaming { display: inline-flex; align-items: center; gap: 5px; margin-left: 8px; color: var(--pwa-dim); font-size: 9px; letter-spacing: .05em; }
 .pwa-streaming span { width: 5px; height: 5px; border-radius: 50%; background: var(--pwa-accent); animation: pwa-pulse 1s ease-in-out infinite; }
 .pwa-interrupted { margin-left: 8px; color: #f5c66a; font-size: 9px; letter-spacing: .05em; }
-.pwa-pending-retry { display: inline-grid; place-items: center; width: 24px; height: 24px; margin-left: 8px; padding: 0; border: 1px solid var(--pwa-line-strong); border-radius: 6px; color: var(--pwa-accent); background: transparent; cursor: pointer; vertical-align: middle; }
-.pwa-pending-retry:hover { border-color: var(--pwa-accent); background: rgba(79,195,247,.08); }
+.pwa-pending-retry { margin-left: 8px; border-color: var(--pwa-line-strong); color: var(--pwa-accent); vertical-align: middle; }
+.pwa-pending-retry:hover:not(:disabled) { border-color: var(--pwa-accent); background: rgba(79,195,247,.08); }
 @keyframes pwa-pulse { 50% { opacity: .25; transform: scale(.75); } }
 .pwa-chat-empty, .pwa-zero { min-width: 0; width: min(430px, 100%); max-width: 100%; margin: auto; text-align: center; padding: 32px; }
 .pwa-chat-empty-icon { width: 45px; height: 45px; display: grid; place-items: center; margin: 0 auto 15px; border: 1px solid var(--pwa-line-strong); border-radius: 14px; color: var(--pwa-accent); background: rgba(79,195,247,.08); }
@@ -2100,8 +2100,9 @@ a {
 .pwa-composer-menu-panel { bottom: calc(100% + 8px); left: 0; }
 .pwa-composer-menu-panel button, .pwa-mobile-menu-panel button { width: 100%; min-height: 44px; display: flex; align-items: center; gap: 9px; padding: 0 11px; border: 0; border-radius: 7px; color: var(--pwa-ink); background: transparent; font: 11px var(--ff-mono); text-align: left; cursor: pointer; }
 .pwa-composer-menu-panel button:hover, .pwa-mobile-menu-panel button:hover { color: var(--pwa-accent); background: rgba(79,195,247,.08); }
-.pwa-command-menu-panel { position: absolute; z-index: 8; bottom: calc(100% + 8px); left: -52px; display: grid; width: min(340px, calc(100vw - 32px)); max-height: min(380px, 58dvh); overflow-y: auto; padding: 6px; border: 1px solid var(--pwa-line-strong); border-radius: 8px; color: var(--pwa-ink); background: #080c0e; box-shadow: 0 18px 45px rgba(0,0,0,.48); }
-.pwa-command-row, .pwa-command-back { width: 100%; min-width: 0; min-height: 44px; display: flex; align-items: center; gap: 9px; padding: 7px 10px; border: 0; border-radius: 6px; color: var(--pwa-ink); background: transparent; font: 11px/1.2 var(--ff-mono); text-align: left; cursor: pointer; }
+.pwa-root .pwa-command-menu-dropdown { width: min(340px, calc(100vw - 32px)); max-height: min(380px, 58dvh); overflow-y: auto; padding: 6px; border-color: var(--pwa-line-strong); border-radius: 8px; color: var(--pwa-ink); background: #080c0e; box-shadow: 0 18px 45px rgba(0,0,0,.48); }
+.pwa-command-menu-panel { display: grid; color: inherit; }
+.pwa-command-row, .pwa-command-back { width: 100%; min-width: 0; min-height: 44px; display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 6px; color: var(--pwa-ink); font: 11px/1.2 var(--ff-mono); text-align: left; }
 .pwa-command-row:hover:not(:disabled), .pwa-command-back:hover { color: var(--pwa-accent); background: rgba(79,195,247,.08); }
 .pwa-command-row:disabled { opacity: .42; cursor: not-allowed; }
 .pwa-command-copy { display: grid; min-width: 0; flex: 1; gap: 2px; }

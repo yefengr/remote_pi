@@ -51,7 +51,10 @@ test("renders the Mantine textarea and action icons without changing the draft",
   assert.match(imageTrigger, /title="Add image"/);
   assert.match(commandTrigger, /mantine-ActionIcon-root/);
   assert.match(commandTrigger, /pwa-composer-icon/);
+  assert.match(commandTrigger, /aria-haspopup="menu"/);
+  assert.match(commandTrigger, /aria-expanded="false"/);
   assert.match(commandTrigger, /title="Pi commands"/);
+  assert.doesNotMatch(html, /pwa-command-menu-panel/);
   assert.doesNotMatch(html, /value="\/"/);
 });
 
