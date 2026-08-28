@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { ActionIcon, Button } from "@mantine/core";
 import { BrowserQRCodeReader } from "@zxing/browser";
 import { ImageUp, X } from "lucide-react";
 
@@ -57,9 +58,9 @@ export function QrScanner({ onScan, onClose }: { onScan: (value: string) => void
           <span className="pwa-kicker">Pair a Pi</span>
           <h2>Scan the pairing QR</h2>
         </div>
-        <button className="pwa-icon-button" type="button" onClick={onClose} aria-label="Close scanner" title="Close scanner">
+        <ActionIcon className="pwa-icon-button" type="button" variant="subtle" size={44} onClick={onClose} aria-label="Close scanner" title="Close scanner">
           <X size={18} />
-        </button>
+        </ActionIcon>
       </div>
       <div className="pwa-scanner-frame">
         <video ref={videoRef} muted playsInline />
@@ -70,7 +71,7 @@ export function QrScanner({ onScan, onClose }: { onScan: (value: string) => void
       </div>
       <p className="pwa-muted">Hold the QR inside the frame. Camera access stays on this page.</p>
       <input ref={fileRef} className="pwa-file-input" type="file" accept="image/*" onChange={(event) => void scanImage(event.target.files?.[0])} />
-      <button className="pwa-secondary-button" type="button" onClick={() => fileRef.current?.click()}><ImageUp size={16} /> Choose QR image</button>
+      <Button className="pwa-secondary-button" type="button" variant="default" leftSection={<ImageUp size={16} />} onClick={() => fileRef.current?.click()}>Choose QR image</Button>
       {error ? <p className="pwa-error">{error}</p> : null}
     </div>
   );
