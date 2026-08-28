@@ -1,5 +1,6 @@
 "use client";
 
+import { Badge } from "@mantine/core";
 import { Circle, Link2, MessageSquare, Pencil, Plus, Radio, Trash2 } from "lucide-react";
 import type { PwaPeerRecord } from "@/lib/pwa/db";
 
@@ -59,7 +60,7 @@ function PeerCard({ peer, active, presence, onSelect, onRename, onRemove }: { pe
   const totalSessions = presence?.totalSessions ?? 0;
   const sessionSummary = status === "checking" ? "Checking sessions" : `${onlineSessions}/${totalSessions} sessions`;
 
-  return <div className={`pwa-peer-card ${active ? "active" : ""}`}><button className="pwa-peer-select" type="button" onClick={onSelect}><span className={`pwa-peer-icon ${status === "online" ? "online" : ""}`}><MessageSquare size={17} /></span><span className="pwa-peer-copy"><strong>{displayPeer(peer)}</strong><small className="pwa-peer-technical">Pi key {peer.remoteEpk.slice(0, 8)}…</small><span className="pwa-peer-presence"><span className={`pwa-presence-label ${status}`}>{pairingStatusLabel(status)}</span><span>{sessionSummary}</span></span></span>{active ? <span className="pwa-current-label">CURRENT</span> : null}<span className={`pwa-peer-state ${status}`} aria-label={pairingStatusLabel(status)}><Circle size={8} fill="currentColor" /></span></button><button className="pwa-peer-action" type="button" onClick={onRename} aria-label={`Rename ${displayPeer(peer)}`} title="Rename pairing"><Pencil size={14} /></button><button className="pwa-peer-remove" type="button" onClick={onRemove} aria-label={`Remove ${displayPeer(peer)}`} title="Remove pairing"><Trash2 size={14} /></button></div>;
+  return <div className={`pwa-peer-card ${active ? "active" : ""}`}><button className="pwa-peer-select" type="button" onClick={onSelect}><span className={`pwa-peer-icon ${status === "online" ? "online" : ""}`}><MessageSquare size={17} /></span><span className="pwa-peer-copy"><strong>{displayPeer(peer)}</strong><small className="pwa-peer-technical">Pi key {peer.remoteEpk.slice(0, 8)}…</small><span className="pwa-peer-presence"><Badge className={`pwa-presence-label ${status}`} variant="light">{pairingStatusLabel(status)}</Badge><span>{sessionSummary}</span></span></span>{active ? <Badge className="pwa-current-label" variant="light">CURRENT</Badge> : null}<span className={`pwa-peer-state ${status}`} aria-label={pairingStatusLabel(status)}><Circle size={8} fill="currentColor" /></span></button><button className="pwa-peer-action" type="button" onClick={onRename} aria-label={`Rename ${displayPeer(peer)}`} title="Rename pairing"><Pencil size={14} /></button><button className="pwa-peer-remove" type="button" onClick={onRemove} aria-label={`Remove ${displayPeer(peer)}`} title="Remove pairing"><Trash2 size={14} /></button></div>;
 }
 
 export function EmptyWorkspace({ onPair }: { onPair: () => void }) {

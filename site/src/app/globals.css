@@ -2033,8 +2033,11 @@ a {
 .pwa-chat-head h2 { min-width: 0; overflow-wrap: anywhere; font-size: clamp(25px, 3vw, 38px); }
 .pwa-chat-meta { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--pwa-dim); font: 11px var(--ff-mono); }
 .pwa-separator { color: #536268; }
-.pwa-room-control { display: grid; gap: 5px; color: var(--pwa-dim); font: 10px var(--ff-mono); text-transform: uppercase; letter-spacing: .1em; }
-.pwa-room-control select { min-width: 130px; padding: 9px 11px; border: 1px solid var(--pwa-line); border-radius: 8px; color: var(--pwa-ink); background: var(--pwa-panel-strong); font: 12px var(--ff-mono); }
+.pwa-room-control { display: grid; gap: 5px; min-width: 130px; color: var(--pwa-dim); font: 10px var(--ff-mono); text-transform: uppercase; letter-spacing: .1em; }
+.pwa-room-control .mantine-Select-label { color: inherit; font: inherit; }
+.pwa-room-control .mantine-Select-input { min-width: 130px; min-height: 44px; border-color: var(--pwa-line); color: var(--pwa-ink); background: var(--pwa-panel-strong); font: 12px var(--ff-mono); }
+.pwa-room-control .mantine-Select-input:focus { border-color: var(--pwa-accent); }
+.pwa-room-control .mantine-Select-input:disabled { color: var(--pwa-dim); }
 .pwa-message-list { box-sizing: border-box; flex: 1 1 auto; min-width: 0; min-height: 0; max-width: 100%; width: min(900px, 100%); margin: 0 auto; padding: 30px clamp(22px, 5vw, 70px) 88px; display: grid; align-content: start; gap: 24px; overflow-x: hidden; overflow-y: auto; overscroll-behavior-y: contain; scroll-padding-bottom: 88px; -webkit-overflow-scrolling: touch; touch-action: pan-y; scrollbar-gutter: stable; }
 .pwa-bottom-sentinel { width: 1px; height: 1px; }
 .pwa-message { width: min(100%, 780px); max-width: 780px; min-width: 0; overflow: visible; padding-left: 14px; border-left: 2px solid var(--pwa-line); position: relative; }
@@ -2153,7 +2156,8 @@ a {
 .pwa-scan-corner-tl { top: 18%; left: 18%; border-width: 3px 0 0 3px; }.pwa-scan-corner-tr { top: 18%; right: 18%; border-width: 3px 3px 0 0; }.pwa-scan-corner-bl { bottom: 18%; left: 18%; border-width: 0 0 3px 3px; }.pwa-scan-corner-br { right: 18%; bottom: 18%; border-width: 0 3px 3px 0; }
 .pwa-muted { color: var(--pwa-dim); font-size: 12px; }
 .pwa-manual-pairing { box-sizing: border-box; min-width: 0; max-width: 100%; margin-top: 10px; padding: 0 24px 20px; border: 1px solid var(--pwa-line-strong); border-top: 0; border-radius: 0 0 18px 18px; background: #0a0e10; }
-.pwa-manual-pairing textarea { width: 100%; resize: vertical; min-height: 74px; margin-bottom: 9px; padding: 10px; border: 1px solid var(--pwa-line); border-radius: 8px; color: var(--pwa-ink); background: #050708; font: 11px/1.45 var(--ff-mono); }
+.pwa-manual-pairing .pwa-manual-pairing-input { resize: vertical; min-height: 74px; margin-bottom: 9px; border-color: var(--pwa-line); color: var(--pwa-ink); background: #050708; font: 11px/1.45 var(--ff-mono); }
+.pwa-manual-pairing .pwa-manual-pairing-input:focus { border-color: var(--pwa-accent); }
 .pwa-manual-pairing .pwa-secondary-button { width: 100%; }
 .pwa-divider { display: flex; align-items: center; gap: 10px; margin: 13px 0; color: var(--pwa-dim); font: 10px var(--ff-mono); text-transform: uppercase; letter-spacing: .08em; }
 .pwa-divider::before, .pwa-divider::after { content: ""; height: 1px; flex: 1; background: var(--pwa-line); }
@@ -2240,7 +2244,7 @@ a {
   .pwa-message-actions .pwa-latest-button { padding-inline: 12px; }
   .pwa-composer { width: 100%; padding: 8px 16px calc(12px + var(--pwa-safe-bottom)); }
   .pwa-composer-card { padding: 8px; }
-  .pwa-manual-pairing textarea { font-size: 16px; }
+  .pwa-manual-pairing .pwa-manual-pairing-input { font-size: 16px; }
   .pwa-composer .pwa-primary-button { flex-basis: 44px; width: 44px; min-width: 44px; padding: 0; }
   .pwa-desktop-actions { display: none; }
   .pwa-mobile-menu { display: block; }

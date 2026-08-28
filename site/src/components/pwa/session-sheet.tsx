@@ -1,6 +1,6 @@
 "use client";
 
-import { Drawer } from "@mantine/core";
+import { Badge, Drawer } from "@mantine/core";
 import { MessageSquare, Pencil, Plus, Trash2 } from "lucide-react";
 import { displayPeer, type PairingPresence, type PairingStatus } from "@/components/pwa/workspace-view";
 import type { PwaPeerRecord, PwaRoomRecord } from "@/lib/pwa/db";
@@ -86,8 +86,8 @@ export function SessionSheet({ peers, rooms, activePeerId, activeRoomId, pairing
               <div className={`pwa-sheet-peer ${active ? "active" : ""}`} key={peer.id}>
                 <button className="pwa-sheet-peer-select" type="button" onClick={() => choosePeer(peer.id)}>
                   <span className={`pwa-peer-icon ${status === "online" ? "online" : ""}`}><MessageSquare size={17} /></span>
-                  <span className="pwa-peer-copy"><strong>{displayPeer(peer)}</strong><small className="pwa-peer-technical">Pi key {peer.remoteEpk.slice(0, 8)}…</small><span className="pwa-peer-presence"><span className={`pwa-presence-label ${status}`}>{pairingStatusLabel(status)}</span><span>{onlineSessions}/{totalSessions} SESSIONS</span></span></span>
-                  {active ? <span className="pwa-current-label">CURRENT</span> : null}
+                  <span className="pwa-peer-copy"><strong>{displayPeer(peer)}</strong><small className="pwa-peer-technical">Pi key {peer.remoteEpk.slice(0, 8)}…</small><span className="pwa-peer-presence"><Badge className={`pwa-presence-label ${status}`} variant="light">{pairingStatusLabel(status)}</Badge><span>{onlineSessions}/{totalSessions} SESSIONS</span></span></span>
+                  {active ? <Badge className="pwa-current-label" variant="light">CURRENT</Badge> : null}
                 </button>
                 <button className="pwa-peer-action" type="button" onClick={() => onRename(peer)} aria-label={`Rename ${displayPeer(peer)}`} title="Rename pairing"><Pencil size={16} /></button>
                 <button className="pwa-peer-remove" type="button" onClick={() => onRemove(peer)} aria-label={`Delete ${displayPeer(peer)}`} title="Delete pairing"><Trash2 size={16} /></button>
@@ -105,7 +105,7 @@ export function SessionSheet({ peers, rooms, activePeerId, activeRoomId, pairing
                   const checking = session.online === undefined;
                   const selectable = online && !active;
                   const status = checking ? "checking" : online ? "online" : "offline";
-                  return <button className={`pwa-sheet-room ${active ? "active" : ""} ${!selectable ? "disabled" : ""}`} key={session.id} type="button" disabled={!selectable} aria-disabled={!selectable} title={active ? "Current session is read-only here" : checking ? "Checking session status" : online ? undefined : "This session is offline"} onClick={() => chooseSession(session.roomId)}><span className="pwa-sheet-session-copy"><strong>{sessionLabel(session)}</strong><small><span className={`pwa-presence-label ${status}`}>{status.toUpperCase()}</span>{session.cwd ? <span className="pwa-sheet-session-cwd">{session.cwd}</span> : null}<code>session ID {session.roomId}</code></small></span>{active ? <span className="pwa-current-label">CURRENT</span> : null}</button>;
+                  return <button className={`pwa-sheet-room ${active ? "active" : ""} ${!selectable ? "disabled" : ""}`} key={session.id} type="button" disabled={!selectable} aria-disabled={!selectable} title={active ? "Current session is read-only here" : checking ? "Checking session status" : online ? undefined : "This session is offline"} onClick={() => chooseSession(session.roomId)}><span className="pwa-sheet-session-copy"><strong>{sessionLabel(session)}</strong><small><Badge className={`pwa-presence-label ${status}`} variant="light">{status.toUpperCase()}</Badge>{session.cwd ? <span className="pwa-sheet-session-cwd">{session.cwd}</span> : null}<code>session ID {session.roomId}</code></small></span>{active ? <Badge className="pwa-current-label" variant="light">CURRENT</Badge> : null}</button>;
                 })}
               </>}
             </div>

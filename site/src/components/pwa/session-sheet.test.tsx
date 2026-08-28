@@ -41,6 +41,7 @@ test("labels rooms as sessions and keeps offline history read-only", () => {
   );
 
   assert.match(html, /mantine-Drawer-root/);
+  assert.match(html, /mantine-Badge-root/);
   assert.match(html, /role="dialog"/);
   assert.match(html, /Pairing records/);
   assert.match(html, /Sessions in/);

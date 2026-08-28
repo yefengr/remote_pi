@@ -36,5 +36,7 @@ export const remotePiTheme = createTheme({
     ActionIcon: { defaultProps: { size: "lg", variant: "subtle" } },
     TextInput: { defaultProps: { size: "md" } },
     Textarea: { defaultProps: { size: "md" } },
+    Select: { defaultProps: { size: "md" } },
+    Badge: { defaultProps: { size: "xs", variant: "light", radius: "sm" } },
   },
 });

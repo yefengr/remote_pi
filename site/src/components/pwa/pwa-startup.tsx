@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Button, Textarea } from "@mantine/core";
 import { Link2, RefreshCw, WifiOff } from "lucide-react";
 import { QrScanner } from "@/components/pwa/qr-scanner";
 
@@ -44,5 +45,5 @@ export function PairingDialog({ onScan, onClose }: { onScan: (value: string) => 
     setManualError(null);
     onScan(value);
   };
-  return <div className="pwa-pairing-dialog"><QrScanner onScan={onScan} onClose={onClose} /><div className="pwa-manual-pairing"><div className="pwa-divider"><span>or use the pairing code</span></div><textarea value={manualValue} onChange={(event) => setManualValue(event.target.value)} placeholder="remotepi://pair?..." rows={3} autoCapitalize="none" autoCorrect="off" spellCheck={false} /><button className="pwa-secondary-button" type="button" onClick={submitManual} disabled={!manualValue.trim()}><Link2 size={15} /> Use pasted code</button>{manualError ? <p className="pwa-error">{manualError}</p> : null}</div></div>;
+  return <div className="pwa-pairing-dialog"><QrScanner onScan={onScan} onClose={onClose} /><div className="pwa-manual-pairing"><div className="pwa-divider"><span>or use the pairing code</span></div><Textarea aria-label="Pairing code" classNames={{ input: "pwa-manual-pairing-input" }} value={manualValue} onChange={(event) => setManualValue(event.target.value)} placeholder="remotepi://pair?..." rows={3} resize="vertical" autoCapitalize="none" autoCorrect="off" spellCheck={false} /><Button className="pwa-secondary-button" variant="default" type="button" onClick={submitManual} disabled={!manualValue.trim()} leftSection={<Link2 size={15} />} fullWidth>Use pasted code</Button>{manualError ? <p className="pwa-error">{manualError}</p> : null}</div></div>;
 }
