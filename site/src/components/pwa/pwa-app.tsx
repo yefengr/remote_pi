@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownToLine, Activity, MessageSquare, RefreshCw, Settings, X } from "lucide-react";
 import { MessageComposer } from "@/components/pwa/message-composer";
+import { RenamePairingDialog } from "@/components/pwa/rename-pairing-dialog";
 import { COMPOSER_THINKING_LEVELS, type ComposerCommandAction } from "@/components/pwa/composer-command-menu";
 import { MessageList } from "@/components/pwa/message-list";
 import { describeStartupFailure, PairingDialog, StartupErrorView, StartupLoading, type StartupError } from "@/components/pwa/pwa-startup";
@@ -95,6 +96,7 @@ export function PwaApp() {
   const [pairState, setPairState] = useState<PairState>("idle");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sessionSheetOpen, setSessionSheetOpen] = useState(false);
+  const [renamingPeer, setRenamingPeer] = useState<PwaPeerRecord | null>(null);
   const [layoutRevision, setLayoutRevision] = useState(0);
   const [selectionReady, setSelectionReady] = useState(false);
   const [followingOutput, setFollowingOutput] = useState(true);
@@ -1289,10 +1291,7 @@ export function PwaApp() {
     }
   }, [flushLocalWrites, invalidateConnection, selectPeer]);
 
-  const renamePeer = useCallback(async (peer: PwaPeerRecord) => {
-    const suggestedName = peer.nickname || (peer.hostname ? `Pi on ${peer.hostname}` : "");
-    const nickname = window.prompt("Name this pairing", suggestedName)?.trim();
-    if (!nickname) return;
+  const savePeerNickname = useCallback(async (peer: PwaPeerRecord, nickname: string) => {
     await getPwaDatabase().pairings.put({ ...peer, nickname });
     setPeers(await listPwaPeers());
   }, []);
@@ -1307,6 +1306,7 @@ export function PwaApp() {
   const resetLayout = useCallback(() => {
     setSettingsOpen(false);
     setSessionSheetOpen(false);
+    setRenamingPeer(null);
     setPairState("idle");
     setDraft("");
     setAttachment(null);
@@ -1352,7 +1352,7 @@ export function PwaApp() {
         </div>
       </header>
       <div className="pwa-layout">
-        <DesktopSidebar peers={peers} activePeerId={activePeerId} pairingPresence={pairingPresence} onPair={() => setPairState("scanning")} onSelect={selectPeer} onRename={(peer) => void renamePeer(peer)} onRemove={(peer) => void removePeer(peer)} onClearData={clearLocalData} />
+        <DesktopSidebar peers={peers} activePeerId={activePeerId} pairingPresence={pairingPresence} onPair={() => setPairState("scanning")} onSelect={selectPeer} onRename={setRenamingPeer} onRemove={(peer) => void removePeer(peer)} onClearData={clearLocalData} />
         <main className="pwa-main">
           {activePeer ? <>
             <div className="pwa-chat-head"><div><span className="pwa-kicker">Active session</span><h2>{displayPeer(activePeer)}</h2><span className="pwa-chat-meta"><span className={connection === "online" ? "pwa-status-dot online" : "pwa-status-dot"} />{connection === "online" ? "Live" : "Local history"} <span className="pwa-separator">/</span> session <code>{roomId}</code> <span className="pwa-separator">/</span> last synced <time dateTime={lastSyncedAt ? new Date(lastSyncedAt).toISOString() : undefined}>{formatSyncTime(lastSyncedAt)}</time></span></div><div className="pwa-room-control"><label htmlFor="room-id">Session</label><select id="room-id" value={roomId} disabled={connection !== "online"} onChange={(event) => selectRoom(event.target.value)}><option value={roomId}>{roomId}</option>{activeRooms.filter((room) => room.roomId !== roomId).map((room) => <option key={room.roomId} value={room.roomId}>{room.name || room.cwd || room.roomId}</option>)}</select></div></div>
@@ -1368,7 +1368,8 @@ export function PwaApp() {
         </main>
         {settingsOpen ? <SettingsPanel relayUrl={relayUrl} defaultRelayUrl={DEFAULT_RELAY} onSave={saveRelayUrl} onClose={closeSettings} onClearData={clearLocalData} onResetLayout={resetLayout} /> : null}
       </div>
-      {sessionSheetOpen ? <SessionSheet peers={peers} rooms={rooms} activePeerId={activePeerId} activeRoomId={roomId} pairingPresence={pairingPresence} onSelectPeer={selectPeer} onSelectRoom={selectRoom} onPair={() => setPairState("scanning")} onRename={(peer) => void renamePeer(peer)} onRemove={(peer) => void removePeer(peer)} onClose={closeSessionSheet} /> : null}
+      {sessionSheetOpen ? <SessionSheet peers={peers} rooms={rooms} activePeerId={activePeerId} activeRoomId={roomId} pairingPresence={pairingPresence} onSelectPeer={selectPeer} onSelectRoom={selectRoom} onPair={() => setPairState("scanning")} onRename={setRenamingPeer} onRemove={(peer) => void removePeer(peer)} onClose={closeSessionSheet} /> : null}
+      {renamingPeer ? <RenamePairingDialog peer={renamingPeer} onSave={(nickname) => savePeerNickname(renamingPeer, nickname)} onClose={() => setRenamingPeer(null)} /> : null}
       {pairState !== "idle" ? <div className="pwa-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && pairState === "scanning") setPairState("idle"); }} role="presentation">{pairState === "scanning" ? <PairingDialog onScan={pairFromQr} onClose={() => setPairState("idle")} /> : <div className="pwa-pairing-card"><Activity className="pwa-spin" /><span className="pwa-kicker">Pairing</span><h2>Connecting to your Pi</h2><p>Waiting for the Pi to confirm this browser.</p></div>}</div> : null}
       {error ? <div className="pwa-toast" role="status"><span>{error}</span><button type="button" onClick={() => setError(null)} aria-label="Dismiss"><X size={15} /></button></div> : null}
     </div>

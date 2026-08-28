@@ -2131,6 +2131,20 @@ a {
 .pwa-layout-reset-button { width: 100%; margin-top: 12px; }
 .pwa-layout-reset-note { display: block; margin-top: 8px; color: var(--pwa-dim); font: 11px/1.5 var(--ff-body); }
 .pwa-modal-backdrop { box-sizing: border-box; position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; overflow-y: auto; padding: calc(20px + var(--pwa-safe-top)) 20px calc(20px + var(--pwa-safe-bottom)); background: rgba(0,0,0,.72); backdrop-filter: blur(8px); }
+.pwa-rename-backdrop { box-sizing: border-box; position: fixed; inset: 0; z-index: 18; display: grid; place-items: center; overflow-y: auto; padding: calc(20px + var(--pwa-safe-top)) 20px calc(20px + var(--pwa-safe-bottom)); background: rgba(0,0,0,.74); backdrop-filter: blur(10px); }
+.pwa-rename-dialog { box-sizing: border-box; width: min(420px, 100%); min-width: 0; padding: 24px; border: 1px solid var(--pwa-line-strong); border-radius: 16px; color: var(--pwa-ink); background: #0a0e10; box-shadow: 0 25px 90px rgba(0,0,0,.6); }
+.pwa-rename-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.pwa-rename-head h2 { margin: 7px 0 0; font: 600 24px/1.1 var(--ff-display); letter-spacing: -.04em; }
+.pwa-rename-description { margin: 18px 0 20px; color: var(--pwa-dim); font-size: 12px; line-height: 1.55; }
+.pwa-rename-description strong { color: var(--pwa-ink); font-weight: 500; }
+.pwa-rename-field { display: grid; gap: 8px; color: var(--pwa-dim); font: 10px var(--ff-mono); letter-spacing: .08em; text-transform: uppercase; }
+.pwa-rename-field input { box-sizing: border-box; width: 100%; min-height: 48px; padding: 11px 12px; border: 1px solid var(--pwa-line-strong); border-radius: 9px; outline: none; color: var(--pwa-ink); background: #050708; font: 16px/1.4 var(--ff-body); letter-spacing: normal; text-transform: none; }
+.pwa-rename-field input:focus { border-color: rgba(79,195,247,.7); box-shadow: 0 0 0 3px rgba(79,195,247,.1); }
+.pwa-rename-field input:disabled { opacity: .55; }
+.pwa-rename-dialog .pwa-error { margin: 10px 0 0; }
+.pwa-rename-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 22px; }
+.pwa-rename-actions .pwa-secondary-button, .pwa-rename-actions .pwa-primary-button { min-width: 88px; }
+.pwa-rename-actions .pwa-secondary-button:disabled, .pwa-rename-actions .pwa-primary-button:disabled { cursor: wait; }
 .pwa-pairing-dialog { min-width: 0; max-width: 100%; width: min(480px, 100%); max-height: min(92dvh, 760px); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .pwa-scanner, .pwa-pairing-card { box-sizing: border-box; min-width: 0; max-width: 100%; width: 100%; padding: 24px; border: 1px solid var(--pwa-line-strong); border-radius: 18px; background: #0a0e10; box-shadow: 0 25px 90px rgba(0,0,0,.55); }
 .pwa-scanner-frame { position: relative; overflow: hidden; aspect-ratio: 1; margin: 0 auto 16px; border-radius: 13px; background: #020303; }
@@ -2239,6 +2253,11 @@ a {
   .pwa-startup-card { padding: 25px 20px; }
   .pwa-runtime-notice { width: calc(100vw - 24px); flex-direction: column; align-items: stretch; gap: 10px; padding: 11px 10px 11px 12px; }
   .pwa-session-sheet { max-height: 84dvh; }
+  .pwa-rename-backdrop { place-items: end center; padding: 12px 12px calc(12px + var(--pwa-safe-bottom)); }
+  .pwa-rename-dialog { width: 100%; padding: 20px 16px calc(16px + var(--pwa-safe-bottom)); border-radius: 16px; }
+  .pwa-rename-head h2 { font-size: 21px; }
+  .pwa-rename-actions { margin-top: 18px; }
+  .pwa-rename-actions .pwa-secondary-button, .pwa-rename-actions .pwa-primary-button { flex: 1; }
   .pwa-session-sheet-head { padding: 18px 14px 13px; }
   .pwa-session-sheet-head h2 { font-size: 21px; }
   .pwa-session-sheet-body { padding-inline: 10px; }
