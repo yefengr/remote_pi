@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type FormEvent } from "react";
+import { ActionIcon, Textarea } from "@mantine/core";
 import { Camera, ImagePlus, LoaderCircle, Plus, Send, Slash, Square, X } from "lucide-react";
 import { ComposerCommandMenu, type ComposerCommandAction } from "./composer-command-menu";
 import type { ThinkingLevel, WireModel } from "@/lib/remote-pi/types";
@@ -143,19 +144,19 @@ export function MessageComposer({
       <input ref={fileInputRef} className="pwa-image-input" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) onSetAttachment(file, file.name || "Image attachment"); event.currentTarget.value = ""; }} />
       <input ref={cameraInputRef} className="pwa-image-input" type="file" accept="image/png,image/jpeg,image/webp" capture="environment" onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) onSetAttachment(file, file.name || "Camera image"); event.currentTarget.value = ""; }} />
       <div className="pwa-composer-card">
-        {attachment ? <div className="pwa-composer-preview"><img src={attachment.previewUrl} alt={attachment.label} /><button type="button" onClick={onClearAttachment} disabled={sendingImage} aria-label="Remove image" title="Remove image"><X size={14} /></button></div> : null}
-        <textarea ref={textareaRef} value={draft} onChange={(event) => onDraftChange(event.target.value)} onPaste={handlePaste} placeholder={isOnline ? "Message your agent…" : "Reconnect to send a message"} disabled={!isOnline || sendingImage} rows={1} />
+        {attachment ? <div className="pwa-composer-preview"><img src={attachment.previewUrl} alt={attachment.label} /><ActionIcon className="pwa-composer-remove" type="button" size="lg" variant="subtle" onClick={onClearAttachment} disabled={sendingImage} aria-label="Remove image" title="Remove image"><X size={14} /></ActionIcon></div> : null}
+        <Textarea ref={textareaRef} classNames={{ root: "pwa-composer-textarea", input: "pwa-composer-input" }} resize="none" value={draft} onChange={(event) => onDraftChange(event.target.value)} onPaste={handlePaste} placeholder={isOnline ? "Message your agent…" : "Reconnect to send a message"} disabled={!isOnline || sendingImage} rows={1} />
         <div className="pwa-composer-footer">
           <div className="pwa-composer-tools">
             <div className="pwa-composer-menu" ref={menuRef}>
-              <button className="pwa-composer-icon" type="button" onClick={() => { setCommandMenuOpen(false); setMenuOpen((open) => !open); }} disabled={!canAttachImage} aria-haspopup="menu" aria-expanded={menuOpen} aria-label="Add image" title="Add image"><Plus size={19} /></button>
+              <ActionIcon className="pwa-composer-icon" type="button" size="lg" variant="subtle" onClick={() => { setCommandMenuOpen(false); setMenuOpen((open) => !open); }} disabled={!canAttachImage} aria-haspopup="menu" aria-expanded={menuOpen} aria-label="Add image" title="Add image"><Plus size={19} /></ActionIcon>
               {menuOpen ? <div className="pwa-composer-menu-panel">
                 <button type="button" onClick={chooseImage}><ImagePlus size={17} />Choose image</button>
                 <button type="button" onClick={useCamera}><Camera size={17} />Use camera</button>
               </div> : null}
             </div>
             <div className="pwa-composer-command" ref={commandMenuRef}>
-              <button className="pwa-composer-icon" type="button" onClick={toggleCommands} disabled={!isOnline} aria-haspopup="menu" aria-expanded={commandMenuOpen} aria-label="Pi commands" title="Pi commands"><Slash size={19} /></button>
+              <ActionIcon className="pwa-composer-icon" type="button" size="lg" variant="subtle" onClick={toggleCommands} disabled={!isOnline} aria-haspopup="menu" aria-expanded={commandMenuOpen} aria-label="Pi commands" title="Pi commands"><Slash size={19} /></ActionIcon>
               {commandMenuOpen ? <ComposerCommandMenu
                 isOnline={isOnline}
                 isWorking={isWorking}
