@@ -2086,7 +2086,7 @@ a {
 .pwa-composer-icon:hover:not(:disabled), .pwa-composer-remove:hover:not(:disabled) { border-color: var(--pwa-accent); color: var(--pwa-accent); background: rgba(79,195,247,.08); }
 .pwa-composer-icon:disabled, .pwa-composer-remove:disabled { opacity: .38; cursor: not-allowed; }
 .pwa-composer-textarea { display: block; width: 100%; min-width: 0; }
-.pwa-composer-input { display: block; width: 100%; min-width: 0; height: 44px; min-height: 44px; max-height: 120px; resize: none; overflow-y: hidden; padding: 10px 5px 8px; border: 0; border-radius: 0; outline: none; color: var(--pwa-ink); background: transparent; font: 16px/1.5 var(--ff-body); }
+.pwa-composer-input, .pwa-composer-input:hover, .pwa-composer-input:focus, .pwa-composer-input:focus-within { display: block; width: 100%; min-width: 0; height: 44px; min-height: 44px; max-height: 120px; resize: none; overflow-y: hidden; padding: 10px 5px 8px; border: 0; border-color: transparent; border-radius: 0; outline: none; box-shadow: none; color: var(--pwa-ink); background: transparent; font: 16px/1.5 var(--ff-body); }
 .pwa-composer-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 5px; }
 .pwa-composer-tools, .pwa-composer-actions { display: flex; align-items: center; min-width: 0; gap: 8px; }
 .pwa-composer-actions { justify-content: flex-end; }
@@ -2113,7 +2113,6 @@ a {
 .pwa-command-back { color: var(--pwa-dim); }
 .pwa-command-empty { margin: 0; padding: 12px 10px; color: var(--pwa-dim); font: 11px/1.4 var(--ff-mono); }
 .pwa-composer .pwa-primary-button { flex: 0 0 44px; width: 44px; padding: 0; }
-.pwa-composer-input:focus { box-shadow: none; }
 .pwa-composer-input:disabled { opacity: .55; cursor: not-allowed; }
 .pwa-primary-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 16px; border: 1px solid var(--pwa-accent); border-radius: 9px; color: #06131a; background: var(--pwa-accent); font: 600 12px var(--ff-mono); cursor: pointer; white-space: nowrap; transition: transform .2s, filter .2s, opacity .2s; }
 .pwa-secondary-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 13px; border: 1px solid var(--pwa-line-strong); border-radius: 8px; color: var(--pwa-ink); background: rgba(255,255,255,.04); font: 600 11px var(--ff-mono); cursor: pointer; }
