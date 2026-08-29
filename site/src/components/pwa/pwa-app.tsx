@@ -133,6 +133,11 @@ type SessionSheetRequest = {
   focusOrigin: HTMLElement | null;
 };
 
+type SettingsRequest = {
+  focusOrigin: HTMLElement | null;
+  focusFallbackSelectors: readonly string[];
+};
+
 type PairingProbe = {
   relay: RelayClient;
   dispose: () => void;
@@ -172,7 +177,7 @@ export function PwaApp() {
   const [currentModel, setCurrentModel] = useState<WireModel | null>(null);
   const [pendingAction, setPendingAction] = useState<{ id: string; action: ComposerCommandAction } | null>(null);
   const [pairState, setPairState] = useState<PairState>("idle");
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsRequest, setSettingsRequest] = useState<SettingsRequest | null>(null);
   const [sessionSheetRequest, setSessionSheetRequest] = useState<SessionSheetRequest | null>(null);
   const [renameRequest, setRenameRequest] = useState<RenamePairingRequest | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmActionRequest | null>(null);
@@ -1365,7 +1370,7 @@ export function PwaApp() {
     setPeers(updatedPeers);
     const activePeer = activePeerRef.current;
     if (activePeer) activePeerRef.current = { ...activePeer, relayUrl: normalized };
-    setSettingsOpen(false);
+    setSettingsRequest(null);
     reconnectStateRef.current.userRecover();
     if (activePeer) restartActiveConnection();
   }, [peers, restartActiveConnection]);
@@ -1464,7 +1469,7 @@ export function PwaApp() {
 
   const resetLayout = useCallback(() => {
     if (confirmPendingRef.current) return;
-    setSettingsOpen(false);
+    setSettingsRequest(null);
     setSessionSheetRequest(null);
     setRenameRequest(null);
     setConfirmAction(null);
@@ -1518,9 +1523,18 @@ export function PwaApp() {
   const closeRenamePeer = useCallback(() => {
     setRenameRequest(null);
   }, []);
+  const openSettings = useCallback(() => {
+    setSettingsRequest({
+      focusOrigin: document.activeElement instanceof HTMLElement ? document.activeElement : null,
+      focusFallbackSelectors: [
+        'button[aria-label="Open settings"]',
+        'button[aria-label="More options"]',
+      ],
+    });
+  }, []);
   const closeSettings = useCallback(() => {
     if (!canCloseBackgroundOverlay(confirmOpenRef.current, confirmPendingRef.current)) return;
-    setSettingsOpen(false);
+    setSettingsRequest(null);
   }, []);
   if (startupState === "loading") return <StartupLoading />;
   if (startupState === "error") return <StartupErrorView error={startupError} onRetry={() => window.location.reload()} />;
@@ -1532,8 +1546,8 @@ export function PwaApp() {
         <div className="pwa-topbar-actions">
           <SessionSwitcherTrigger label={activePeer ? `Session: ${displayPeer(activePeer)} / ${roomId}` : null} expanded={sessionSheetRequest !== null} onOpen={openSessionSheet} />
           <ConnectionStatus state={connection} retryAttempt={retryAttempt} />
-          <DesktopTopbarActions onRefresh={refreshPwaApp} onToggleSettings={() => setSettingsOpen((open) => !open)} />
-          <MobileTopbarMenu onRefresh={() => { void refreshPwaApp(); }} onOpenSettings={() => setSettingsOpen((open) => !open)} />
+          <DesktopTopbarActions onRefresh={refreshPwaApp} onToggleSettings={openSettings} />
+          <MobileTopbarMenu onRefresh={refreshPwaApp} onOpenSettings={openSettings} />
         </div>
       </header>
       <div className="pwa-layout">
@@ -1555,7 +1569,7 @@ export function PwaApp() {
             </div>
           </> : <EmptyWorkspace onPair={() => setPairState("scanning")} />}
         </main>
-        {settingsOpen ? <SettingsPanel relayUrl={relayUrl} defaultRelayUrl={DEFAULT_RELAY} onSave={saveRelayUrl} onClose={closeSettings} onClearData={clearLocalData} onResetLayout={resetLayout} /> : null}
+        {settingsRequest ? <SettingsPanel relayUrl={relayUrl} defaultRelayUrl={DEFAULT_RELAY} onSave={saveRelayUrl} onClose={closeSettings} onClearData={clearLocalData} onResetLayout={resetLayout} focusOrigin={settingsRequest.focusOrigin} focusFallbackSelectors={settingsRequest.focusFallbackSelectors} /> : null}
       </div>
       {sessionSheetRequest ? <SessionSheet peers={peers} rooms={rooms} activePeerId={activePeerId} activeRoomId={roomId} pairingPresence={pairingPresence} onSelectPeer={selectPeer} onSelectRoom={selectRoom} onPair={() => setPairState("scanning")} onRename={openRenamePeer} onRemove={(peer) => void removePeer(peer)} onClose={closeSessionSheet} focusOrigin={sessionSheetRequest.focusOrigin} /> : null}
       {renameRequest ? <RenamePairingDialog peer={renameRequest.peer} onSave={(nickname) => savePeerNickname(renameRequest.peer, nickname)} onClose={closeRenamePeer} focusOrigin={renameRequest.focusOrigin} focusFallbackSelectors={renameRequest.focusFallbackSelectors} /> : null}

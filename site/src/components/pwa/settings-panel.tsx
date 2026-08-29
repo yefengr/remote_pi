@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button, Drawer, Stack, Text, TextInput } from "@mantine/core";
 import { Check, RefreshCw, Trash2, X } from "lucide-react";
 
@@ -11,16 +11,56 @@ type SettingsPanelProps = {
   onClose: () => void;
   onClearData: () => Promise<void>;
   onResetLayout: () => void;
+  focusOrigin?: HTMLElement | null;
+  focusFallbackSelectors?: readonly string[];
   withinPortal?: boolean;
 };
 
-export function SettingsPanel({ relayUrl, defaultRelayUrl, onSave, onClose, onClearData, onResetLayout, withinPortal = true }: SettingsPanelProps) {
+export function SettingsPanel({ relayUrl, defaultRelayUrl, onSave, onClose, onClearData, onResetLayout, focusOrigin = null, focusFallbackSelectors = [], withinPortal = true }: SettingsPanelProps) {
   const [value, setValue] = useState(relayUrl);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const savePendingRef = useRef(false);
+  const focusFallbackSelectorsRef = useRef(focusFallbackSelectors);
+
+  const closeDrawer = () => {
+    const content = contentRef.current;
+    onClose();
+    requestAnimationFrame(() => {
+      if (content?.isConnected) return;
+      const canFocus = (element: HTMLElement) => (
+        element.isConnected
+        && !element.matches(":disabled")
+        && element.getClientRects().length > 0
+        && !element.closest('[aria-hidden="true"]')
+      );
+      const activeElement = document.activeElement;
+      const hasValidFocus = activeElement instanceof HTMLElement
+        && activeElement !== document.body
+        && activeElement !== document.documentElement
+        && canFocus(activeElement);
+      const candidates = [
+        focusOrigin,
+        ...focusFallbackSelectorsRef.current.map((selector) => document.querySelector<HTMLElement>(selector)),
+      ];
+      const focusTarget = candidates.find((candidate): candidate is HTMLElement => candidate !== null && canFocus(candidate));
+      if (!hasValidFocus) focusTarget?.focus({ preventScroll: true });
+    });
+  };
+  const save = async () => {
+    if (savePendingRef.current) return;
+    savePendingRef.current = true;
+    try {
+      await onSave(value);
+    } finally {
+      savePendingRef.current = false;
+    }
+  };
 
   return (
     <Drawer
+      ref={contentRef}
       opened
-      onClose={onClose}
+      onClose={closeDrawer}
       position="right"
       size={360}
       withinPortal={withinPortal}
@@ -48,7 +88,7 @@ export function SettingsPanel({ relayUrl, defaultRelayUrl, onSave, onClose, onCl
           spellCheck={false}
         />
         <div className="pwa-settings-note"><Check size={15} /><span>Owner identity and session history live in this browser only.</span></div>
-        <Button className="pwa-primary-button" type="button" onClick={() => void onSave(value)}>Save settings</Button>
+        <Button className="pwa-primary-button" type="button" onClick={() => void save()}>Save settings</Button>
         <Button className="pwa-secondary-button pwa-layout-reset-button" type="button" variant="default" leftSection={<RefreshCw size={15} />} onClick={onResetLayout}>Reset layout</Button>
         <Text component="small" className="pwa-layout-reset-note">Closes panels, restores the chat scroll, and recalculates the viewport. Local data is kept.</Text>
         <Button className="pwa-danger-button" type="button" variant="outline" color="red" leftSection={<Trash2 size={15} />} onClick={() => void onClearData()}>Clear local data</Button>

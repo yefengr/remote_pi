@@ -12,13 +12,15 @@ function renderMenu(): string {
   );
 }
 
-test("renders a Mantine menu trigger with refresh and settings actions", () => {
+test("renders a closed Mantine menu trigger without its actions", () => {
   const html = renderMenu();
 
   assert.match(html, /mantine-ActionIcon-root/);
   assert.match(html, /aria-label="More options"/);
   assert.match(html, /title="More options"/);
-  assert.match(html, /Refresh app/);
-  assert.match(html, /Settings/);
-  assert.match(html, /role="menuitem"/);
+  assert.match(html, /aria-haspopup="menu"/);
+  assert.match(html, /aria-expanded="false"/);
+  assert.doesNotMatch(html, /Refresh app/);
+  assert.doesNotMatch(html, /Settings/);
+  assert.doesNotMatch(html, /role="menuitem"/);
 });

@@ -1,23 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ActionIcon, Menu } from "@mantine/core";
 import { MoreHorizontal, RefreshCw, Settings } from "lucide-react";
 
 type MobileTopbarMenuProps = {
-  onRefresh: () => void | Promise<void>;
+  onRefresh: () => void | Promise<unknown>;
   onOpenSettings: () => void;
 };
 
 export function MobileTopbarMenu({ onRefresh, onOpenSettings }: MobileTopbarMenuProps) {
   const [open, setOpen] = useState(false);
+  const refreshPending = useRef(false);
 
   return <div className="pwa-mobile-menu">
     <Menu
       closeOnEscape
       closeOnClickOutside
-      keepMounted
-      keepMountedMode="display-none"
       onChange={setOpen}
       opened={open}
       position="bottom-end"
@@ -29,12 +28,18 @@ export function MobileTopbarMenu({ onRefresh, onOpenSettings }: MobileTopbarMenu
           <MoreHorizontal size={20} />
         </ActionIcon>
       </Menu.Target>
-      <Menu.Dropdown>
+      <Menu.Dropdown className="pwa-mobile-menu-panel">
         <Menu.Item
           leftSection={<RefreshCw size={17} />}
-          onClick={() => {
+          onClick={async () => {
+            if (refreshPending.current) return;
+            refreshPending.current = true;
             setOpen(false);
-            void onRefresh();
+            try {
+              await onRefresh();
+            } finally {
+              refreshPending.current = false;
+            }
           }}
         >
           Refresh app
