@@ -1,6 +1,6 @@
 # 计划 66 — Site UI 组件库引入与 PWA 迁移
 
-**状态：进行中（Phase 0 已完成，Phase 1 已完成）**
+**状态：进行中（Phase 0–2 已完成）**
 **跨计划调度：见 [Plan 68 — PWA UI 与自动化测试交付路线](68-pwa-ui-quality-roadmap.md)**
 **范围：`site/` 前端，优先 PWA**
 **基线：Next.js 16、React 19、TypeScript、Tailwind CSS 4**
@@ -202,7 +202,7 @@ wrapper 必须保持轻量。简单的 `Button` 或 `Badge` 可以直接导出 M
 
 ### Phase 2 — 基础控件
 
-**状态：进行中，待后续提交**
+**状态：已完成（2026-08-29）**
 
 迁移 Button、ActionIcon、TextInput、Textarea、Select、Badge、Tooltip，并逐步删除对应的重复样式。
 
@@ -215,7 +215,7 @@ wrapper 必须保持轻量。简单的 `Button` 或 `Badge` 可以直接导出 M
 - 所有 icon-only 操作有可访问名称；
 - 状态文本不能只依赖颜色。
 
-**验收：**PWA 常用基础控件不再依赖重复手写 Button/Input/Badge 行为；类型检查、Lint、组件测试和移动端 smoke 通过。
+**验收：**已在 `site/src/components/ui/` 建立 Button、IconButton、Input、Textarea、Select、Badge 和 Tooltip 薄 wrapper，PWA 生产消费者不再直接导入对应 Mantine 基础控件；共享 tone、状态、44px 触摸目标和输入尺寸已收敛，重复基础 Button/Input/Badge 行为样式已删除。legacy 128/128、Browser Mode 64/64、coverage 64/64、TypeScript、受影响 ESLint、production build、桌面与 `390×844` 测试环境 smoke 和独立审查均通过；全量 Lint 仍仅受既有生成文件 `site/public/sw.js` 的 `@typescript-eslint/no-this-alias` 阻断。实现提交：`b06f15d`。
 
 ### Phase 3 — 业务组件收敛
 

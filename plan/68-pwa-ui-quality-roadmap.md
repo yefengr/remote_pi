@@ -31,8 +31,8 @@
 | Plan 67 | Phase 1：基础设施与确认 Modal 试点 | 已完成 | Vitest Node/Browser Mode、Chromium provider、Browser render harness 和确认操作测试已建立并通过验证。 |
 | Plan 67 | Phase 2：高风险交互组件 | 已完成 | Rename、Settings、Session Drawer、Composer、Mobile Menu、QR Scanner 和 Service Worker Notice UI 覆盖已完成；Browser 56/56，legacy 128/128，coverage 56/56，TypeScript、受影响 ESLint、production build 和 diff check 已通过。 |
 | Plan 66 | Phase 0–1 | 已完成 | Mantine 基础设施和 Overlay 迁移已完成。 |
-| Plan 66 | Phase 2：基础控件 | 进行中 | 主要迁移提交已存在；仍需盘点 Button、ActionIcon、TextInput、Textarea、Select、Badge、Tooltip 的剩余范围、重复 CSS 和验收缺口，完成后才能标记已完成。 |
-| Plan 67 | Phase 3：统一 Node 测试 API | 待开始 | 首批范围已冻结为 4 个纯 TypeScript 测试文件、9 项测试，但在 Plan 66 Phase 2 收口前不启动实现。 |
+| Plan 66 | Phase 2：基础控件 | 已完成 | 项目 UI wrapper、生产消费者迁移、共享样式收敛和 44px/Select Browser 覆盖已完成；legacy 128/128、Browser/coverage 64/64、TypeScript、受影响 ESLint、production build、测试环境 QA 和独立审查通过。实现提交：`b06f15d`。 |
+| Plan 67 | Phase 3：统一 Node 测试 API | 待开始 | 首批范围已冻结为 4 个纯 TypeScript 测试文件、9 项测试；Plan 66 Phase 2 前置条件已满足，作为下一实施阶段。 |
 
 当前已形成的 Plan 67 Phase 2 本地提交：
 
@@ -41,13 +41,17 @@
 - `653f6ff9`：修复 QR Scanner 生命周期竞态；
 - `601a8003`：补充 Service Worker 通知浏览器测试。
 
+Plan 66 Phase 2 本地提交：
+
+- `b06f15d`：标准化 PWA 基础控件，收敛共享样式并补齐真实浏览器尺寸与 Select 覆盖。
+
 `plan/67-pwa-automated-testing.md` 保持原样和未跟踪状态，不作为本次调度文档变更的一部分。
 
 ## 3. 执行顺序
 
 ### 阶段 A：Plan 66 Phase 2 收口
 
-**当前优先级：进行中**
+**状态：已完成（2026-08-29）**
 
 工作范围：
 
@@ -66,7 +70,7 @@
 
 ### 阶段 B：Plan 67 Phase 3 首批 Node 迁移
 
-**前置条件：阶段 A 完成**
+**当前优先级：待开始（阶段 A 已完成）**
 
 首批范围固定为：
 
@@ -88,7 +92,7 @@ site/src/lib/remote-pi/protocol.test.ts → protocol.node.test.ts
 
 - Node project 9/9 通过；
 - legacy 测试从 128 降为 119；
-- 总测试量保持 175：119 legacy + 9 Node + 56 Browser；
+- 总测试量保持 192：119 legacy + 9 Node + 64 Browser；
 - coverage、TypeScript、受影响 ESLint、production build 和 `git diff --check` 通过；
 - 独立只读审查确认迁移未改变测试语义。
 
