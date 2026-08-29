@@ -2,53 +2,100 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ActionIcon, Button } from "@mantine/core";
-import { BrowserQRCodeReader } from "@zxing/browser";
+import { BrowserQRCodeReader, type IScannerControls } from "@zxing/browser";
 import { ImageUp, X } from "lucide-react";
+
+function stopControls(controls: IScannerControls | null, stoppedControls: WeakSet<IScannerControls>) {
+  if (!controls || stoppedControls.has(controls)) return;
+  stoppedControls.add(controls);
+  controls.stop();
+}
 
 export function QrScanner({ onScan, onClose }: { onScan: (value: string) => void; onClose: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const controlsRef = useRef<{ stop: () => void } | null>(null);
+  const controlsRef = useRef<IScannerControls | null>(null);
+  const stoppedControlsRef = useRef<WeakSet<IScannerControls>>(new WeakSet());
+  const scannerStateRef = useRef({ active: false, claimed: false });
+  const onScanRef = useRef(onScan);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    onScanRef.current = onScan;
+  }, [onScan]);
+
+  const claimFirstResult = () => {
+    const scannerState = scannerStateRef.current;
+    if (!scannerState.active || scannerState.claimed) return false;
+    scannerState.claimed = true;
+    return true;
+  };
+
+  useEffect(() => {
+    const scannerState = { active: true, claimed: false };
+    const stoppedControls = stoppedControlsRef.current;
+    scannerStateRef.current = scannerState;
     const reader = new BrowserQRCodeReader();
-    let active = true;
+    const handleControls = (controls: IScannerControls) => {
+      if (!scannerState.active || scannerState.claimed) {
+        stopControls(controls, stoppedControls);
+        return false;
+      }
+      controlsRef.current = controls;
+      return true;
+    };
+
     void reader
       .decodeFromConstraints(
         { audio: false, video: { facingMode: { ideal: "environment" } } },
         videoRef.current ?? undefined,
         (result, decodeError, controls) => {
-          controlsRef.current = controls;
-          if (!active || !result) {
-            if (decodeError && decodeError.name !== "NotFoundException") setError("Could not read this QR code.");
+          if (!handleControls(controls)) return;
+          if (result) {
+            if (!claimFirstResult()) return;
+            stopControls(controlsRef.current, stoppedControls);
+            onScanRef.current(result.getText());
             return;
           }
-          active = false;
-          controls.stop();
-          onScan(result.getText());
+          if (decodeError && decodeError.name !== "NotFoundException" && scannerState.active && !scannerState.claimed) {
+            setError("Could not read this QR code.");
+          }
         },
       )
-      .catch(() => setError("Camera access was unavailable. Use an image instead."));
+      .then((controls) => {
+        handleControls(controls);
+      })
+      .catch(() => {
+        if (scannerState.active && !scannerState.claimed) {
+          setError("Camera access was unavailable. Use an image instead.");
+        }
+      });
 
     return () => {
-      active = false;
-      controlsRef.current?.stop();
+      scannerState.active = false;
+      stopControls(controlsRef.current, stoppedControls);
+      controlsRef.current = null;
     };
-  }, [onScan]);
+  }, []);
 
   const scanImage = async (file: File | undefined) => {
     if (!file) return;
     const url = URL.createObjectURL(file);
+    let result;
     try {
-      const result = await new BrowserQRCodeReader().decodeFromImageUrl(url);
-      controlsRef.current?.stop();
-      onScan(result.getText());
+      result = await new BrowserQRCodeReader().decodeFromImageUrl(url);
     } catch {
-      setError("No Remote Pi QR code was found in that image.");
+      const scannerState = scannerStateRef.current;
+      if (scannerState.active && !scannerState.claimed) {
+        setError("No Remote Pi QR code was found in that image.");
+      }
+      return;
     } finally {
       URL.revokeObjectURL(url);
     }
+    if (!claimFirstResult()) return;
+    stopControls(controlsRef.current, stoppedControlsRef.current);
+    onScanRef.current(result.getText());
   };
 
   return (
