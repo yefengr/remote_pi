@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type FormEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type FormEvent, type Ref } from "react";
 import { ActionIcon, Button, Menu, Popover, Textarea } from "@mantine/core";
 import { Camera, ImagePlus, LoaderCircle, Plus, Send, Slash, Square, X } from "lucide-react";
 import { ComposerCommandMenu, type ComposerCommandAction } from "./composer-command-menu";
@@ -18,10 +18,12 @@ type ComposerImageMenuProps = {
   onChange: (opened: boolean) => void;
   onChooseImage: () => void;
   onUseCamera: () => void;
+  returnFocus?: boolean;
+  triggerRef?: Ref<HTMLButtonElement>;
   withinPortal?: boolean;
 };
 
-export function ComposerImageMenu({ disabled, opened, onChange, onChooseImage, onUseCamera, withinPortal = true }: ComposerImageMenuProps) {
+export function ComposerImageMenu({ disabled, opened, onChange, onChooseImage, onUseCamera, returnFocus = true, triggerRef, withinPortal = true }: ComposerImageMenuProps) {
   return <Menu
     closeOnEscape
     closeOnClickOutside
@@ -30,18 +32,38 @@ export function ComposerImageMenu({ disabled, opened, onChange, onChooseImage, o
     opened={opened}
     portalProps={{ target: ".pwa-root" }}
     position="top-start"
+    returnFocus={returnFocus}
     transitionProps={{ duration: 0 }}
     withinPortal={withinPortal}
     zIndex={21}
   >
     <Menu.Target>
-      <ActionIcon className="pwa-composer-icon" type="button" size="lg" variant="subtle" disabled={disabled} aria-label="Add image" title="Add image"><Plus size={19} /></ActionIcon>
+      <ActionIcon ref={triggerRef} className="pwa-composer-icon" type="button" size="lg" variant="subtle" disabled={disabled} aria-label="Add image" title="Add image"><Plus size={19} /></ActionIcon>
     </Menu.Target>
     <Menu.Dropdown className="pwa-composer-menu-panel" style={{ bottom: "auto" }}>
       <Menu.Item leftSection={<ImagePlus size={17} />} onClick={onChooseImage}>Choose image</Menu.Item>
       <Menu.Item leftSection={<Camera size={17} />} onClick={onUseCamera}>Use camera</Menu.Item>
     </Menu.Dropdown>
   </Menu>;
+}
+
+function hasValidPageFocus() {
+  const activeElement = document.activeElement;
+  return activeElement instanceof HTMLElement
+    && activeElement !== document.body
+    && activeElement !== document.documentElement
+    && activeElement.isConnected;
+}
+
+function scheduleFocusReturn(
+  frameRef: { current: number | null },
+  triggerRef: { current: HTMLButtonElement | null },
+) {
+  if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+  frameRef.current = requestAnimationFrame(() => {
+    frameRef.current = null;
+    if (!hasValidPageFocus()) triggerRef.current?.focus({ preventScroll: true });
+  });
 }
 
 type MessageComposerProps = {
@@ -96,30 +118,29 @@ export function MessageComposer({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const imageTriggerRef = useRef<HTMLButtonElement | null>(null);
   const commandTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const imageMenuOpenRef = useRef(false);
   const commandMenuOpenRef = useRef(false);
+  const imageFocusFrameRef = useRef<number | null>(null);
   const commandFocusFrameRef = useRef<number | null>(null);
   const sendPendingRef = useRef(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [commandMenuOpen, setCommandMenuOpen] = useState(false);
 
-  const setCommandMenuOpened = (opened: boolean) => {
+  const setImageMenuOpened = useCallback((opened: boolean) => {
+    const wasOpen = imageMenuOpenRef.current;
+    imageMenuOpenRef.current = opened;
+    setMenuOpen(opened);
+    if (!opened && wasOpen) scheduleFocusReturn(imageFocusFrameRef, imageTriggerRef);
+  }, []);
+
+  const setCommandMenuOpened = useCallback((opened: boolean) => {
     const wasOpen = commandMenuOpenRef.current;
     commandMenuOpenRef.current = opened;
     setCommandMenuOpen(opened);
-    if (!opened && wasOpen) {
-      if (commandFocusFrameRef.current !== null) cancelAnimationFrame(commandFocusFrameRef.current);
-      commandFocusFrameRef.current = requestAnimationFrame(() => {
-        commandFocusFrameRef.current = null;
-        const activeElement = document.activeElement;
-        const hasValidFocus = activeElement instanceof HTMLElement
-          && activeElement !== document.body
-          && activeElement !== document.documentElement
-          && activeElement.isConnected;
-        if (!hasValidFocus) commandTriggerRef.current?.focus({ preventScroll: true });
-      });
-    }
-  };
+    if (!opened && wasOpen) scheduleFocusReturn(commandFocusFrameRef, commandTriggerRef);
+  }, []);
 
   const resizeTextarea = () => {
     const textarea = textareaRef.current;
@@ -141,9 +162,10 @@ export function MessageComposer({
     };
     document.addEventListener("keydown", closeCommandMenuOnEscape);
     return () => document.removeEventListener("keydown", closeCommandMenuOnEscape);
-  }, [commandMenuOpen]);
+  }, [commandMenuOpen, setCommandMenuOpened]);
 
   useEffect(() => () => {
+    if (imageFocusFrameRef.current !== null) cancelAnimationFrame(imageFocusFrameRef.current);
     if (commandFocusFrameRef.current !== null) cancelAnimationFrame(commandFocusFrameRef.current);
   }, []);
 
@@ -169,18 +191,18 @@ export function MessageComposer({
   };
 
   const chooseImage = () => {
-    setMenuOpen(false);
+    setImageMenuOpened(false);
     fileInputRef.current?.click();
   };
 
   const useCamera = () => {
-    setMenuOpen(false);
+    setImageMenuOpened(false);
     cameraInputRef.current?.click();
   };
 
   const toggleCommands = () => {
     const nextOpen = !commandMenuOpenRef.current;
-    setMenuOpen(false);
+    setImageMenuOpened(false);
     setCommandMenuOpened(nextOpen);
     if (nextOpen) onCommandsOpen();
   };
@@ -200,10 +222,12 @@ export function MessageComposer({
                 opened={menuOpen}
                 onChange={(opened) => {
                   if (opened) setCommandMenuOpened(false);
-                  setMenuOpen(opened);
+                  setImageMenuOpened(opened);
                 }}
                 onChooseImage={chooseImage}
                 onUseCamera={useCamera}
+                returnFocus={false}
+                triggerRef={imageTriggerRef}
               />
             </div>
             <div className="pwa-composer-command">

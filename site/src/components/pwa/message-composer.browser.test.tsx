@@ -105,6 +105,10 @@ function closePopoverFromOutside() {
   document.body.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
 }
 
+async function settleOverlayFocus() {
+  await new Promise<void>((resolve) => window.setTimeout(resolve, 30));
+}
+
 test("portals mutually exclusive image and Pi command menus, then returns focus after closing", async () => {
   const screen = await renderPwa(<ComposerHarness />);
   const imageTrigger = screen.getByRole("button", { name: "Add image" });
@@ -130,6 +134,8 @@ test("portals mutually exclusive image and Pi command menus, then returns focus 
   const commandsMenu = screen.getByRole("menu", { name: "Pi commands" });
   await expect.element(commandsMenu).toBeVisible();
   expect(commandsMenu.element().closest(".pwa-root")).not.toBeNull();
+  await settleOverlayFocus();
+  await expect.element(commandTrigger).toHaveFocus();
   const modelCommand = screen.getByRole("menuitem", { name: /\/model/ });
   modelCommand.element().focus();
   await expect.element(modelCommand).toHaveFocus();
