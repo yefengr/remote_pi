@@ -32,7 +32,8 @@
 | Plan 67 | Phase 2：高风险交互组件 | 已完成 | Rename、Settings、Session Drawer、Composer、Mobile Menu、QR Scanner 和 Service Worker Notice UI 覆盖已完成；Browser 56/56，legacy 128/128，coverage 56/56，TypeScript、受影响 ESLint、production build 和 diff check 已通过。 |
 | Plan 66 | Phase 0–1 | 已完成 | Mantine 基础设施和 Overlay 迁移已完成。 |
 | Plan 66 | Phase 2：基础控件 | 已完成 | 项目 UI wrapper、生产消费者迁移、共享样式收敛和 44px/Select Browser 覆盖已完成；legacy 128/128、Browser/coverage 64/64、TypeScript、受影响 ESLint、production build、测试环境 QA 和独立审查通过。实现提交：`b06f15d`。 |
-| Plan 67 | Phase 3：统一 Node 测试 API | 待开始 | 首批范围已冻结为 4 个纯 TypeScript 测试文件、9 项测试；Plan 66 Phase 2 前置条件已满足，作为下一实施阶段。 |
+| Plan 67 | Phase 3：统一 Node 测试 API | 已完成首批 | 4 个纯 TypeScript 测试文件、9 项测试已迁移到 Vitest Node；legacy 119/119、Node 9/9、Browser 64/64、coverage 73/73、TypeScript、受影响 ESLint、production build 和独立审查通过。实现提交：`88f875a`。 |
+| Plan 67 | Phase 4：`/app` E2E 基线 | 已完成 | 独立 Playwright Test 基线覆盖 production standalone 启动、IndexedDB 隔离 fixture、Settings、Session Drawer、Composer、清库确认、desktop/mobile viewport 和真实 Service Worker 注册。E2E 8/8，重复运行 16/16；TypeScript、受影响 ESLint、现有 Node/legacy/Browser/coverage、production build、diff check 和独立审查通过。实现提交：`79922cc`。 |
 
 当前已形成的 Plan 67 Phase 2 本地提交：
 
@@ -44,6 +45,14 @@
 Plan 66 Phase 2 本地提交：
 
 - `b06f15d`：标准化 PWA 基础控件，收敛共享样式并补齐真实浏览器尺寸与 Select 覆盖。
+
+Plan 67 Phase 3 首批 Node 迁移本地提交：
+
+- `88f875a`：将 encoding、crypto、pairing 和 protocol 的 9 项纯逻辑测试迁移到 Vitest Node。
+
+Plan 67 Phase 4 `/app` E2E 基线本地提交：
+
+- `79922cc`：建立独立 Playwright Test 配置、standalone server、IndexedDB fixture 及 desktop/mobile 关键流程覆盖。
 
 `plan/67-pwa-automated-testing.md` 保持原样和未跟踪状态，不作为本次调度文档变更的一部分。
 
@@ -70,7 +79,7 @@ Plan 66 Phase 2 本地提交：
 
 ### 阶段 B：Plan 67 Phase 3 首批 Node 迁移
 
-**当前优先级：待开始（阶段 A 已完成）**
+**状态：已完成（2026-08-29）**
 
 首批范围固定为：
 
@@ -98,7 +107,7 @@ site/src/lib/remote-pi/protocol.test.ts → protocol.node.test.ts
 
 ### 阶段 C：Plan 67 Phase 4 `/app` E2E 基线
 
-**前置条件：阶段 B 完成**
+**状态：已完成（2026-08-29）**
 
 建立最小 Playwright Test 基线，覆盖：
 
@@ -119,7 +128,7 @@ site/src/lib/remote-pi/protocol.test.ts → protocol.node.test.ts
 
 ### 阶段 D：Plan 66 Phase 3 业务组件收敛
 
-**前置条件：阶段 C 完成**
+**当前优先级：待开始（阶段 C 已完成）**
 
 按 Plan 66 的范围推进 `PairingRecordCard`、`SessionList`/`SessionRow`、PwaApp view model 和 feature hooks 的拆分。先使用已建立的 Browser Mode 与 `/app` E2E 基线锁定行为，再进行结构调整。
 
