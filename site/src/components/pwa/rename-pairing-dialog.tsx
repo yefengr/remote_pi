@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, Group, Modal, Stack, Text, TextInput } from "@mantine/core";
 import type { PwaPeerRecord } from "@/lib/pwa/db";
 import { displayPeer } from "@/components/pwa/workspace-view";
@@ -9,41 +9,80 @@ type RenamePairingDialogProps = {
   peer: PwaPeerRecord;
   onSave: (nickname: string) => Promise<void>;
   onClose: () => void;
+  focusOrigin?: HTMLElement | null;
+  focusFallbackSelectors?: readonly string[];
 };
 
 function suggestedName(peer: PwaPeerRecord): string {
   return peer.nickname || (peer.hostname ? `Pi on ${peer.hostname}` : "");
 }
 
-export function RenamePairingDialog({ peer, onSave, onClose }: RenamePairingDialogProps) {
+export function RenamePairingDialog({ peer, onSave, onClose, focusOrigin = null, focusFallbackSelectors = [] }: RenamePairingDialogProps) {
   const [value, setValue] = useState(() => suggestedName(peer));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const savingRef = useRef(false);
+  const mountedRef = useRef(false);
+  const focusOriginRef = useRef<HTMLElement | null>(focusOrigin);
+  const focusOriginCapturedRef = useRef(focusOrigin !== null);
+  const focusFallbackSelectorsRef = useRef(focusFallbackSelectors);
+
   useEffect(() => {
+    mountedRef.current = true;
+    if (!focusOriginCapturedRef.current) {
+      focusOriginCapturedRef.current = true;
+      const activeElement = document.activeElement;
+      focusOriginRef.current = activeElement instanceof HTMLElement && activeElement !== document.body && activeElement !== document.documentElement
+        ? activeElement
+        : null;
+    }
     const input = document.getElementById("pwa-rename-input") as HTMLInputElement | null;
     input?.focus();
     input?.select();
+    return () => {
+      mountedRef.current = false;
+    };
   }, []);
 
+  const restoreFocusAndClose = () => {
+    if (savingRef.current) return;
+    const candidates = [
+      focusOriginRef.current,
+      ...focusFallbackSelectorsRef.current.map((selector) => document.querySelector<HTMLElement>(selector)),
+    ];
+    const focusTarget = candidates.find((candidate): candidate is HTMLElement => (
+      candidate !== null
+      && candidate.isConnected
+      && !candidate.matches(":disabled")
+      && candidate.getClientRects().length > 0
+      && !candidate.closest('[aria-hidden="true"]')
+    ));
+    focusTarget?.focus({ preventScroll: true });
+    onClose();
+  };
 
   const nickname = value.trim();
   const submit = async () => {
-    if (!nickname || saving) return;
+    if (!nickname || savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     setSaveError(null);
+    let saved = false;
     try {
       await onSave(nickname);
-      onClose();
+      saved = true;
     } catch {
-      setSaveError("Could not save this pairing name. Try again.");
+      if (mountedRef.current) setSaveError("Could not save this pairing name. Try again.");
     } finally {
-      setSaving(false);
+      savingRef.current = false;
+      if (mountedRef.current) setSaving(false);
     }
+    if (saved && mountedRef.current) restoreFocusAndClose();
   };
 
   return <Modal
     opened
-    onClose={onClose}
+    onClose={restoreFocusAndClose}
     title={<div><span className="pwa-kicker">Pairing record</span><Text component="h2" id="pwa-rename-title">Rename pairing</Text></div>}
     aria-labelledby="pwa-rename-title"
     aria-describedby="pwa-rename-description"
@@ -72,12 +111,12 @@ export function RenamePairingDialog({ peer, onSave, onClose }: RenamePairingDial
           autoCapitalize="words"
           autoCorrect="off"
           spellCheck={false}
-          autoFocus
+          data-autofocus
           disabled={saving}
         />
         {saveError ? <Text component="p" className="pwa-error" role="alert">{saveError}</Text> : null}
         <Group className="pwa-rename-actions" justify="flex-end" gap="xs">
-          <Button className="pwa-secondary-button" type="button" variant="default" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button className="pwa-secondary-button" type="button" variant="default" onClick={restoreFocusAndClose} disabled={saving}>Cancel</Button>
           <Button className="pwa-primary-button" type="submit" disabled={!nickname || saving}>{saving ? "Saving…" : "Save"}</Button>
         </Group>
       </form>

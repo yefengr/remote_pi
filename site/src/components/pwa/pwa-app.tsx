@@ -123,6 +123,12 @@ export function canCloseBackgroundOverlay(confirmOpen: boolean, confirmPending: 
   return !confirmOpen && !confirmPending;
 }
 
+type RenamePairingRequest = {
+  peer: PwaPeerRecord;
+  focusOrigin: HTMLElement | null;
+  focusFallbackSelectors: readonly string[];
+};
+
 type PairingProbe = {
   relay: RelayClient;
   dispose: () => void;
@@ -164,7 +170,7 @@ export function PwaApp() {
   const [pairState, setPairState] = useState<PairState>("idle");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sessionSheetOpen, setSessionSheetOpen] = useState(false);
-  const [renamingPeer, setRenamingPeer] = useState<PwaPeerRecord | null>(null);
+  const [renameRequest, setRenameRequest] = useState<RenamePairingRequest | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmActionRequest | null>(null);
   const [confirmPending, setConfirmPending] = useState(false);
   const [confirmError, setConfirmError] = useState<string | null>(null);
@@ -1456,7 +1462,7 @@ export function PwaApp() {
     if (confirmPendingRef.current) return;
     setSettingsOpen(false);
     setSessionSheetOpen(false);
-    setRenamingPeer(null);
+    setRenameRequest(null);
     setConfirmAction(null);
     setConfirmPending(false);
     setConfirmError(null);
@@ -1490,8 +1496,18 @@ export function PwaApp() {
     setSessionSheetOpen(false);
   }, []);
   const openRenamePeer = useCallback((peer: PwaPeerRecord) => {
+    setRenameRequest({
+      peer,
+      focusOrigin: document.activeElement instanceof HTMLElement ? document.activeElement : null,
+      focusFallbackSelectors: [
+        'button[aria-label="Open session switcher"]',
+        '.pwa-sidebar button[aria-label^="Rename "]',
+      ],
+    });
     setSessionSheetOpen(false);
-    setRenamingPeer(peer);
+  }, []);
+  const closeRenamePeer = useCallback(() => {
+    setRenameRequest(null);
   }, []);
   const closeSettings = useCallback(() => {
     if (!canCloseBackgroundOverlay(confirmOpenRef.current, confirmPendingRef.current)) return;
@@ -1533,7 +1549,7 @@ export function PwaApp() {
         {settingsOpen ? <SettingsPanel relayUrl={relayUrl} defaultRelayUrl={DEFAULT_RELAY} onSave={saveRelayUrl} onClose={closeSettings} onClearData={clearLocalData} onResetLayout={resetLayout} /> : null}
       </div>
       {sessionSheetOpen ? <SessionSheet peers={peers} rooms={rooms} activePeerId={activePeerId} activeRoomId={roomId} pairingPresence={pairingPresence} onSelectPeer={selectPeer} onSelectRoom={selectRoom} onPair={() => setPairState("scanning")} onRename={openRenamePeer} onRemove={(peer) => void removePeer(peer)} onClose={closeSessionSheet} /> : null}
-      {renamingPeer ? <RenamePairingDialog peer={renamingPeer} onSave={(nickname) => savePeerNickname(renamingPeer, nickname)} onClose={() => setRenamingPeer(null)} /> : null}
+      {renameRequest ? <RenamePairingDialog peer={renameRequest.peer} onSave={(nickname) => savePeerNickname(renameRequest.peer, nickname)} onClose={closeRenamePeer} focusOrigin={renameRequest.focusOrigin} focusFallbackSelectors={renameRequest.focusFallbackSelectors} /> : null}
       {pairState !== "idle" ? <div className="pwa-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && pairState === "scanning") setPairState("idle"); }} role="presentation">{pairState === "scanning" ? <PairingDialog onScan={pairFromQr} onClose={() => setPairState("idle")} /> : <div className="pwa-pairing-card"><Activity className="pwa-spin" /><span className="pwa-kicker">Pairing</span><h2>Connecting to your Pi</h2><p>Waiting for the Pi to confirm this browser.</p></div>}</div> : null}
       <ConfirmActionDialog action={confirmAction?.kind === "remove-pairing" ? { kind: confirmAction.kind, label: confirmAction.label } : confirmAction} pending={confirmPending} error={confirmError} onConfirm={() => { void confirmRequestedAction(); }} onClose={closeConfirmAction} onExitTransitionEnd={restoreConfirmFocus} />
       <PwaStatusToast message={error} onDismiss={() => setError(null)} />
