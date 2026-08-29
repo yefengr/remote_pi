@@ -1,6 +1,7 @@
 # 计划 66 — Site UI 组件库引入与 PWA 迁移
 
 **状态：进行中（Phase 0 已完成，Phase 1 已完成）**
+**跨计划调度：见 [Plan 68 — PWA UI 与自动化测试交付路线](68-pwa-ui-quality-roadmap.md)**
 **范围：`site/` 前端，优先 PWA**
 **基线：Next.js 16、React 19、TypeScript、Tailwind CSS 4**
 
