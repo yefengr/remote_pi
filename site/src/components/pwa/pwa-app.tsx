@@ -4,6 +4,7 @@ import { Select } from "@mantine/core";
 import { Activity } from "lucide-react";
 import { MessageComposer } from "@/components/pwa/message-composer";
 import { RenamePairingDialog } from "@/components/pwa/rename-pairing-dialog";
+import { ConfirmActionDialog } from "@/components/pwa/confirm-action-dialog";
 import { COMPOSER_THINKING_LEVELS, type ComposerCommandAction } from "@/components/pwa/composer-command-menu";
 import { MessageList } from "@/components/pwa/message-list";
 import { describeStartupFailure, PairingDialog, StartupErrorView, StartupLoading, type StartupError } from "@/components/pwa/pwa-startup";
@@ -57,6 +58,71 @@ type ComposerCommandRequest =
   | { action: "session_new" | "session_compact" }
   | { action: "model_set"; provider: string; modelId: string }
   | { action: "thinking_set"; level: ThinkingLevel };
+export type ConfirmActionRequest =
+  | { kind: "new-session" }
+  | { kind: "remove-pairing"; label: string; peer: PwaPeerRecord }
+  | { kind: "clear-local-data" };
+
+type ConfirmActionEffects = {
+  startNewSession: () => boolean;
+  removePairing: (peer: PwaPeerRecord) => Promise<void>;
+  invalidateConnection: () => void;
+  clearLocalData: () => Promise<void>;
+  reload: () => void;
+};
+
+type ConfirmActionState = {
+  pendingRef: { current: boolean };
+  setPending: (pending: boolean) => void;
+  setError: (error: string | null) => void;
+  onSuccess: () => void;
+};
+
+export async function runConfirmAction(action: ConfirmActionRequest, effects: ConfirmActionEffects, state: ConfirmActionState): Promise<"completed" | "failed" | "ignored"> {
+  if (state.pendingRef.current) return "ignored";
+  state.pendingRef.current = true;
+  state.setPending(true);
+  state.setError(null);
+  try {
+    switch (action.kind) {
+      case "new-session":
+        if (!effects.startNewSession()) throw new Error("Could not start a fresh session. Check the connection and try again.");
+        state.onSuccess();
+        break;
+      case "remove-pairing":
+        await effects.removePairing(action.peer);
+        state.onSuccess();
+        break;
+      case "clear-local-data":
+        effects.invalidateConnection();
+        await effects.clearLocalData();
+        effects.reload();
+        break;
+    }
+    return "completed";
+  } catch (error) {
+    state.setError(error instanceof Error ? error.message : "Could not complete this action. Try again.");
+    return "failed";
+  } finally {
+    state.pendingRef.current = false;
+    state.setPending(false);
+  }
+}
+
+export function pickConfirmationFocusFallback<T>(
+  activeElement: T | null,
+  candidates: readonly (T | null)[],
+  shouldKeepActive: (element: T) => boolean,
+  canFocus: (element: T) => boolean,
+): T | null {
+  if (activeElement !== null && shouldKeepActive(activeElement)) return null;
+  return candidates.find((candidate): candidate is T => candidate !== null && canFocus(candidate)) ?? null;
+}
+
+export function canCloseBackgroundOverlay(confirmOpen: boolean, confirmPending: boolean): boolean {
+  return !confirmOpen && !confirmPending;
+}
+
 type PairingProbe = {
   relay: RelayClient;
   dispose: () => void;
@@ -99,6 +165,13 @@ export function PwaApp() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sessionSheetOpen, setSessionSheetOpen] = useState(false);
   const [renamingPeer, setRenamingPeer] = useState<PwaPeerRecord | null>(null);
+  const [confirmAction, setConfirmAction] = useState<ConfirmActionRequest | null>(null);
+  const [confirmPending, setConfirmPending] = useState(false);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
+  const confirmPendingRef = useRef(false);
+  const confirmOpenRef = useRef(false);
+  const confirmFocusOriginRef = useRef<HTMLElement | null>(null);
+  const confirmFocusFallbackSelectorsRef = useRef<readonly string[]>([]);
   const [layoutRevision, setLayoutRevision] = useState(0);
   const [selectionReady, setSelectionReady] = useState(false);
   const [followingOutput, setFollowingOutput] = useState(true);
@@ -1149,14 +1222,14 @@ export function PwaApp() {
     }
   }, [clearStopRequest, isCurrentSelection]);
 
-  const sendCommandAction = useCallback((request: ComposerCommandRequest) => {
+  const sendCommandAction = useCallback((request: ComposerCommandRequest): boolean => {
     const peer = activePeerRef.current;
     const channel = channelRef.current;
     const generation = selectionGenerationRef.current;
     const selectedRoom = roomIdRef.current;
     const scope = timelineRuntimeRef.current.currentScope;
     const blocksWhileWorking = request.action === "session_new" || request.action === "session_compact";
-    if (pendingActionRef.current || (blocksWhileWorking && activeRoom?.working === true) || !peer || !channel || !scope || connectionRef.current !== "online" || !isCurrentSelection(generation, peer.id, peer.remoteEpk, selectedRoom, channel, relayRef.current || undefined)) return;
+    if (pendingActionRef.current || (blocksWhileWorking && activeRoom?.working === true) || !peer || !channel || !scope || connectionRef.current !== "online" || !isCurrentSelection(generation, peer.id, peer.remoteEpk, selectedRoom, channel, relayRef.current || undefined)) return false;
     const requestId = id();
     let frame: ClientFrame;
     switch (request.action) {
@@ -1176,13 +1249,26 @@ export function PwaApp() {
     if (!channel.send(frame)) {
       clearPendingAction(requestId);
       setError("Relay is not connected.");
+      return false;
     }
+    return true;
   }, [activeRoom?.working, clearPendingAction, isCurrentSelection]);
+
+  const requestConfirmation = useCallback((action: ConfirmActionRequest, fallbackSelectors: readonly string[]) => {
+    confirmOpenRef.current = true;
+    confirmFocusOriginRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    confirmFocusFallbackSelectorsRef.current = fallbackSelectors;
+    setConfirmError(null);
+    setConfirmAction(action);
+  }, []);
 
   const startNewSession = useCallback(() => {
     if (pendingActionRef.current || activeRoom?.working === true) return;
-    if (window.confirm("Start a fresh session? All Owners in this Session will switch to a fresh session.")) sendCommandAction({ action: "session_new" });
-  }, [activeRoom?.working, sendCommandAction]);
+    requestConfirmation(
+      { kind: "new-session" },
+      ['button[aria-label="Pi commands"]', ".pwa-composer-input"],
+    );
+  }, [activeRoom?.working, requestConfirmation]);
 
   const compactSession = useCallback(() => {
     sendCommandAction({ action: "session_compact" });
@@ -1274,9 +1360,21 @@ export function PwaApp() {
     if (activePeer) restartActiveConnection();
   }, [peers, restartActiveConnection]);
 
-  const removePeer = useCallback(async (peer: PwaPeerRecord) => {
-    const label = `${displayPeer(peer)} / ${peer.roomId || "main"}`;
-    if (!window.confirm(`Delete pairing for ${label}? This removes this Pi/session pairing from this browser.`)) return;
+  const removePeer = useCallback((peer: PwaPeerRecord) => {
+    requestConfirmation(
+      { kind: "remove-pairing", label: `${displayPeer(peer)} / ${peer.roomId || "main"}`, peer },
+      [
+        '.pwa-session-sheet button[aria-label="Close sessions"]',
+        ".pwa-session-sheet .pwa-sheet-peer-select",
+        'button[aria-label="Open session switcher"]',
+        ".pwa-sidebar .pwa-text-button",
+        'button[aria-label="More options"]',
+        'button[aria-label="Open settings"]',
+      ],
+    );
+  }, [requestConfirmation]);
+
+  const removePairingData = useCallback(async (peer: PwaPeerRecord) => {
     const roomKey = makePwaPeerId(peer.remoteEpk, peer.roomId);
     suppressRoomPersistenceRef.current.add(roomKey);
     try {
@@ -1299,16 +1397,69 @@ export function PwaApp() {
   }, []);
 
   const clearLocalData = useCallback(async () => {
-    if (!window.confirm("Clear this browser's Remote Pi identity, pairings, and history?")) return;
-    invalidateConnection();
-    await clearPwaData();
-    window.location.reload();
-  }, [invalidateConnection]);
+    requestConfirmation(
+      { kind: "clear-local-data" },
+      [
+        ".pwa-settings-drawer .pwa-danger-button",
+        ".pwa-sidebar .pwa-text-button",
+        'button[aria-label="More options"]',
+        'button[aria-label="Open settings"]',
+      ],
+    );
+  }, [requestConfirmation]);
+
+  const closeConfirmAction = useCallback(() => {
+    if (confirmPendingRef.current) return;
+    setConfirmAction(null);
+    setConfirmError(null);
+  }, []);
+
+  const restoreConfirmFocus = useCallback(() => {
+    const dialog = document.querySelector<HTMLElement>(".pwa-confirm-dialog");
+    const candidates = [
+      confirmFocusOriginRef.current,
+      ...confirmFocusFallbackSelectorsRef.current.map((selector) => document.querySelector<HTMLElement>(selector)),
+    ];
+    const fallback = pickConfirmationFocusFallback(
+      document.activeElement instanceof HTMLElement ? document.activeElement : null,
+      candidates,
+      (element) => element !== document.body && element !== document.documentElement && !dialog?.contains(element),
+      (element) => element.isConnected && !element.matches(":disabled") && element.getClientRects().length > 0 && !element.closest('[aria-hidden="true"]'),
+    );
+    fallback?.focus({ preventScroll: true });
+    confirmOpenRef.current = false;
+    confirmFocusOriginRef.current = null;
+    confirmFocusFallbackSelectorsRef.current = [];
+  }, []);
+
+  const confirmRequestedAction = useCallback(async () => {
+    if (!confirmAction) return;
+    await runConfirmAction(
+      confirmAction,
+      {
+        startNewSession: () => sendCommandAction({ action: "session_new" }),
+        removePairing: removePairingData,
+        invalidateConnection,
+        clearLocalData: clearPwaData,
+        reload: () => window.location.reload(),
+      },
+      {
+        pendingRef: confirmPendingRef,
+        setPending: setConfirmPending,
+        setError: setConfirmError,
+        onSuccess: () => setConfirmAction(null),
+      },
+    );
+  }, [confirmAction, invalidateConnection, removePairingData, sendCommandAction]);
 
   const resetLayout = useCallback(() => {
+    if (confirmPendingRef.current) return;
     setSettingsOpen(false);
     setSessionSheetOpen(false);
     setRenamingPeer(null);
+    setConfirmAction(null);
+    setConfirmPending(false);
+    setConfirmError(null);
     setPairState("idle");
     setDraft("");
     setAttachment(null);
@@ -1334,12 +1485,18 @@ export function PwaApp() {
     });
   }, [scrollToLatest]);
 
-  const closeSessionSheet = useCallback(() => setSessionSheetOpen(false), []);
+  const closeSessionSheet = useCallback(() => {
+    if (!canCloseBackgroundOverlay(confirmOpenRef.current, confirmPendingRef.current)) return;
+    setSessionSheetOpen(false);
+  }, []);
   const openRenamePeer = useCallback((peer: PwaPeerRecord) => {
     setSessionSheetOpen(false);
     setRenamingPeer(peer);
   }, []);
-  const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  const closeSettings = useCallback(() => {
+    if (!canCloseBackgroundOverlay(confirmOpenRef.current, confirmPendingRef.current)) return;
+    setSettingsOpen(false);
+  }, []);
   if (startupState === "loading") return <StartupLoading />;
   if (startupState === "error") return <StartupErrorView error={startupError} onRetry={() => window.location.reload()} />;
 
@@ -1378,6 +1535,7 @@ export function PwaApp() {
       {sessionSheetOpen ? <SessionSheet peers={peers} rooms={rooms} activePeerId={activePeerId} activeRoomId={roomId} pairingPresence={pairingPresence} onSelectPeer={selectPeer} onSelectRoom={selectRoom} onPair={() => setPairState("scanning")} onRename={openRenamePeer} onRemove={(peer) => void removePeer(peer)} onClose={closeSessionSheet} /> : null}
       {renamingPeer ? <RenamePairingDialog peer={renamingPeer} onSave={(nickname) => savePeerNickname(renamingPeer, nickname)} onClose={() => setRenamingPeer(null)} /> : null}
       {pairState !== "idle" ? <div className="pwa-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && pairState === "scanning") setPairState("idle"); }} role="presentation">{pairState === "scanning" ? <PairingDialog onScan={pairFromQr} onClose={() => setPairState("idle")} /> : <div className="pwa-pairing-card"><Activity className="pwa-spin" /><span className="pwa-kicker">Pairing</span><h2>Connecting to your Pi</h2><p>Waiting for the Pi to confirm this browser.</p></div>}</div> : null}
+      <ConfirmActionDialog action={confirmAction?.kind === "remove-pairing" ? { kind: confirmAction.kind, label: confirmAction.label } : confirmAction} pending={confirmPending} error={confirmError} onConfirm={() => { void confirmRequestedAction(); }} onClose={closeConfirmAction} onExitTransitionEnd={restoreConfirmFocus} />
       <PwaStatusToast message={error} onDismiss={() => setError(null)} />
     </div>
   );

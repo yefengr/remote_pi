@@ -2156,6 +2156,14 @@ a {
 .pwa-rename-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 22px; }
 .pwa-rename-actions .pwa-secondary-button, .pwa-rename-actions .pwa-primary-button { min-width: 88px; }
 .pwa-rename-actions .pwa-secondary-button:disabled, .pwa-rename-actions .pwa-primary-button:disabled { cursor: wait; }
+.pwa-confirm-dialog { box-sizing: border-box; width: min(460px, 100%); min-width: 0; padding: 24px; border: 1px solid var(--pwa-line-strong); border-radius: 16px; color: var(--pwa-ink); background: #0a0e10; box-shadow: 0 25px 90px rgba(0,0,0,.6); }
+.pwa-confirm-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.pwa-confirm-title { margin: 7px 0 0; font: 600 24px/1.1 var(--ff-display); letter-spacing: -.04em; }
+.pwa-confirm-description { margin: 18px 0 0; color: var(--pwa-dim); font-size: 12px; line-height: 1.55; }
+.pwa-confirm-error { margin: 12px 0 0; color: #ff9b9b; font-size: 12px; line-height: 1.5; }
+.pwa-confirm-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 22px; }
+.pwa-confirm-actions .pwa-secondary-button, .pwa-confirm-actions .pwa-primary-button, .pwa-confirm-actions .pwa-danger-button { min-width: 120px; margin-top: 0; }
+.pwa-confirm-actions .pwa-secondary-button:disabled, .pwa-confirm-actions .pwa-primary-button:disabled, .pwa-confirm-actions .pwa-danger-button:disabled { cursor: wait; }
 .pwa-pairing-dialog { min-width: 0; max-width: 100%; width: min(480px, 100%); max-height: min(92dvh, 760px); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .pwa-scanner, .pwa-pairing-card { box-sizing: border-box; min-width: 0; max-width: 100%; width: 100%; padding: 24px; border: 1px solid var(--pwa-line-strong); border-radius: 18px; background: #0a0e10; box-shadow: 0 25px 90px rgba(0,0,0,.55); }
 .pwa-scanner-frame { position: relative; overflow: hidden; aspect-ratio: 1; margin: 0 auto 16px; border-radius: 13px; background: #020303; }
@@ -2282,6 +2290,10 @@ a {
   .pwa-rename-head h2 { font-size: 21px; }
   .pwa-rename-actions { margin-top: 18px; }
   .pwa-rename-actions .pwa-secondary-button, .pwa-rename-actions .pwa-primary-button { flex: 1; }
+  .pwa-confirm-dialog { width: 100%; padding: 20px 16px calc(16px + var(--pwa-safe-bottom)); border-radius: 16px; }
+  .pwa-confirm-title { font-size: 21px; }
+  .pwa-root .pwa-confirm-actions { flex-direction: column; align-items: stretch; margin-top: 18px; }
+  .pwa-confirm-actions .pwa-secondary-button, .pwa-confirm-actions .pwa-primary-button, .pwa-confirm-actions .pwa-danger-button { width: 100%; min-width: 0; }
   .pwa-session-sheet-head { padding: 18px 14px 13px; }
   .pwa-session-sheet-head h2 { font-size: 21px; }
   .pwa-session-sheet-body { padding-inline: 10px; }
