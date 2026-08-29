@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
+import { expect, test } from "vitest";
 import { decodeBase64 } from "./encoding";
 import { generateOwnerKeyPair, signChallenge, verifyChallenge } from "./crypto";
 
@@ -8,8 +7,8 @@ test("generates an Ed25519 owner identity and verifies Relay challenge signature
   const nonce = new Uint8Array(32);
   globalThis.crypto.getRandomValues(nonce);
   const signature = await signChallenge(identity.privateKey, nonce);
-  assert.equal(decodeBase64(signature).length, 64);
-  assert.equal(await verifyChallenge(identity.publicKey, nonce, signature), true);
+  expect(decodeBase64(signature).length).toBe(64);
+  expect(await verifyChallenge(identity.publicKey, nonce, signature)).toBe(true);
   nonce[0] ^= 1;
-  assert.equal(await verifyChallenge(identity.publicKey, nonce, signature), false);
+  expect(await verifyChallenge(identity.publicKey, nonce, signature)).toBe(false);
 });
