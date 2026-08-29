@@ -96,13 +96,29 @@ export function MessageComposer({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const commandTriggerRef = useRef<HTMLButtonElement | null>(null);
   const commandMenuOpenRef = useRef(false);
+  const commandFocusFrameRef = useRef<number | null>(null);
+  const sendPendingRef = useRef(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [commandMenuOpen, setCommandMenuOpen] = useState(false);
 
   const setCommandMenuOpened = (opened: boolean) => {
+    const wasOpen = commandMenuOpenRef.current;
     commandMenuOpenRef.current = opened;
     setCommandMenuOpen(opened);
+    if (!opened && wasOpen) {
+      if (commandFocusFrameRef.current !== null) cancelAnimationFrame(commandFocusFrameRef.current);
+      commandFocusFrameRef.current = requestAnimationFrame(() => {
+        commandFocusFrameRef.current = null;
+        const activeElement = document.activeElement;
+        const hasValidFocus = activeElement instanceof HTMLElement
+          && activeElement !== document.body
+          && activeElement !== document.documentElement
+          && activeElement.isConnected;
+        if (!hasValidFocus) commandTriggerRef.current?.focus({ preventScroll: true });
+      });
+    }
   };
 
   const resizeTextarea = () => {
@@ -127,12 +143,22 @@ export function MessageComposer({
     return () => document.removeEventListener("keydown", closeCommandMenuOnEscape);
   }, [commandMenuOpen]);
 
+  useEffect(() => () => {
+    if (commandFocusFrameRef.current !== null) cancelAnimationFrame(commandFocusFrameRef.current);
+  }, []);
+
   const hasMessage = Boolean(draft.trim() || attachment);
   const showStop = isOnline && isWorking;
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    void onSend();
+    if (sendPendingRef.current) return;
+    sendPendingRef.current = true;
+    try {
+      await onSend();
+    } finally {
+      sendPendingRef.current = false;
+    }
   };
 
   const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -183,7 +209,7 @@ export function MessageComposer({
             <div className="pwa-composer-command">
               <Popover opened={commandMenuOpen} onChange={setCommandMenuOpened} closeOnClickOutside closeOnEscape position="top-start" offset={{ mainAxis: 8, crossAxis: -52 }} transitionProps={{ duration: 0 }} floatingStrategy="fixed" withinPortal portalProps={{ target: ".pwa-root" }} zIndex={8}>
                 <Popover.Target popupType="menu">
-                  <ActionIcon className="pwa-composer-icon" type="button" size="lg" variant="subtle" onClick={toggleCommands} disabled={!isOnline} aria-label="Pi commands" title="Pi commands"><Slash size={19} /></ActionIcon>
+                  <ActionIcon ref={commandTriggerRef} className="pwa-composer-icon" type="button" size="lg" variant="subtle" onClick={toggleCommands} disabled={!isOnline} aria-label="Pi commands" title="Pi commands"><Slash size={19} /></ActionIcon>
                 </Popover.Target>
                 <Popover.Dropdown className="pwa-command-menu-dropdown" role="menu" aria-label="Pi commands">
                   <ComposerCommandMenu
