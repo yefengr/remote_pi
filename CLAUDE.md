@@ -20,6 +20,8 @@
 - 不自动执行 `git commit`、`git push`、Pull Request、生产发布或其他外部副作用，除非用户明确授权。
 - 发现现有未提交改动时，保留并基于当前工作区继续，不回退用户改动。
 - 涉及架构、协议、配对、UI 或安全方向时，先阅读 `plan/00-decisions.md`，不要静默推翻已关闭决策。
+- 实施、验证、审查、提交或部署独立 PWA UI/Mantine 迁移批次时，加载项目技能 `remote-pi-pwa-ui-batch-delivery`。
+- PWA 任务涉及 Modal、Drawer、Menu、Popover、Portal、焦点或层级时，同时加载项目技能 `validate-mantine-stacked-overlays`。
 
 ## 计划与文档
 
