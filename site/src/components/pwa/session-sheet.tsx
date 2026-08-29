@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef } from "react";
 import { ActionIcon, Badge, Button, Drawer } from "@mantine/core";
 import { MessageSquare, Pencil, Plus, Trash2 } from "lucide-react";
 import { displayPeer, type PairingPresence, type PairingStatus } from "@/components/pwa/workspace-view";
@@ -17,6 +18,7 @@ type SessionSheetProps = {
   onRename: (peer: PwaPeerRecord) => void;
   onRemove: (peer: PwaPeerRecord) => void;
   onClose: () => void;
+  focusOrigin?: HTMLElement | null;
   withinPortal?: boolean;
 };
 
@@ -30,8 +32,8 @@ function sessionLabel(session: PwaRoomRecord): string {
   return folder ? `Session · ${folder}` : "Session";
 }
 
-export function SessionSheet({ peers, rooms, activePeerId, activeRoomId, pairingPresence = {}, onSelectPeer, onSelectRoom, onPair, onRename, onRemove, onClose, withinPortal = true }: SessionSheetProps) {
-
+export function SessionSheet({ peers, rooms, activePeerId, activeRoomId, pairingPresence = {}, onSelectPeer, onSelectRoom, onPair, onRename, onRemove, onClose, focusOrigin = null, withinPortal = true }: SessionSheetProps) {
+  const contentRef = useRef<HTMLDivElement | null>(null);
   const activePeer = peers.find((peer) => peer.id === activePeerId);
   const activeSessions = activePeer
     ? rooms.filter((session) => session.peerEpk === activePeer.remoteEpk).sort((a, b) => (a.name || a.cwd || a.roomId).localeCompare(b.name || b.cwd || b.roomId))
@@ -46,6 +48,23 @@ export function SessionSheet({ peers, rooms, activePeerId, activeRoomId, pairing
   const onlinePairingCount = [...distinctPresence.values()].filter((presence) => presence.status === "online" || presence.status === "partial").length;
   const offlinePairingCount = [...distinctPresence.values()].filter((presence) => presence.status === "offline").length;
   const checkingPairingCount = [...distinctPresence.values()].filter((presence) => presence.status === "checking").length;
+  const closeDrawer = () => {
+    const content = contentRef.current;
+    onClose();
+    requestAnimationFrame(() => {
+      if (content?.isConnected) return;
+      const activeElement = document.activeElement;
+      const hasValidFocus = activeElement instanceof HTMLElement
+        && activeElement !== document.body
+        && activeElement !== document.documentElement
+        && activeElement.isConnected;
+      const canRestoreOrigin = focusOrigin?.isConnected
+        && !focusOrigin.matches(":disabled")
+        && focusOrigin.getClientRects().length > 0
+        && !focusOrigin.closest('[aria-hidden="true"]');
+      if (!hasValidFocus && canRestoreOrigin) focusOrigin.focus({ preventScroll: true });
+    });
+  };
   const choosePeer = (peerId: string) => {
     onSelectPeer(peerId);
     onClose();
@@ -58,7 +77,7 @@ export function SessionSheet({ peers, rooms, activePeerId, activeRoomId, pairing
   return (
     <Drawer.Root
       opened
-      onClose={onClose}
+      onClose={closeDrawer}
       position="left"
       size="min(420px, 100vw)"
       withinPortal={withinPortal}
@@ -69,7 +88,7 @@ export function SessionSheet({ peers, rooms, activePeerId, activeRoomId, pairing
       styles={{ content: { height: "100%", maxHeight: "100%", borderRadius: 0 }, header: { paddingTop: "calc(20px + var(--pwa-safe-top))" } }}
     >
       <Drawer.Overlay backgroundOpacity={0.7} blur={7} />
-      <Drawer.Content role="dialog" aria-modal="true" aria-labelledby="pwa-session-sheet-title">
+      <Drawer.Content ref={contentRef} role="dialog" aria-modal="true" aria-labelledby="pwa-session-sheet-title">
         <Drawer.Header>
           <div><span className="pwa-kicker">Pairing records · {peers.length}</span><Drawer.Title id="pwa-session-sheet-title">Sessions</Drawer.Title><p className="pwa-sheet-summary"><span className="pwa-summary-online">{onlinePairingCount} ONLINE</span><span>·</span><span>{offlinePairingCount} OFFLINE</span>{checkingPairingCount ? <><span>·</span><span>{checkingPairingCount} CHECKING</span></> : null}<small>{onlineSessionCount} of {totalSessionCount} sessions online</small></p></div>
           <Drawer.CloseButton aria-label="Close sessions" title="Close sessions" />

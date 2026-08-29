@@ -129,6 +129,10 @@ type RenamePairingRequest = {
   focusFallbackSelectors: readonly string[];
 };
 
+type SessionSheetRequest = {
+  focusOrigin: HTMLElement | null;
+};
+
 type PairingProbe = {
   relay: RelayClient;
   dispose: () => void;
@@ -169,7 +173,7 @@ export function PwaApp() {
   const [pendingAction, setPendingAction] = useState<{ id: string; action: ComposerCommandAction } | null>(null);
   const [pairState, setPairState] = useState<PairState>("idle");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [sessionSheetOpen, setSessionSheetOpen] = useState(false);
+  const [sessionSheetRequest, setSessionSheetRequest] = useState<SessionSheetRequest | null>(null);
   const [renameRequest, setRenameRequest] = useState<RenamePairingRequest | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmActionRequest | null>(null);
   const [confirmPending, setConfirmPending] = useState(false);
@@ -1461,7 +1465,7 @@ export function PwaApp() {
   const resetLayout = useCallback(() => {
     if (confirmPendingRef.current) return;
     setSettingsOpen(false);
-    setSessionSheetOpen(false);
+    setSessionSheetRequest(null);
     setRenameRequest(null);
     setConfirmAction(null);
     setConfirmPending(false);
@@ -1491,9 +1495,14 @@ export function PwaApp() {
     });
   }, [scrollToLatest]);
 
+  const openSessionSheet = useCallback(() => {
+    setSessionSheetRequest({
+      focusOrigin: document.activeElement instanceof HTMLElement ? document.activeElement : null,
+    });
+  }, []);
   const closeSessionSheet = useCallback(() => {
     if (!canCloseBackgroundOverlay(confirmOpenRef.current, confirmPendingRef.current)) return;
-    setSessionSheetOpen(false);
+    setSessionSheetRequest(null);
   }, []);
   const openRenamePeer = useCallback((peer: PwaPeerRecord) => {
     setRenameRequest({
@@ -1504,7 +1513,7 @@ export function PwaApp() {
         '.pwa-sidebar button[aria-label^="Rename "]',
       ],
     });
-    setSessionSheetOpen(false);
+    setSessionSheetRequest(null);
   }, []);
   const closeRenamePeer = useCallback(() => {
     setRenameRequest(null);
@@ -1521,7 +1530,7 @@ export function PwaApp() {
       <header className="pwa-topbar">
         <div className="pwa-brand"><span className="pwa-brand-mark">π</span><span>Remote Pi</span><span className="pwa-brand-tag">BROWSER APP</span></div>
         <div className="pwa-topbar-actions">
-          <SessionSwitcherTrigger label={activePeer ? `Session: ${displayPeer(activePeer)} / ${roomId}` : null} expanded={sessionSheetOpen} onOpen={() => setSessionSheetOpen(true)} />
+          <SessionSwitcherTrigger label={activePeer ? `Session: ${displayPeer(activePeer)} / ${roomId}` : null} expanded={sessionSheetRequest !== null} onOpen={openSessionSheet} />
           <ConnectionStatus state={connection} retryAttempt={retryAttempt} />
           <DesktopTopbarActions onRefresh={refreshPwaApp} onToggleSettings={() => setSettingsOpen((open) => !open)} />
           <MobileTopbarMenu onRefresh={() => { void refreshPwaApp(); }} onOpenSettings={() => setSettingsOpen((open) => !open)} />
@@ -1548,7 +1557,7 @@ export function PwaApp() {
         </main>
         {settingsOpen ? <SettingsPanel relayUrl={relayUrl} defaultRelayUrl={DEFAULT_RELAY} onSave={saveRelayUrl} onClose={closeSettings} onClearData={clearLocalData} onResetLayout={resetLayout} /> : null}
       </div>
-      {sessionSheetOpen ? <SessionSheet peers={peers} rooms={rooms} activePeerId={activePeerId} activeRoomId={roomId} pairingPresence={pairingPresence} onSelectPeer={selectPeer} onSelectRoom={selectRoom} onPair={() => setPairState("scanning")} onRename={openRenamePeer} onRemove={(peer) => void removePeer(peer)} onClose={closeSessionSheet} /> : null}
+      {sessionSheetRequest ? <SessionSheet peers={peers} rooms={rooms} activePeerId={activePeerId} activeRoomId={roomId} pairingPresence={pairingPresence} onSelectPeer={selectPeer} onSelectRoom={selectRoom} onPair={() => setPairState("scanning")} onRename={openRenamePeer} onRemove={(peer) => void removePeer(peer)} onClose={closeSessionSheet} focusOrigin={sessionSheetRequest.focusOrigin} /> : null}
       {renameRequest ? <RenamePairingDialog peer={renameRequest.peer} onSave={(nickname) => savePeerNickname(renameRequest.peer, nickname)} onClose={closeRenamePeer} focusOrigin={renameRequest.focusOrigin} focusFallbackSelectors={renameRequest.focusFallbackSelectors} /> : null}
       {pairState !== "idle" ? <div className="pwa-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && pairState === "scanning") setPairState("idle"); }} role="presentation">{pairState === "scanning" ? <PairingDialog onScan={pairFromQr} onClose={() => setPairState("idle")} /> : <div className="pwa-pairing-card"><Activity className="pwa-spin" /><span className="pwa-kicker">Pairing</span><h2>Connecting to your Pi</h2><p>Waiting for the Pi to confirm this browser.</p></div>}</div> : null}
       <ConfirmActionDialog action={confirmAction?.kind === "remove-pairing" ? { kind: confirmAction.kind, label: confirmAction.label } : confirmAction} pending={confirmPending} error={confirmError} onConfirm={() => { void confirmRequestedAction(); }} onClose={closeConfirmAction} onExitTransitionEnd={restoreConfirmFocus} />
