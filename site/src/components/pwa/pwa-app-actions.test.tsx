@@ -20,8 +20,8 @@ function renderActions(unreadOutput = 3): string {
 test("renders Mantine actions with the preserved session, desktop, message, and toast semantics", () => {
   const html = renderActions();
 
-  assert.match(html, /mantine-Button-root/);
-  assert.match(html, /mantine-ActionIcon-root/);
+  assert.match(html, /pwa-button/);
+  assert.match(html, /pwa-icon-button/);
   assert.match(html, /class="[^"]*pwa-session-trigger[^"]*"/);
   assert.match(html, /aria-label="Open session switcher"/);
   assert.match(html, /aria-haspopup="dialog"/);

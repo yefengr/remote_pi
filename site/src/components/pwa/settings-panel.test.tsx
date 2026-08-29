@@ -34,8 +34,8 @@ test("renders settings in a Mantine drawer with relay and data actions", () => {
   assert.match(html, /Save settings/);
   assert.match(html, /Clear local data/);
   assert.match(html, /Reset layout/);
-  assert.match(html, /mantine-TextInput-input/);
-  assert.match(html, /mantine-Button-root/);
+  assert.match(html, /pwa-input/);
+  assert.match(html, /pwa-button/);
   assert.match(html, /aria-label="Close settings"/);
   assert.doesNotMatch(html, /<aside/);
   assert.doesNotMatch(html, /class="pwa-settings /);

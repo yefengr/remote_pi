@@ -1,6 +1,6 @@
 "use client";
 
-import { ActionIcon, Button } from "@mantine/core";
+import { Button, IconButton } from "@/components/ui";
 import { ArrowDownToLine, MessageSquare, RefreshCw, Settings, X } from "lucide-react";
 
 type SessionSwitcherTriggerProps = {
@@ -33,9 +33,9 @@ export function SessionSwitcherTrigger({ label, expanded, onOpen }: SessionSwitc
 
   return (
     <Button
+      tone="secondary"
       className="pwa-session-trigger"
       type="button"
-      variant="subtle"
       onClick={onOpen}
       aria-label="Open session switcher"
       aria-haspopup="dialog"
@@ -50,12 +50,12 @@ export function SessionSwitcherTrigger({ label, expanded, onOpen }: SessionSwitc
 export function DesktopTopbarActions({ onRefresh, onToggleSettings }: DesktopTopbarActionsProps) {
   return (
     <div className="pwa-desktop-actions">
-      <ActionIcon className="pwa-icon-button" type="button" variant="subtle" size={44} onClick={() => { void onRefresh(); }} aria-label="Refresh app" title="Refresh app">
+      <IconButton type="button" onClick={() => { void onRefresh(); }} aria-label="Refresh app" title="Refresh app">
         <RefreshCw size={18} />
-      </ActionIcon>
-      <ActionIcon className="pwa-icon-button" type="button" variant="subtle" size={44} onClick={onToggleSettings} aria-label="Open settings" title="Settings">
+      </IconButton>
+      <IconButton type="button" onClick={onToggleSettings} aria-label="Open settings" title="Settings">
         <Settings size={18} />
-      </ActionIcon>
+      </IconButton>
     </div>
   );
 }
@@ -65,8 +65,8 @@ export function PwaMessageActions({ show, showRetry, showLatest, unreadOutput, o
 
   return (
     <div className="pwa-message-actions">
-      {showRetry ? <Button className="pwa-latest-button" type="button" variant="subtle" leftSection={<RefreshCw size={16} />} onClick={onRetry}>Try again</Button> : null}
-      {showLatest ? <Button className="pwa-latest-button" type="button" variant="subtle" leftSection={<ArrowDownToLine size={16} />} onClick={onLatest}>{unreadOutput > 0 ? `${unreadOutput} new output` : "Latest"}</Button> : null}
+      {showRetry ? <Button tone="secondary" className="pwa-latest-button" type="button" leftSection={<RefreshCw size={16} />} onClick={onRetry}>Try again</Button> : null}
+      {showLatest ? <Button tone="secondary" className="pwa-latest-button" type="button" leftSection={<ArrowDownToLine size={16} />} onClick={onLatest}>{unreadOutput > 0 ? `${unreadOutput} new output` : "Latest"}</Button> : null}
     </div>
   );
 }
@@ -77,9 +77,9 @@ export function PwaStatusToast({ message, onDismiss }: StatusToastProps) {
   return (
     <div className="pwa-toast" role="status">
       <span>{message}</span>
-      <ActionIcon className="pwa-toast-dismiss" type="button" variant="subtle" size={44} onClick={onDismiss} aria-label="Dismiss">
+      <IconButton className="pwa-toast-dismiss" type="button" onClick={onDismiss} aria-label="Dismiss">
         <X size={15} />
-      </ActionIcon>
+      </IconButton>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { ActionIcon, Button } from "@mantine/core";
+import { Button, IconButton } from "@/components/ui";
 import { Download, RefreshCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { refreshPwaApp } from "@/lib/pwa/service-worker-update";
@@ -37,9 +37,9 @@ export function ServiceWorkerNotice({
         {unsupported ? <><strong>Offline app mode unavailable</strong><span>This browser can still use Remote Pi online, but it cannot provide PWA offline startup.</span></> : updateReady ? <><strong>Remote Pi update ready</strong><span>Refresh when you are ready to use the new app version.</span></> : <><strong>Install Remote Pi</strong><span>Open this workspace from your device launcher.</span></>}
       </div>
       <div className="pwa-runtime-notice-actions">
-        {installPrompt ? <Button className="pwa-secondary-button" type="button" onClick={onInstall} leftSection={<Download size={15} />}>Install app</Button> : null}
-        {updateReady ? <Button className="pwa-primary-button" type="button" onClick={onUpdate} disabled={updateRequested} leftSection={<RefreshCw size={15} />}>{updateRequested ? "Updating" : "Refresh"}</Button> : null}
-        <ActionIcon className="pwa-icon-button" type="button" size={36} variant="subtle" onClick={onDismiss} aria-label="Dismiss PWA notice" title="Dismiss"><X size={16} /></ActionIcon>
+        {installPrompt ? <Button tone="secondary" type="button" onClick={onInstall} leftSection={<Download size={15} />}>Install app</Button> : null}
+        {updateReady ? <Button tone="primary" type="button" onClick={onUpdate} disabled={updateRequested} leftSection={<RefreshCw size={15} />}>{updateRequested ? "Updating" : "Refresh"}</Button> : null}
+        <IconButton type="button" onClick={onDismiss} aria-label="Dismiss PWA notice" title="Dismiss"><X size={16} /></IconButton>
       </div>
     </div>
   );

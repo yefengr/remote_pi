@@ -18,8 +18,8 @@ test("renders the startup error with a Mantine reload action", () => {
   assert.match(html, /Local workspace is busy/);
   assert.match(html, /Close the other tab\./);
   assert.match(html, /Reload the app/);
-  assert.match(reloadButton, /mantine-Button-root/);
-  assert.match(reloadButton, /pwa-primary-button/);
+  assert.match(reloadButton, /pwa-button/);
+  assert.match(reloadButton, /data-tone="primary"/);
   assert.match(reloadButton, /type="button"/);
   assert.match(reloadButton, /data-position="left"/);
 });
@@ -31,13 +31,13 @@ test("manual pairing retains a secure Mantine textarea and disabled pasted-code 
     </PwaUiProvider>,
   );
 
-  assert.match(html, /mantine-Textarea-input/);
+  assert.match(html, /pwa-textarea/);
   assert.match(html, /aria-label="Pairing code"/);
   assert.match(html, /rows="3"/);
   assert.match(html, /autoCapitalize="none"/);
   assert.match(html, /autoCorrect="off"/);
   assert.match(html, /spellCheck="false"/);
-  assert.match(html, /mantine-Button-root/);
+  assert.match(html, /pwa-button/);
   assert.match(html, /Use pasted code/);
   assert.match(html, /disabled=""/);
 });

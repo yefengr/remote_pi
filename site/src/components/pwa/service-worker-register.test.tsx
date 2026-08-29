@@ -42,10 +42,9 @@ test("renders the install notice with Mantine actions and preserved semantics", 
 
   assert.match(html, /role="status"/);
   assert.match(html, /Install Remote Pi/);
-  assert.match(install, /mantine-Button-root/);
-  assert.match(install, /pwa-secondary-button/);
+  assert.match(install, /pwa-button/);
+  assert.match(install, /data-tone="secondary"/);
   assert.match(install, /type="button"/);
-  assert.match(dismiss, /mantine-ActionIcon-root/);
   assert.match(dismiss, /pwa-icon-button/);
   assert.match(dismiss, /title="Dismiss"/);
 });
@@ -57,8 +56,8 @@ test("renders the update notice and disables Updating after requesting an update
   const updating = buttonForLabel(requested, "Updating");
 
   assert.match(ready, /Remote Pi update ready/);
-  assert.match(refresh, /mantine-Button-root/);
-  assert.match(refresh, /pwa-primary-button/);
+  assert.match(refresh, /pwa-button/);
+  assert.match(refresh, /data-tone="primary"/);
   assert.match(refresh, /type="button"/);
   assert.match(updating, /disabled|data-disabled/);
 });
@@ -68,7 +67,6 @@ test("renders only the dismiss action for unsupported offline mode", () => {
   const dismiss = dismissButton(html);
 
   assert.match(html, /Offline app mode unavailable/);
-  assert.match(dismiss, /mantine-ActionIcon-root/);
   assert.match(dismiss, /pwa-icon-button/);
   assert.doesNotMatch(html, /<button\b[^>]*>(?:(?!<\/button>).)*Install app(?:(?!<\/button>).)*<\/button>/);
   assert.doesNotMatch(html, /<button\b[^>]*>(?:(?!<\/button>).)*Refresh(?:(?!<\/button>).)*<\/button>/);
@@ -77,6 +75,6 @@ test("renders only the dismiss action for unsupported offline mode", () => {
 test("keeps install and update actions independent when both are available", () => {
   const html = renderNotice({ installPrompt: true, updateReady: true });
 
-  assert.match(buttonForLabel(html, "Install app"), /pwa-secondary-button/);
-  assert.match(buttonForLabel(html, "Refresh"), /pwa-primary-button/);
+  assert.match(buttonForLabel(html, "Install app"), /data-tone="secondary"/);
+  assert.match(buttonForLabel(html, "Refresh"), /data-tone="primary"/);
 });

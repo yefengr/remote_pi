@@ -41,18 +41,18 @@ test("pairing card keeps current selection separate from online status", () => {
   );
   const renameAction = html.match(/<button[^>]*aria-label="Rename Office Mac"[^>]*>/)?.[0] ?? "";
   const removeAction = html.match(/<button[^>]*aria-label="Remove Office Mac"[^>]*>/)?.[0] ?? "";
-  const clearButton = html.match(/<button[^>]*class="[^"]*pwa-text-button[^"]*"[^>]*>/)?.[0] ?? "";
+  const clearButton = html.match(/<button[^>]*class="[^"]*pwa-button[^"]*"[^>]*data-tone="text"[^>]*>/)?.[0] ?? "";
 
   assert.match(html, /OFFLINE/);
   assert.match(html, /CURRENT/);
-  assert.match(html, /mantine-Badge-root/);
+  assert.match(html, /pwa-badge/);
   assert.match(html, /Pairing records/);
-  assert.match(renameAction, /mantine-ActionIcon-root/);
+  assert.match(renameAction, /pwa-icon-button/);
   assert.match(renameAction, /title="Rename pairing"/);
-  assert.match(removeAction, /mantine-ActionIcon-root/);
+  assert.match(removeAction, /pwa-icon-button/);
   assert.match(removeAction, /title="Remove pairing"/);
-  assert.match(clearButton, /mantine-Button-root/);
-  assert.match(clearButton, /pwa-text-button/);
+  assert.match(clearButton, /pwa-button/);
+  assert.match(clearButton, /data-tone="text"/);
   assert.doesNotMatch(html, />XCrawl#2</);
 });
 
@@ -65,11 +65,11 @@ test("uses Mantine actions for pairing entry points", () => {
   const emptyWorkspaceHtml = renderToStaticMarkup(<PwaUiProvider><EmptyWorkspace onPair={() => {}} /></PwaUiProvider>);
   const roundAction = sidebarHtml.match(/<button[^>]*aria-label="Pair a Pi"[^>]*>/)?.[0] ?? "";
 
-  assert.match(roundAction, /mantine-ActionIcon-root/);
+  assert.match(roundAction, /pwa-icon-button/);
   assert.match(roundAction, /title="Pair a Pi"/);
-  assert.match(sidebarHtml, /mantine-Button-root/);
-  assert.match(sidebarHtml, /pwa-primary-button/);
-  assert.match(emptyWorkspaceHtml, /mantine-Button-root/);
-  assert.match(emptyWorkspaceHtml, /pwa-primary-button/);
+  assert.match(sidebarHtml, /pwa-button/);
+  assert.match(sidebarHtml, /data-tone="primary"/);
+  assert.match(emptyWorkspaceHtml, /pwa-button/);
+  assert.match(emptyWorkspaceHtml, /data-tone="primary"/);
   assert.match(emptyWorkspaceHtml, /Pair a Pi/);
 });

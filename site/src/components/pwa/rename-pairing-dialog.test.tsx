@@ -19,8 +19,8 @@ test("renders the rename dialog with Mantine controls instead of a browser promp
   const html = renderToStaticMarkup(<PwaUiProvider><RenamePairingDialog peer={peer} onSave={async () => {}} onClose={() => {}} /></PwaUiProvider>);
 
   assert.match(html, /mantine-Modal-content/);
-  assert.match(html, /mantine-TextInput-input/);
-  assert.match(html, /mantine-Button-root/);
+  assert.match(html, /pwa-input/);
+  assert.match(html, /pwa-button/);
   assert.match(html, /Rename pairing/);
   assert.match(html, /Pairing name/);
   assert.match(html, /Choose a local name for/);

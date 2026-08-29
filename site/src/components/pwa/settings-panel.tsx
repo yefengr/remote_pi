@@ -1,7 +1,8 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Button, Drawer, Stack, Text, TextInput } from "@mantine/core";
+import { Drawer, Stack, Text } from "@mantine/core";
+import { Button, Input } from "@/components/ui";
 import { Check, RefreshCw, Trash2, X } from "lucide-react";
 
 type SettingsPanelProps = {
@@ -78,7 +79,7 @@ export function SettingsPanel({ relayUrl, defaultRelayUrl, onSave, onClose, onCl
       }}
     >
       <Stack gap={0}>
-        <TextInput
+        <Input
           className="pwa-field"
           label="Relay URL"
           description="Use https:// for a secure relay. WebSocket is selected automatically."
@@ -88,10 +89,10 @@ export function SettingsPanel({ relayUrl, defaultRelayUrl, onSave, onClose, onCl
           spellCheck={false}
         />
         <div className="pwa-settings-note"><Check size={15} /><span>Owner identity and session history live in this browser only.</span></div>
-        <Button className="pwa-primary-button" type="button" onClick={() => void save()}>Save settings</Button>
-        <Button className="pwa-secondary-button pwa-layout-reset-button" type="button" variant="default" leftSection={<RefreshCw size={15} />} onClick={onResetLayout}>Reset layout</Button>
+        <Button tone="primary" type="button" onClick={() => void save()}>Save settings</Button>
+        <Button tone="secondary" className="pwa-layout-reset-button" type="button" leftSection={<RefreshCw size={15} />} onClick={onResetLayout}>Reset layout</Button>
         <Text component="small" className="pwa-layout-reset-note">Closes panels, restores the chat scroll, and recalculates the viewport. Local data is kept.</Text>
-        <Button className="pwa-danger-button" type="button" variant="outline" color="red" leftSection={<Trash2 size={15} />} onClick={() => void onClearData()}>Clear local data</Button>
+        <Button tone="danger" type="button" leftSection={<Trash2 size={15} />} onClick={() => void onClearData()}>Clear local data</Button>
       </Stack>
     </Drawer>
   );

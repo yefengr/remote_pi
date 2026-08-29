@@ -93,6 +93,26 @@ function ComposerHarness({
   );
 }
 
+test("keeps the image remove action at a 44px touch target", async () => {
+  const screen = await renderPwa(<ComposerHarness />);
+  screen.getByTestId("composer-set-attachment").element().dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  const remove = screen.getByRole("button", { name: "Remove image" });
+  await expect.element(remove).toBeVisible();
+  const rect = remove.element().getBoundingClientRect();
+
+  expect(rect.width).toBeGreaterThanOrEqual(44);
+  expect(rect.height).toBeGreaterThanOrEqual(44);
+});
+
+test("keeps the empty-draft Stop action visually emphasized", async () => {
+  const screen = await renderPwa(<ComposerHarness initialWorking />);
+  const stop = screen.getByRole("button", { name: "Stop current task" }).element();
+  const style = window.getComputedStyle(stop);
+
+  expect(style.backgroundColor).toBe("rgb(255, 107, 107)");
+  expect(style.color).toBe("rgb(27, 7, 7)");
+});
+
 function getImageInputs(): [HTMLInputElement, HTMLInputElement] {
   const inputs = [...document.querySelectorAll<HTMLInputElement>("input.pwa-image-input")];
   expect(inputs).toHaveLength(2);

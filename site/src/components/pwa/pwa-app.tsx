@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Select } from "@mantine/core";
+import { Select } from "@/components/ui";
 import { Activity } from "lucide-react";
 import { MessageComposer } from "@/components/pwa/message-composer";
 import { RenamePairingDialog } from "@/components/pwa/rename-pairing-dialog";
@@ -1382,7 +1382,7 @@ export function PwaApp() {
         '.pwa-session-sheet button[aria-label="Close sessions"]',
         ".pwa-session-sheet .pwa-sheet-peer-select",
         'button[aria-label="Open session switcher"]',
-        ".pwa-sidebar .pwa-text-button",
+        '.pwa-sidebar .pwa-button[data-tone="text"]',
         'button[aria-label="More options"]',
         'button[aria-label="Open settings"]',
       ],
@@ -1415,8 +1415,8 @@ export function PwaApp() {
     requestConfirmation(
       { kind: "clear-local-data" },
       [
-        ".pwa-settings-drawer .pwa-danger-button",
-        ".pwa-sidebar .pwa-text-button",
+        '.pwa-settings-drawer .pwa-button[data-tone="danger"]',
+        '.pwa-sidebar .pwa-button[data-tone="text"]',
         'button[aria-label="More options"]',
         'button[aria-label="Open settings"]',
       ],

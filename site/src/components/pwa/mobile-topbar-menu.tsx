@@ -1,7 +1,8 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { ActionIcon, Menu } from "@mantine/core";
+import { Menu } from "@mantine/core";
+import { IconButton } from "@/components/ui";
 import { MoreHorizontal, RefreshCw, Settings } from "lucide-react";
 
 type MobileTopbarMenuProps = {
@@ -24,9 +25,9 @@ export function MobileTopbarMenu({ onRefresh, onOpenSettings }: MobileTopbarMenu
       withinPortal={false}
     >
       <Menu.Target>
-        <ActionIcon className="pwa-icon-button" aria-label="More options" title="More options">
+        <IconButton aria-label="More options" title="More options">
           <MoreHorizontal size={20} />
-        </ActionIcon>
+        </IconButton>
       </Menu.Target>
       <Menu.Dropdown className="pwa-mobile-menu-panel">
         <Menu.Item

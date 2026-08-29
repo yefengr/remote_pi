@@ -53,11 +53,11 @@ test("uses Mantine controls for earlier records, collapse, and retry actions", (
   const collapseAction = html.match(/<button[^>]*aria-label="Expand message"[^>]*>/)?.[0] ?? "";
   const retryAction = html.match(/<button[^>]*aria-label="Retry delivery"[^>]*>/)?.[0] ?? "";
 
-  assert.match(earlierButton, /mantine-Button-root/);
-  assert.match(earlierButton, /pwa-secondary-button/);
-  assert.match(collapseAction, /mantine-ActionIcon-root/);
+  assert.match(earlierButton, /pwa-button/);
+  assert.match(earlierButton, /data-tone="secondary"/);
+  assert.match(collapseAction, /pwa-icon-button/);
   assert.match(collapseAction, /pwa-message-toggle/);
-  assert.match(retryAction, /mantine-ActionIcon-root/);
+  assert.match(retryAction, /pwa-icon-button/);
   assert.match(retryAction, /pwa-pending-retry/);
 });
 
@@ -69,6 +69,6 @@ test("uses a Mantine cancel action only for cancelable queued messages", () => {
   }], { onCancelQueued: () => {} });
   const cancelAction = html.match(/<button[^>]*aria-label="Cancel queued message"[^>]*>/)?.[0] ?? "";
 
-  assert.match(cancelAction, /mantine-ActionIcon-root/);
+  assert.match(cancelAction, /pwa-icon-button/);
   assert.match(cancelAction, /pwa-pending-retry/);
 });

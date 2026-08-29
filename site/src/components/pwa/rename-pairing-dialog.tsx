@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Button, Group, Modal, Stack, Text, TextInput } from "@mantine/core";
+import { Group, Modal, Stack, Text } from "@mantine/core";
+import { Button, Input } from "@/components/ui";
 import type { PwaPeerRecord } from "@/lib/pwa/db";
 import { displayPeer } from "@/components/pwa/workspace-view";
 
@@ -101,7 +102,7 @@ export function RenamePairingDialog({ peer, onSave, onClose, focusOrigin = null,
     <Stack gap={0}>
       <Text component="p" id="pwa-rename-description" className="pwa-rename-description">Choose a local name for <Text component="strong">{displayPeer(peer)}</Text>. This only changes the label in this browser.</Text>
       <form onSubmit={(event) => { event.preventDefault(); void submit(); }}>
-        <TextInput
+        <Input
           className="pwa-rename-field"
           id="pwa-rename-input"
           label="Pairing name"
@@ -116,8 +117,8 @@ export function RenamePairingDialog({ peer, onSave, onClose, focusOrigin = null,
         />
         {saveError ? <Text component="p" className="pwa-error" role="alert">{saveError}</Text> : null}
         <Group className="pwa-rename-actions" justify="flex-end" gap="xs">
-          <Button className="pwa-secondary-button" type="button" variant="default" onClick={restoreFocusAndClose} disabled={saving}>Cancel</Button>
-          <Button className="pwa-primary-button" type="submit" disabled={!nickname || saving}>{saving ? "Saving…" : "Save"}</Button>
+          <Button tone="secondary" type="button" onClick={restoreFocusAndClose} disabled={saving}>Cancel</Button>
+          <Button tone="primary" type="submit" disabled={!nickname || saving}>{saving ? "Saving…" : "Save"}</Button>
         </Group>
       </form>
     </Stack>

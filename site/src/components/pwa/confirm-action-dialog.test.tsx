@@ -23,7 +23,7 @@ function buttonByClass(html: string, className: string): string {
 }
 
 function confirmButton(html: string): string {
-  const match = html.match(/<button(?=[^>]*type="button")(?=[^>]*pwa-(?:primary|danger)-button)[^>]*>[\s\S]*?<\/button>/);
+  const match = html.match(/<button(?=[^>]*type="button")(?=[^>]*data-tone="(?:primary|danger)")[^>]*>[\s\S]*?<\/button>/);
   assert.ok(match, "expected one confirmation button");
   return match[0];
 }
@@ -77,7 +77,7 @@ test("renders each confirmation action as an accessible Mantine modal", () => {
     assert.match(html, /aria-describedby="pwa-confirm-action-description"/);
     assert.match(html, new RegExp(scenario.title.replace(/[?]/g, "\\?")));
     assert.match(html, new RegExp(scenario.description.replace(/[?]/g, "\\?")));
-    assert.match(buttonByClass(html, "pwa-secondary-button"), /Cancel/);
+    assert.match(buttonByClass(html, "pwa-button"), /Cancel/);
     assert.match(confirmButton(html), new RegExp(scenario.confirmLabel));
     assert.match(html, /aria-label="Close confirmation dialog"/);
     assert.match(html, /title="Close confirmation dialog"/);
@@ -87,14 +87,14 @@ test("renders each confirmation action as an accessible Mantine modal", () => {
 
 test("uses a primary confirmation only for a new session", () => {
   const newSessionConfirm = confirmButton(render({ kind: "new-session" }));
-  assert.match(newSessionConfirm, /pwa-primary-button/);
-  assert.doesNotMatch(newSessionConfirm, /pwa-danger-button/);
+  assert.match(newSessionConfirm, /data-tone="primary"/);
+  assert.doesNotMatch(newSessionConfirm, /data-tone="danger"/);
 
   for (const action of [{ kind: "remove-pairing", label: "Pi on office / main" } as const, { kind: "clear-local-data" } as const]) {
     const html = render(action);
-    const matches = html.match(/<button(?=[^>]*type="button")(?=[^>]*pwa-danger-button)[^>]*>[\s\S]*?<\/button>/g) ?? [];
+    const matches = html.match(/<button(?=[^>]*type="button")(?=[^>]*data-tone="danger")[^>]*>[\s\S]*?<\/button>/g) ?? [];
     assert.equal(matches.length, 1);
-    assert.match(matches[0], /pwa-danger-button/);
+    assert.match(matches[0], /data-tone="danger"/);
   }
 });
 
@@ -103,8 +103,8 @@ test("locks all close paths while an action is pending", () => {
   const pendingConfirm = confirmButton(html);
   assert.match(pendingConfirm, /disabled=""/);
   assert.match(pendingConfirm, /Clearing local data…/);
-  assert.match(buttonByClass(html, "pwa-secondary-button"), /disabled=""/);
-  assert.match(buttonByClass(html, "pwa-secondary-button"), /Cancel/);
+  assert.match(buttonByClass(html, "pwa-button"), /disabled=""/);
+  assert.match(buttonByClass(html, "pwa-button"), /Cancel/);
   assert.match(html, /aria-label="Close confirmation dialog"[^>]*disabled=""/);
 });
 

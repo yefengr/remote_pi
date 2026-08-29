@@ -1,6 +1,7 @@
 "use client";
 
-import { Button, Group, Modal, Stack, Text } from "@mantine/core";
+import { Group, Modal, Stack, Text } from "@mantine/core";
+import { Button, type ButtonTone } from "@/components/ui";
 
 export type ConfirmActionDialogAction =
   | { kind: "new-session" }
@@ -22,7 +23,7 @@ type DialogCopy = {
   description: string;
   confirmLabel: string;
   pendingLabel: string;
-  confirmClassName: "pwa-primary-button" | "pwa-danger-button";
+  confirmTone: ButtonTone;
 };
 
 function dialogCopy(action: ConfirmActionDialogAction): DialogCopy {
@@ -33,7 +34,7 @@ function dialogCopy(action: ConfirmActionDialogAction): DialogCopy {
         description: "All Owners in this Session will switch to a fresh session.",
         confirmLabel: "Start fresh session",
         pendingLabel: "Starting fresh session…",
-        confirmClassName: "pwa-primary-button",
+        confirmTone: "primary",
       };
     case "remove-pairing":
       return {
@@ -41,7 +42,7 @@ function dialogCopy(action: ConfirmActionDialogAction): DialogCopy {
         description: "This removes this Pi/session pairing from this browser.",
         confirmLabel: "Delete pairing",
         pendingLabel: "Deleting pairing…",
-        confirmClassName: "pwa-danger-button",
+        confirmTone: "danger",
       };
     case "clear-local-data":
       return {
@@ -49,7 +50,7 @@ function dialogCopy(action: ConfirmActionDialogAction): DialogCopy {
         description: "This cannot be undone. It removes this browser's Remote Pi identity, pairings, and history.",
         confirmLabel: "Clear local data",
         pendingLabel: "Clearing local data…",
-        confirmClassName: "pwa-danger-button",
+        confirmTone: "danger",
       };
   }
 }
@@ -85,8 +86,8 @@ export function ConfirmActionDialog({ action, pending, error, onConfirm, onClose
       <Text component="p" id={descriptionId} className="pwa-confirm-description">{copy.description}</Text>
       {error ? <Text component="p" className="pwa-confirm-error" role="alert">{error}</Text> : null}
       <Group className="pwa-confirm-actions" justify="flex-end" gap="xs">
-        <Button className="pwa-secondary-button" type="button" variant="default" onClick={onClose} disabled={pending}>Cancel</Button>
-        <Button className={copy.confirmClassName} type="button" variant={visibleAction.kind === "new-session" ? "filled" : "outline"} color={visibleAction.kind === "new-session" ? undefined : "red"} onClick={onConfirm} disabled={pending}>{pending ? copy.pendingLabel : copy.confirmLabel}</Button>
+        <Button tone="secondary" type="button" onClick={onClose} disabled={pending}>Cancel</Button>
+        <Button tone={copy.confirmTone} type="button" onClick={onConfirm} disabled={pending}>{pending ? copy.pendingLabel : copy.confirmLabel}</Button>
       </Group>
     </Stack>
   </Modal>;

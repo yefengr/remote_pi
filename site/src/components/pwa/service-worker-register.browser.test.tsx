@@ -73,6 +73,15 @@ test("renders an accessible install notice and routes install and dismiss action
   await expect.element(notice).not.toBeInTheDocument();
 });
 
+test("keeps the notice dismiss action at a 44px touch target", async () => {
+  const screen = await renderPwa(<NoticeHarness unsupported />);
+  const dismiss = screen.getByRole("button", { name: "Dismiss PWA notice" });
+  const rect = dismiss.element().getBoundingClientRect();
+
+  expect(rect.width).toBeGreaterThanOrEqual(44);
+  expect(rect.height).toBeGreaterThanOrEqual(44);
+});
+
 test("changes Refresh to a disabled Updating action after requesting an update", async () => {
   const onUpdate = vi.fn();
   const screen = await renderPwa(<NoticeHarness updateReady onUpdate={onUpdate} />);

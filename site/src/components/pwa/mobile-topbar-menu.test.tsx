@@ -15,7 +15,7 @@ function renderMenu(): string {
 test("renders a closed Mantine menu trigger without its actions", () => {
   const html = renderMenu();
 
-  assert.match(html, /mantine-ActionIcon-root/);
+  assert.match(html, /pwa-icon-button/);
   assert.match(html, /aria-label="More options"/);
   assert.match(html, /title="More options"/);
   assert.match(html, /aria-haspopup="menu"/);

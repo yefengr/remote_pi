@@ -20,12 +20,12 @@ test("renders the QR scanner with Mantine controls", () => {
   assert.match(html, /role="dialog"/);
   assert.match(html, /aria-modal="true"/);
   assert.match(html, /aria-label="Scan pairing QR code"/);
-  assert.match(closeButton, /mantine-ActionIcon-root/);
+  assert.match(closeButton, /pwa-icon-button/);
   assert.match(closeButton, /pwa-icon-button/);
   assert.match(closeButton, /aria-label="Close scanner"/);
   assert.match(closeButton, /title="Close scanner"/);
-  assert.match(chooseButton, /mantine-Button-root/);
-  assert.match(chooseButton, /pwa-secondary-button/);
+  assert.match(chooseButton, /pwa-button/);
+  assert.match(chooseButton, /data-tone="secondary"/);
   assert.match(html, /Choose QR image/);
   assert.match(html, /type="file"/);
   assert.match(html, /accept="image\/\*"/);
