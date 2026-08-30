@@ -34,7 +34,7 @@
 | Plan 66 | Phase 2：基础控件 | 已完成 | 项目 UI wrapper、生产消费者迁移、共享样式收敛和 44px/Select Browser 覆盖已完成；legacy 128/128、Browser/coverage 64/64、TypeScript、受影响 ESLint、production build、测试环境 QA 和独立审查通过。实现提交：`b06f15d`。 |
 | Plan 67 | Phase 3：统一 Node 测试 API | 已完成首批 | 4 个纯 TypeScript 测试文件、9 项测试已迁移到 Vitest Node；legacy 119/119、Node 9/9、Browser 64/64、coverage 73/73、TypeScript、受影响 ESLint、production build 和独立审查通过。实现提交：`88f875a`。 |
 | Plan 67 | Phase 4：`/app` E2E 基线 | 已完成 | 独立 Playwright Test 基线覆盖 production standalone 启动、IndexedDB 隔离 fixture、Settings、Session Drawer、Composer、清库确认、desktop/mobile viewport 和真实 Service Worker 注册。E2E 8/8，重复运行 16/16；TypeScript、受影响 ESLint、现有 Node/legacy/Browser/coverage、production build、diff check 和独立审查通过。实现提交：`79922cc`。 |
-| Plan 66 | Phase 3：业务组件收敛 | 进行中（第四批） | 已完成 Pairing/Session 展示层、`PwaAppView` 展示编排、PWA 启动边界和非当前配对探测边界抽取；保持 Pairing、Session、Overlay、当前会话连接、Timeline 与 IndexedDB 行为不变。 |
+| Plan 66 | Phase 3：业务组件收敛 | 已完成 | Pairing/Session 展示层、`PwaAppView` 展示编排、PWA 启动边界和非当前配对探测边界已抽取；当前会话连接、Session Selection 与 Timeline generation 按证据保留在 controller。Node 23/23、legacy 119/119、Browser 64/64、coverage 87/87、E2E 8/8、TypeScript、受影响 ESLint、production build、diff check 和独立审查通过。实现提交：`c5e3cce`、`7e8f35d`、`6785b64`、`f579ee7`。 |
 
 当前已形成的 Plan 67 Phase 2 本地提交：
 
@@ -46,6 +46,13 @@
 Plan 66 Phase 2 本地提交：
 
 - `b06f15d`：标准化 PWA 基础控件，收敛共享样式并补齐真实浏览器尺寸与 Select 覆盖。
+
+Plan 66 Phase 3 本地提交：
+
+- `c5e3cce`：收敛 Pairing 与 Session 展示组件；
+- `7e8f35d`：抽取 `PwaAppView` 展示编排；
+- `6785b64`：抽取 PWA 启动边界；
+- `f579ee7`：抽取非当前配对探测边界。
 
 Plan 67 Phase 3 首批 Node 迁移本地提交：
 
@@ -129,9 +136,9 @@ site/src/lib/remote-pi/protocol.test.ts → protocol.node.test.ts
 
 ### 阶段 D：Plan 66 Phase 3 业务组件收敛
 
-**当前优先级：进行中（第四批：Pairing Probes 边界）**
+**状态：已完成（2026-08-30）**
 
-按 Plan 66 的范围推进 `PairingRecordCard`、`SessionList`/`SessionRow`、PwaApp view model 和 feature hooks 的拆分。先使用已建立的 Browser Mode 与 `/app` E2E 基线锁定行为，再进行结构调整。
+已按 Plan 66 的范围完成 `PairingRecordCard`、`SessionList`/`SessionRow`、`PwaAppView`、PWA 启动边界和非当前配对探测边界抽取。连接、Session Selection 与 Timeline generation 的进一步 hook 拆分没有足够独立所有权证据，保留在 controller，不作为阶段未完成项。
 
 切换门禁：
 
@@ -142,7 +149,7 @@ site/src/lib/remote-pi/protocol.test.ts → protocol.node.test.ts
 
 ### 阶段 E：Plan 66 Phase 4–5
 
-**前置条件：阶段 D 完成**
+**当前优先级：进行中（Phase 4 只读收益评估）**
 
 按收益逐项评估 Tabs、ScrollArea、Tooltip 和旧样式清理。对没有明确收益的组件保持现状，不以组件库覆盖率为目标进行机械替换。
 

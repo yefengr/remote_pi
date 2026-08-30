@@ -1,6 +1,6 @@
 # 计划 66 — Site UI 组件库引入与 PWA 迁移
 
-**状态：进行中（Phase 0–2 已完成）**
+**状态：进行中（Phase 0–3 已完成）**
 **跨计划调度：见 [Plan 68 — PWA UI 与自动化测试交付路线](68-pwa-ui-quality-roadmap.md)**
 **范围：`site/` 前端，优先 PWA**
 **基线：Next.js 16、React 19、TypeScript、Tailwind CSS 4**
@@ -219,7 +219,7 @@ wrapper 必须保持轻量。简单的 `Button` 或 `Badge` 可以直接导出 M
 
 ### Phase 3 — 业务组件收敛
 
-**状态：进行中（第四批：Pairing Probes 边界）**
+**状态：已完成（2026-08-30）**
 
 1. 抽取 `PairingRecordCard`，统一桌面侧栏和移动端 Drawer 中的配对记录展示；
 2. 抽取 `SessionList` / `SessionRow`，统一 Session 状态、工作目录、技术标识和 CURRENT 展示；
@@ -227,7 +227,7 @@ wrapper 必须保持轻量。简单的 `Button` 或 `Badge` 可以直接导出 M
 4. 保持在线探测、连接重试和本地存储逻辑在 hooks/controller，不放入视觉组件；
 5. 在不改变行为的前提下，为连接、配对、Session 和 Timeline 状态逐步建立 feature hooks。
 
-**验收：**业务组件只接收已整理的 props/view model；`PwaApp` 不再直接包含所有基础控件细节；Pairing、Session、Timeline 的协议和数据行为回归通过。
+**验收：**已通过四个独立批次完成 Pairing/Session 展示组件、`PwaAppView` 展示编排、PWA 启动边界和非当前配对探测边界抽取；当前会话连接、Session Selection 与 Timeline generation 因共享连接失效、stale guard、持久化和流式状态边界，明确保留在 `PwaApp` controller，后续仅在出现新的重复实现或所有权证据时单独拆分。Node 23/23、legacy 119/119、Browser Mode 64/64、coverage 87/87、Playwright E2E 8/8、TypeScript、受影响 ESLint、production build、`git diff --check` 和独立审查均通过；全量 Lint 仍仅受既有生成文件 `site/public/sw.js` 的 `@typescript-eslint/no-this-alias` 阻断。实现提交：`c5e3cce`、`7e8f35d`、`6785b64`、`f579ee7`。
 
 ### Phase 4 — Tabs 与低收益组件评估
 
