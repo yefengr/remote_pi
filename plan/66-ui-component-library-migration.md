@@ -219,7 +219,7 @@ wrapper 必须保持轻量。简单的 `Button` 或 `Badge` 可以直接导出 M
 
 ### Phase 3 — 业务组件收敛
 
-**状态：进行中（第二批：PwaApp 展示编排）**
+**状态：进行中（第三批：PWA 启动边界）**
 
 1. 抽取 `PairingRecordCard`，统一桌面侧栏和移动端 Drawer 中的配对记录展示；
 2. 抽取 `SessionList` / `SessionRow`，统一 Session 状态、工作目录、技术标识和 CURRENT 展示；

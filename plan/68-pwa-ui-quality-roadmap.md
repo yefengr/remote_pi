@@ -34,7 +34,7 @@
 | Plan 66 | Phase 2：基础控件 | 已完成 | 项目 UI wrapper、生产消费者迁移、共享样式收敛和 44px/Select Browser 覆盖已完成；legacy 128/128、Browser/coverage 64/64、TypeScript、受影响 ESLint、production build、测试环境 QA 和独立审查通过。实现提交：`b06f15d`。 |
 | Plan 67 | Phase 3：统一 Node 测试 API | 已完成首批 | 4 个纯 TypeScript 测试文件、9 项测试已迁移到 Vitest Node；legacy 119/119、Node 9/9、Browser 64/64、coverage 73/73、TypeScript、受影响 ESLint、production build 和独立审查通过。实现提交：`88f875a`。 |
 | Plan 67 | Phase 4：`/app` E2E 基线 | 已完成 | 独立 Playwright Test 基线覆盖 production standalone 启动、IndexedDB 隔离 fixture、Settings、Session Drawer、Composer、清库确认、desktop/mobile viewport 和真实 Service Worker 注册。E2E 8/8，重复运行 16/16；TypeScript、受影响 ESLint、现有 Node/legacy/Browser/coverage、production build、diff check 和独立审查通过。实现提交：`79922cc`。 |
-| Plan 66 | Phase 3：业务组件收敛 | 进行中（第二批） | 已完成 Pairing/Session 展示层和 `PwaAppView` 展示编排抽取；保持 Pairing、Session、Overlay、Relay、Timeline 与 IndexedDB 行为不变。 |
+| Plan 66 | Phase 3：业务组件收敛 | 进行中（第三批） | 已完成 Pairing/Session 展示层、`PwaAppView` 展示编排和 PWA 启动边界抽取；保持 Pairing、Session、Overlay、Relay、Timeline 与 IndexedDB 行为不变。 |
 
 当前已形成的 Plan 67 Phase 2 本地提交：
 
@@ -129,7 +129,7 @@ site/src/lib/remote-pi/protocol.test.ts → protocol.node.test.ts
 
 ### 阶段 D：Plan 66 Phase 3 业务组件收敛
 
-**当前优先级：进行中（第二批：PwaApp 展示编排）**
+**当前优先级：进行中（第三批：PWA 启动边界）**
 
 按 Plan 66 的范围推进 `PairingRecordCard`、`SessionList`/`SessionRow`、PwaApp view model 和 feature hooks 的拆分。先使用已建立的 Browser Mode 与 `/app` E2E 基线锁定行为，再进行结构调整。
 

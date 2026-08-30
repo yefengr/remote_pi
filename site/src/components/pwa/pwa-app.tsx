@@ -2,14 +2,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PwaAppView, type PwaAppViewActions, type PwaAppViewModel, type PwaAppViewRefs } from "@/components/pwa/pwa-app-view";
 import { COMPOSER_THINKING_LEVELS, type ComposerCommandAction } from "@/components/pwa/composer-command-menu";
-import { describeStartupFailure, type StartupError } from "@/components/pwa/pwa-startup";
+import { DEFAULT_RELAY, usePwaStartup } from "@/components/pwa/use-pwa-startup";
 import { displayPeer, type ConnectionViewState, type PairingPresence } from "@/components/pwa/workspace-view";
 import { createPairRequest, parsePairUri, relayMismatch } from "@/lib/remote-pi/pairing";
 import { PeerChannel } from "@/lib/remote-pi/peer-channel";
 import { RelayClient } from "@/lib/remote-pi/relay-client";
 import { normalizePeerId } from "@/lib/remote-pi/encoding";
-import { generateOwnerKeyPair } from "@/lib/remote-pi/crypto";
-import { assertBrowserCapabilities, browserName, fromStoredKey, mergeRooms, migrateLegacyDefaultRelay, toStoredKey, type ConnectionContext } from "@/lib/pwa/runtime";
+import { browserName, mergeRooms, type ConnectionContext } from "@/lib/pwa/runtime";
 import { TimelineRuntime, type TimelineScope, type TimelineViewItem } from "@/lib/pwa/timeline-runtime";
 import { StreamDisplayBuffer } from "@/lib/pwa/stream-display-buffer";
 import { getImageOutputMime, prepareImageAttachment } from "@/lib/pwa/image-upload";
@@ -19,12 +18,11 @@ import { HistoryWindowAssembler, TimelineEventFragmentAssembler } from "@/lib/pw
 import { commitRealtime, loadRecent, replaceRecentWindow, TimelineStoreConflictError } from "@/lib/pwa/timeline-store";
 import type { TimelineEvent } from "@/lib/remote-pi/protocol-v2/schema";
 import { refreshPwaApp } from "@/lib/pwa/service-worker-update";
-import type { ControlFrame, OwnerKeyPair, ThinkingLevel, WireImage, WireModel } from "@/lib/remote-pi/types";
+import type { ControlFrame, ThinkingLevel, WireImage, WireModel } from "@/lib/remote-pi/types";
 import type { ClientFrame, ServerFrame } from "@/lib/remote-pi/protocol-v2/frames";
 import {
   clearPwaData,
   getPwaDatabase,
-  openPwaDatabase,
   listPwaPeers,
   listPwaRooms,
   makePwaPeerId,
@@ -33,8 +31,6 @@ import {
   type PwaRoomRecord,
 } from "@/lib/pwa/db";
 
-const LEGACY_DEFAULT_RELAY = "https://relay-rp1.jacobmoura.work";
-const DEFAULT_RELAY = "https://relay-pi.yefengr.cn";
 const ACTIVE_PEER_SETTING = "active_peer";
 const RELAY_SETTING = "relay_url";
 const ACTIVE_ROOM_SETTING = "active_room:";
@@ -43,7 +39,6 @@ const RETRY_DELAYS_MS = [1000, 2000, 5000, 10000, 30000] as const;
 const MAX_RETRY_ATTEMPTS = RETRY_DELAYS_MS.length;
 const STREAM_DISPLAY_CADENCE_MS = 36;
 type PairState = "idle" | "scanning" | "pairing";
-type StartupState = "loading" | "ready" | "error";
 type ImageAttachment = { source: Blob; previewUrl: string; label: string };
 type ComposerCommandRequest =
   | { action: "session_new" | "session_compact" }
@@ -147,10 +142,8 @@ function safeThinkingLevel(value: unknown): ThinkingLevel {
 }
 
 export function PwaApp() {
-  const [identity, setIdentity] = useState<OwnerKeyPair | null>(null);
-  const [peers, setPeers] = useState<PwaPeerRecord[]>([]);
+  const { identity, peers, activePeerId, relayUrl, startupState, startupError, setPeers, setActivePeerId, setRelayUrl } = usePwaStartup();
   const [rooms, setRooms] = useState<PwaRoomRecord[]>([]);
-  const [activePeerId, setActivePeerId] = useState<string | null>(null);
   const [roomId, setRoomId] = useState("main");
   const [timelineItems, setTimelineItems] = useState<TimelineViewItem[]>([]);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | undefined>();
@@ -158,7 +151,6 @@ export function PwaApp() {
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [connection, setConnection] = useState<ConnectionViewState>("offline");
   const [retryAttempt, setRetryAttempt] = useState(0);
-  const [relayUrl, setRelayUrl] = useState(DEFAULT_RELAY);
   const [draft, setDraft] = useState("");
   const [attachment, setAttachment] = useState<ImageAttachment | null>(null);
   const [sendingImage, setSendingImage] = useState(false);
@@ -183,8 +175,6 @@ export function PwaApp() {
   const [followingOutput, setFollowingOutput] = useState(true);
   const [unreadOutput, setUnreadOutput] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [startupState, setStartupState] = useState<StartupState>("loading");
-  const [startupError, setStartupError] = useState<StartupError | null>(null);
   const [pairingProbePresence, setPairingProbePresence] = useState<Record<string, ProbePresence>>({});
   const [activeRoomsSnapshotReceived, setActiveRoomsSnapshotReceived] = useState(false);
   const channelRef = useRef<PeerChannel | null>(null);
@@ -967,7 +957,7 @@ export function PwaApp() {
     scheduleScrollToLatest();
     setConnection(peerId ? (typeof navigator !== "undefined" && navigator.onLine ? "connecting" : "no_network") : "offline");
     setError(null);
-  }, [applyTimelineChange, invalidateConnection, peers, scheduleScrollToLatest]);
+  }, [applyTimelineChange, invalidateConnection, peers, scheduleScrollToLatest, setActivePeerId]);
 
   const selectRoom = useCallback((nextRoom: string) => {
     const peer = activePeerRef.current;
@@ -991,62 +981,6 @@ export function PwaApp() {
     setConnection(typeof navigator !== "undefined" && navigator.onLine ? "connecting" : "no_network");
     void getPwaDatabase().settings.put({ key: `${ACTIVE_ROOM_SETTING}${peer.id}`, value: nextRoom });
   }, [applyTimelineChange, invalidateConnection, scheduleScrollToLatest]);
-
-  useEffect(() => {
-    let cancelled = false;
-    let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
-    const database = getPwaDatabase();
-    const removeDatabaseFailure = database.onOpenFailure((databaseFailure) => {
-      if (cancelled) return;
-      setStartupError(describeStartupFailure(databaseFailure));
-      setStartupState("error");
-    });
-    const startup = (async () => {
-      assertBrowserCapabilities();
-      const database = await openPwaDatabase();
-      const storedIdentity = await database.identities.get("owner");
-      const nextIdentity = storedIdentity ? { privateKey: fromStoredKey(storedIdentity.secretKey), publicKey: fromStoredKey(storedIdentity.publicKey) } : await generateOwnerKeyPair();
-      if (!storedIdentity) await database.identities.put({ id: "owner", publicKey: toStoredKey(nextIdentity.publicKey), secretKey: toStoredKey(nextIdentity.privateKey), createdAt: Date.now() });
-      const [storedPeers, storedRelay, storedActive] = await Promise.all([listPwaPeers(), database.settings.get(RELAY_SETTING), database.settings.get(ACTIVE_PEER_SETTING)]);
-      const normalizedPeers = storedPeers.map((peer) => {
-        const remoteEpk = normalizePeerId(peer.remoteEpk);
-        const nextRoom = peer.roomId || "main";
-        const nextRelay = migrateLegacyDefaultRelay(peer.relayUrl, LEGACY_DEFAULT_RELAY, DEFAULT_RELAY);
-        return { ...peer, id: peer.id || makePwaPeerId(remoteEpk, nextRoom), remoteEpk, roomId: nextRoom, relayUrl: nextRelay };
-      });
-      if (normalizedPeers.some((peer, index) => peer.id !== storedPeers[index]?.id || peer.remoteEpk !== storedPeers[index]?.remoteEpk || peer.roomId !== storedPeers[index]?.roomId || peer.relayUrl !== storedPeers[index]?.relayUrl)) await database.pairings.bulkPut(normalizedPeers);
-      const relayValue = migrateLegacyDefaultRelay(storedRelay?.value, LEGACY_DEFAULT_RELAY, DEFAULT_RELAY);
-      if (storedRelay?.value === LEGACY_DEFAULT_RELAY) await database.settings.put({ key: RELAY_SETTING, value: relayValue });
-      const storedActivePeer = storedActive?.value ? normalizedPeers.find((peer) => peer.id === storedActive.value) ?? normalizedPeers.find((peer) => peer.remoteEpk === normalizePeerId(storedActive.value)) : undefined;
-      return { nextIdentity, normalizedPeers, relayValue, activePeerId: storedActivePeer?.id || normalizedPeers[0]?.id || null };
-    })();
-    const deadline = new Promise<never>((_, reject) => {
-      deadlineTimer = setTimeout(() => {
-        reject(new Error("startup_timeout"));
-      }, 10000);
-    });
-    void Promise.race([startup, deadline]).then((result) => {
-      if (cancelled) return;
-      setIdentity(result.nextIdentity);
-      setPeers(result.normalizedPeers);
-      setRelayUrl(result.relayValue);
-      setActivePeerId(result.activePeerId);
-      setStartupState("ready");
-    }).catch((startupFailure: unknown) => {
-      if (cancelled) return;
-      setStartupError(describeStartupFailure(startupFailure));
-      setStartupState("error");
-    }).finally(() => {
-      if (deadlineTimer) clearTimeout(deadlineTimer);
-      deadlineTimer = null;
-    });
-    return () => {
-      cancelled = true;
-      removeDatabaseFailure();
-      if (deadlineTimer) clearTimeout(deadlineTimer);
-      deadlineTimer = null;
-    };
-  }, []);
 
   useEffect(() => {
     const peer = activePeerRef.current;
@@ -1348,7 +1282,7 @@ export function PwaApp() {
       closePairing();
       relay?.close();
     }
-  }, [identity, relayUrl, selectPeer]);
+  }, [identity, relayUrl, selectPeer, setPeers]);
 
   const saveRelayUrl = useCallback(async (value: string) => {
     const normalized = value.trim().replace(/\/$/, "") || DEFAULT_RELAY;
@@ -1364,7 +1298,7 @@ export function PwaApp() {
     setSettingsRequest(null);
     reconnectStateRef.current.userRecover();
     if (activePeer) restartActiveConnection();
-  }, [peers, restartActiveConnection]);
+  }, [peers, restartActiveConnection, setPeers, setRelayUrl]);
 
   const removePeer = useCallback((peer: PwaPeerRecord) => {
     requestConfirmation(
@@ -1395,12 +1329,12 @@ export function PwaApp() {
     } finally {
       suppressRoomPersistenceRef.current.delete(roomKey);
     }
-  }, [flushLocalWrites, invalidateConnection, selectPeer]);
+  }, [flushLocalWrites, invalidateConnection, selectPeer, setPeers]);
 
   const savePeerNickname = useCallback(async (peer: PwaPeerRecord, nickname: string) => {
     await getPwaDatabase().pairings.put({ ...peer, nickname });
     setPeers(await listPwaPeers());
-  }, []);
+  }, [setPeers]);
 
   const clearLocalData = useCallback(async () => {
     requestConfirmation(
