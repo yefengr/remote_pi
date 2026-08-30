@@ -19,7 +19,7 @@
     "test": "vitest run",
     "verify": "pnpm typecheck && pnpm test && pnpm build",
     "prepublishOnly": "pnpm verify",
-    "publish:npm": "pnpm verify && pnpm publish --access public"
+    "publish:npm": "bash ./publish-npm.sh"
   },
   "keywords": [
     "pi",
