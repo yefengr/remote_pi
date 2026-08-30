@@ -408,7 +408,7 @@ export class PwaHarnessClient {
   }
 
   private scope(historyGeneration: string, selfSenderRef: string): TimelineScope {
-    return { peerEpk: "PEER", roomId: "ROOM", sessionId: "SESSION", historyGeneration, selfSenderRef, channelId: this.channelId };
+    return { deviceId: "DEVICE", endpointId: "ENDPOINT", runtimeInstanceId: "RUNTIME", sessionId: "SESSION", historyGeneration, selfSenderRef, channelId: this.channelId };
   }
 
   private requireScope(): TimelineScope {

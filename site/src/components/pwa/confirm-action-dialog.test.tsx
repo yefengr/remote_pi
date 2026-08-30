@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import test from "node:test";
 import { readFileSync } from "node:fs";
+import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { isValidElement } from "react";
 import { ConfirmActionDialog, type ConfirmActionDialogAction } from "./confirm-action-dialog";
 import { canCloseBackgroundOverlay, pickConfirmationFocusFallback, runConfirmAction, type ConfirmActionRequest } from "./pwa-app";
 import { PwaUiProvider } from "./pwa-ui-provider";
-import type { PwaPeerRecord } from "@/lib/pwa/db";
+import type { PwaDeviceRecord } from "@/lib/pwa/db";
 
 function render(action: ConfirmActionDialogAction, pending = false): string {
   return renderToStaticMarkup(
@@ -37,9 +37,9 @@ test("keeps a closed modal mounted so Mantine can observe the opened transition"
   assert.doesNotMatch(html, /role="dialog"/);
   assert.doesNotMatch(html, /pwa-confirm-dialog/);
 
-  const viewSource = readFileSync(new URL("./pwa-app-view.tsx", import.meta.url), "utf8");
-  assert.match(viewSource, /^\s*<ConfirmActionDialog action=/m);
-  assert.doesNotMatch(viewSource, /\{\s*overlays\.confirmAction\s*\?\s*<ConfirmActionDialog/);
+  const appSource = readFileSync(new URL("./pwa-app.tsx", import.meta.url), "utf8");
+  assert.match(appSource, /^\s*<ConfirmActionDialog action=/m);
+  assert.doesNotMatch(appSource, /\{confirmAction\s*\?\s*<ConfirmActionDialog/);
 });
 
 test("uses focus fallbacks only when Mantine cannot keep an active element", () => {
@@ -63,8 +63,8 @@ test("keeps background drawers open while a confirmation is active", () => {
 
 test("renders each confirmation action as an accessible Mantine modal", () => {
   const cases: Array<{ action: ConfirmActionDialogAction; title: string; description: string; confirmLabel: string }> = [
-    { action: { kind: "new-session" }, title: "Start a fresh session?", description: "All Owners in this Session will switch to a fresh session.", confirmLabel: "Start fresh session" },
-    { action: { kind: "remove-pairing", label: "Pi on office / main" }, title: "Delete pairing for Pi on office / main?", description: "This removes this Pi/session pairing from this browser.", confirmLabel: "Delete pairing" },
+    { action: { kind: "new-session" }, title: "Start a fresh session?", description: "All Owners on this endpoint will switch to a fresh session.", confirmLabel: "Start fresh session" },
+    { action: { kind: "remove-pairing", label: "Pi on office / interactive" }, title: "Delete pairing for Pi on office / interactive?", description: "This removes this device pairing, its endpoints, and local history from this browser.", confirmLabel: "Delete pairing" },
     { action: { kind: "clear-local-data" }, title: "Clear this browser&#x27;s Remote Pi identity, pairings, and history?", description: "This cannot be undone.", confirmLabel: "Clear local data" },
   ];
 
@@ -90,7 +90,7 @@ test("uses a primary confirmation only for a new session", () => {
   assert.match(newSessionConfirm, /data-tone="primary"/);
   assert.doesNotMatch(newSessionConfirm, /data-tone="danger"/);
 
-  for (const action of [{ kind: "remove-pairing", label: "Pi on office / main" } as const, { kind: "clear-local-data" } as const]) {
+  for (const action of [{ kind: "remove-pairing", label: "Pi on office / interactive" } as const, { kind: "clear-local-data" } as const]) {
     const html = render(action);
     const matches = html.match(/<button(?=[^>]*type="button")(?=[^>]*data-tone="danger")[^>]*>[\s\S]*?<\/button>/g) ?? [];
     assert.equal(matches.length, 1);
@@ -108,18 +108,17 @@ test("locks all close paths while an action is pending", () => {
   assert.match(html, /aria-label="Close confirmation dialog"[^>]*disabled=""/);
 });
 
-const peer: PwaPeerRecord = {
-  id: "peer:main",
-  remoteEpk: "e5FRoCabBqVX",
-  sessionName: "XCrawl#2",
+const device: PwaDeviceRecord = {
+  id: "device:main",
+  deviceId: "device-main",
   relayUrl: "https://relay.example.test",
   pairedAt: "2026-01-01T00:00:00.000Z",
-  roomId: "main",
+  hostname: "office",
 };
 
 function actionHarness(overrides: Partial<{
   startNewSession: () => boolean;
-  removePairing: (target: PwaPeerRecord) => Promise<void>;
+  removePairing: (target: PwaDeviceRecord) => Promise<void>;
   invalidateConnection: () => void;
   clearLocalData: () => Promise<void>;
   reload: () => void;
@@ -155,7 +154,7 @@ test("runs a remove-pairing confirmation once while concurrent confirms are lock
   const removal = new Promise<void>((resolve) => { releaseRemoval = resolve; });
   let removals = 0;
   const harness = actionHarness({ removePairing: async () => { removals += 1; await removal; } });
-  const action: ConfirmActionRequest = { kind: "remove-pairing", label: "Pi on office / main", peer };
+  const action: ConfirmActionRequest = { kind: "remove-pairing", label: "Pi on office / interactive", device };
 
   const first = runConfirmAction(action, harness.effects, harness.state);
   const second = await runConfirmAction(action, harness.effects, harness.state);
@@ -184,7 +183,7 @@ test("keeps the confirmation open with an error when starting a session is rejec
 test("keeps a failed remove confirmation available for retry", async () => {
   const harness = actionHarness({ removePairing: async () => { throw new Error("Could not delete pairing."); } });
 
-  const result = await runConfirmAction({ kind: "remove-pairing", label: "Pi on office / main", peer }, harness.effects, harness.state);
+  const result = await runConfirmAction({ kind: "remove-pairing", label: "Pi on office / interactive", device }, harness.effects, harness.state);
 
   assert.equal(result, "failed");
   assert.equal(harness.successes(), 0);

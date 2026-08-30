@@ -179,7 +179,7 @@ describe("TimelineEvent and TimelinePartial", () => {
 
 describe("Protocol v2 server frames", () => {
   test("accepts started message, all status branches, timeline, fragments and history chunks", () => {
-    const pairOk = { ...version, type: "pair_ok", in_reply_to: "P1", session_name: "demo", session_started_at: 1, room_id: "R" };
+    const pairOk = { ...version, type: "pair_ok", in_reply_to: "P1", session_name: "demo", session_started_at: 1, endpoint_id: "E" };
     const pairError = { ...version, type: "pair_error", in_reply_to: "P2", code: "token_expired", message: "expired" };
     const ready = { ...version, type: "session_ready", in_reply_to: "H1", ...direct, ...session, self_sender_ref: "owner" };
     const started = { ...version, type: "user_message_started", ...direct, in_reply_to: "R1", ...session, message: { id: "M1", group_id: "GR1", blocks: [{ type: "text", text: "hello" }], origin: "pwa", sender_ref: "owner", delivery: "normal" } };

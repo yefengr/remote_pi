@@ -1,101 +1,85 @@
-import { decodeBase64, decodeEnvelope, decodeUtf8, encodeEnvelope, encodeUtf8 } from "./encoding";
-import type {
-  ClientMessage,
-  ControlFrame,
-  ControlOutbound,
-  PeerEnvelope,
-  RelayFrame,
-  ServerMessage,
-} from "./types";
-
-const SERVER_TYPES = new Set([
-  "pair_ok", "pair_error", "user_input", "user_message", "queued_message_state", "steer_consumed",
-  "agent_chunk", "agent_done", "agent_message", "compaction", "tool_request", "tool_result", "error",
-  "cancelled", "pong", "bye", "session_history", "action_ok", "action_error", "models_list", "extension_ui_request",
-]);
-
-const CONTROL_TYPES = new Set([
-  "peer_online", "peer_offline", "presence", "room_announced", "room_ended", "rooms", "room_meta_updated",
-]);
+import { decodeBase64, decodeUtf8, encodeBase64, encodeUtf8 } from "./encoding";
+import type { ControlFrame, ControlOutbound, EndpointInfo, EndpointMetadata, RelayFrame, RouteFrame } from "./types";
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function encodeClientMessage(message: ClientMessage): Uint8Array {
-  return encodeUtf8(JSON.stringify(message));
+export function parseJson(value: unknown): unknown {
+  if (typeof value !== "string" && !(value instanceof Uint8Array)) return value;
+  try { return JSON.parse(typeof value === "string" ? value : decodeUtf8(value)); } catch { return undefined; }
 }
 
-export function decodeClientMessage(value: unknown): ClientMessage | undefined {
-  const parsed = parseJson(value);
-  return isKnownMessage(parsed, false) ? parsed as ClientMessage : undefined;
+function isId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 256;
 }
 
-export function decodeServerMessage(value: unknown): ServerMessage | undefined {
-  const parsed = parseJson(value);
-  return isKnownMessage(parsed, true) ? parsed as ServerMessage : undefined;
+function isUuid(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-export function decodeInnerMessage(value: Uint8Array | string, direction: "client" | "server" = "server"): ClientMessage | ServerMessage | undefined {
-  const parsed = parseJson(value);
-  if (!isRecord(parsed)) return undefined;
-  return direction === "server" ? decodeServerMessage(parsed) : decodeClientMessage(parsed);
+function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
 }
 
-export function encodeOuterEnvelope(peer: string, message: ClientMessage | ServerMessage, room?: string): PeerEnvelope {
-  return encodeEnvelope(peer, encodeUtf8(JSON.stringify(message)), room);
+function decodeMetadata(value: unknown): EndpointMetadata | undefined {
+  if (!isRecord(value) || !hasOnlyKeys(value, ["kind", "name", "cwd", "pid", "started_at", "model", "thinking", "working"]) || (value.kind !== "daemon" && value.kind !== "interactive")) return undefined;
+  const scalar = (key: string, type: "string" | "number" | "boolean") => value[key] === undefined || typeof value[key] === type;
+  if (!scalar("name", "string") || !scalar("cwd", "string") || !scalar("pid", "number") || !scalar("started_at", "number") || !scalar("model", "string") || !scalar("thinking", "string") || !scalar("working", "boolean")) return undefined;
+  return value as EndpointMetadata;
 }
 
-export function decodeOuterEnvelope(value: unknown): { envelope: PeerEnvelope; message: ServerMessage | undefined } | undefined {
-  const decoded = decodeEnvelope(value);
-  if (!decoded) return undefined;
-  return { envelope: decoded.envelope, message: decodeServerMessage(decoded.payload) };
+function decodeEndpoint(value: unknown): EndpointInfo | undefined {
+  if (!isRecord(value) || !isUuid(value.endpoint_id) || !isUuid(value.runtime_instance_id)) return undefined;
+  const metadata = decodeMetadata(value.metadata);
+  return metadata ? { endpoint_id: value.endpoint_id, runtime_instance_id: value.runtime_instance_id, metadata } : undefined;
+}
+
+export function decodeRoute(value: unknown): RouteFrame | undefined {
+  if (!isRecord(value) || value.type !== "route" || (value.purpose !== "pairing" && value.purpose !== "session") || !isId(value.device_id) || !isUuid(value.endpoint_id) || !isUuid(value.runtime_instance_id) || typeof value.ct !== "string") return undefined;
+  const allowed = new Set(["type", "purpose", "device_id", "endpoint_id", "runtime_instance_id", "target_owner_id", "source_owner_id", "ct"]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return undefined;
+  if (value.target_owner_id !== undefined && !isId(value.target_owner_id)) return undefined;
+  if (value.source_owner_id !== undefined && !isId(value.source_owner_id)) return undefined;
+  return value as RouteFrame;
 }
 
 export function decodeControlFrame(value: unknown): ControlFrame | undefined {
-  if (!isRecord(value) || typeof value.type !== "string" || !CONTROL_TYPES.has(value.type)) return undefined;
-  if (value.type === "peer_online" && typeof value.peer === "string") return value as unknown as ControlFrame;
-  if (value.type === "peer_offline" && typeof value.peer === "string" && typeof value.since_ts === "number") return value as unknown as ControlFrame;
-  if (value.type === "presence" && Array.isArray(value.states)) return value as unknown as ControlFrame;
-  if (value.type === "room_announced" && typeof value.peer === "string" && typeof value.room_id === "string" && typeof value.started_at === "number") return value as unknown as ControlFrame;
-  if (value.type === "room_ended" && typeof value.peer === "string" && typeof value.room_id === "string" && typeof value.since_ts === "number") return value as unknown as ControlFrame;
-  if (value.type === "rooms" && typeof value.peer === "string" && Array.isArray(value.rooms)) return value as unknown as ControlFrame;
-  if (value.type === "room_meta_updated" && typeof value.peer === "string" && typeof value.room_id === "string") return value as unknown as ControlFrame;
+  if (!isRecord(value) || typeof value.type !== "string" || !isId(value.device_id)) return undefined;
+  if (value.type === "endpoints" && hasOnlyKeys(value, ["type", "device_id", "endpoints"]) && Array.isArray(value.endpoints)) {
+    const endpoints = value.endpoints.map(decodeEndpoint);
+    return endpoints.every((endpoint): endpoint is EndpointInfo => endpoint !== undefined) ? { type: "endpoints", device_id: value.device_id, endpoints } : undefined;
+  }
+  if ((value.type === "endpoint_announced" || value.type === "endpoint_updated") && hasOnlyKeys(value, ["type", "device_id", "endpoint_id", "runtime_instance_id", "metadata"]) && isUuid(value.endpoint_id) && isUuid(value.runtime_instance_id)) {
+    const metadata = decodeMetadata(value.metadata);
+    return metadata ? { type: value.type, device_id: value.device_id, endpoint_id: value.endpoint_id, runtime_instance_id: value.runtime_instance_id, metadata } : undefined;
+  }
+  if (value.type === "endpoint_ended" && hasOnlyKeys(value, ["type", "device_id", "endpoint_id", "runtime_instance_id"]) && isUuid(value.endpoint_id) && isUuid(value.runtime_instance_id)) return { type: "endpoint_ended", device_id: value.device_id, endpoint_id: value.endpoint_id, runtime_instance_id: value.runtime_instance_id };
   return undefined;
 }
 
 export function decodeRelayFrame(value: unknown): RelayFrame | undefined {
-  const decoded = decodeEnvelope(value);
-  if (decoded) return { kind: "envelope", envelope: decoded.envelope };
+  const route = decodeRoute(value);
+  if (route) return { kind: "route", route };
   const control = decodeControlFrame(value);
   return control ? { kind: "control", frame: control } : undefined;
+}
+
+export function encodeRoutePayload(payload: Uint8Array | string): string {
+  return encodeBase64(typeof payload === "string" ? encodeUtf8(payload) : payload, "standard");
+}
+
+export function decodeRoutePayload(route: RouteFrame): Uint8Array | undefined {
+  try { return decodeBase64(route.ct, "standard"); } catch { return undefined; }
 }
 
 export function encodeControlFrame(frame: ControlOutbound): string {
   return JSON.stringify(frame);
 }
 
-export function parseJson(value: unknown): unknown {
-  if (typeof value !== "string" && !(value instanceof Uint8Array)) return value;
-  try {
-    return JSON.parse(typeof value === "string" ? value : decodeUtf8(value));
-  } catch {
-    return undefined;
-  }
-}
-
 export function decodeChallenge(value: unknown): { type: "challenge"; nonce: string } | undefined {
   const parsed = parseJson(value);
-  if (!isRecord(parsed) || parsed.type !== "challenge" || typeof parsed.nonce !== "string") return undefined;
-  try {
-    decodeBase64(parsed.nonce);
-  } catch {
-    return undefined;
-  }
+  if (!isRecord(parsed) || !hasOnlyKeys(parsed, ["type", "nonce"]) || parsed.type !== "challenge" || typeof parsed.nonce !== "string") return undefined;
+  try { decodeBase64(parsed.nonce, "standard"); } catch { return undefined; }
   return { type: "challenge", nonce: parsed.nonce };
-}
-
-function isKnownMessage(value: unknown, server: boolean): boolean {
-  if (!isRecord(value) || typeof value.type !== "string") return false;
-  return (server ? SERVER_TYPES : new Set(["pair_request", "user_message", "queued_message_set", "queued_message_clear", "approve_tool", "cancel", "ping", "session_sync", "session_new", "session_compact", "model_set", "thinking_set", "list_models", "extension_ui_response"])).has(value.type);
 }

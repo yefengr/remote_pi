@@ -3,80 +3,50 @@ import { beforeEach, expect, test } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { SessionSheet } from "./session-sheet";
 import { renderPwa } from "@/test/browser/render";
-import type { PwaPeerRecord, PwaRoomRecord } from "@/lib/pwa/db";
+import type { PwaDeviceRecord, PwaEndpointRecord } from "@/lib/pwa/db";
 import type { PairingPresence } from "./workspace-view";
 
-const alphaPeer: PwaPeerRecord = {
-  id: "peer:alpha",
-  remoteEpk: "alpha-public-key-1234",
-  sessionName: "Alpha",
-  nickname: "Alpha Pi",
+const alphaDevice: PwaDeviceRecord = {
+  id: "device:alpha",
+  deviceId: "alpha-public-key-1234",
   relayUrl: "https://relay.example.test",
   pairedAt: "2026-01-01T00:00:00.000Z",
-  roomId: "room-current",
+  nickname: "Alpha Pi",
 };
 
-const alphaArchivePeer: PwaPeerRecord = {
-  id: "peer:alpha-archive",
-  remoteEpk: alphaPeer.remoteEpk,
-  sessionName: "Alpha archive",
-  nickname: "Alpha archive",
-  relayUrl: "https://relay.example.test",
-  pairedAt: "2026-01-02T00:00:00.000Z",
-  roomId: "room-archive",
-};
-
-const betaPeer: PwaPeerRecord = {
-  id: "peer:beta",
-  remoteEpk: "beta-public-key-5678",
-  sessionName: "Beta",
-  nickname: "Beta Pi",
+const betaDevice: PwaDeviceRecord = {
+  id: "device:beta",
+  deviceId: "beta-public-key-5678",
   relayUrl: "https://relay.example.test",
   pairedAt: "2026-01-03T00:00:00.000Z",
-  roomId: "room-beta",
+  nickname: "Beta Pi",
 };
 
-const gammaPeer: PwaPeerRecord = {
-  id: "peer:gamma",
-  remoteEpk: "gamma-public-key-9012",
-  sessionName: "Gamma",
-  nickname: "Gamma Pi",
-  relayUrl: "https://relay.example.test",
-  pairedAt: "2026-01-04T00:00:00.000Z",
-  roomId: "room-gamma",
-};
+const devices = [alphaDevice, betaDevice];
 
-const deltaPeer: PwaPeerRecord = {
-  id: "peer:delta",
-  remoteEpk: "delta-public-key-3456",
-  sessionName: "Delta",
-  nickname: "Delta Pi",
-  relayUrl: "https://relay.example.test",
-  pairedAt: "2026-01-05T00:00:00.000Z",
-  roomId: "room-delta",
-};
-
-const peers = [alphaPeer, alphaArchivePeer, betaPeer, gammaPeer, deltaPeer];
-
-const rooms: PwaRoomRecord[] = [
-  { id: "room:current", peerEpk: alphaPeer.remoteEpk, roomId: "room-current", name: "A current", cwd: "/workspace/current", online: true, updatedAt: 1 },
-  { id: "room:working", peerEpk: alphaPeer.remoteEpk, roomId: "room-working", name: "B working", cwd: "/workspace/working", working: true, online: true, updatedAt: 2 },
-  { id: "room:checking", peerEpk: alphaPeer.remoteEpk, roomId: "room-checking", name: "C checking", cwd: "/workspace/checking", updatedAt: 3 },
-  { id: "room:offline", peerEpk: alphaPeer.remoteEpk, roomId: "room-offline", name: "D offline", cwd: "/workspace/offline", online: false, updatedAt: 4 },
-  { id: "room:beta", peerEpk: betaPeer.remoteEpk, roomId: "room-beta", name: "Other pairing", cwd: "/workspace/other-peer", online: true, updatedAt: 5 },
+const alphaEndpoints: PwaEndpointRecord[] = [
+  { id: "alpha-live-record", deviceId: alphaDevice.deviceId, endpointId: "alpha-live", runtimeInstanceId: "alpha-runtime-live", kind: "daemon", name: "A live endpoint", cwd: "/workspace/live", online: true, updatedAt: 1 },
+  { id: "alpha-working-record", deviceId: alphaDevice.deviceId, endpointId: "alpha-working", runtimeInstanceId: "alpha-runtime-working", kind: "interactive", name: "B working endpoint", cwd: "/workspace/working", working: true, online: true, updatedAt: 2 },
+  { id: "alpha-checking-record", deviceId: alphaDevice.deviceId, endpointId: "alpha-checking", runtimeInstanceId: "alpha-runtime-checking", kind: "daemon", name: "C checking endpoint", cwd: "/workspace/checking", updatedAt: 3 },
+  { id: "alpha-offline-record", deviceId: alphaDevice.deviceId, endpointId: "alpha-offline", runtimeInstanceId: "alpha-runtime-offline", kind: "interactive", name: "D offline endpoint", cwd: "/workspace/offline", online: false, updatedAt: 4 },
 ];
 
+const betaEndpoints: PwaEndpointRecord[] = [
+  { id: "beta-live-record", deviceId: betaDevice.deviceId, endpointId: "beta-live", runtimeInstanceId: "beta-runtime-live", kind: "daemon", name: "Beta live endpoint", cwd: "/workspace/beta", online: true, updatedAt: 5 },
+  { id: "beta-review-record", deviceId: betaDevice.deviceId, endpointId: "beta-review", runtimeInstanceId: "beta-runtime-review", kind: "interactive", name: "Beta review endpoint", cwd: "/workspace/review", online: false, updatedAt: 6 },
+];
+
+const endpoints = [...alphaEndpoints, ...betaEndpoints];
+
 const pairingPresence: Record<string, PairingPresence> = {
-  [alphaPeer.id]: { status: "online", onlineSessions: 2, totalSessions: 3 },
-  [alphaArchivePeer.id]: { status: "offline", onlineSessions: 50, totalSessions: 50 },
-  [betaPeer.id]: { status: "partial", onlineSessions: 1, totalSessions: 2 },
-  [gammaPeer.id]: { status: "offline", onlineSessions: 0, totalSessions: 1 },
+  [alphaDevice.id]: { status: "online", onlineEndpoints: 2, totalEndpoints: 4 },
+  [betaDevice.id]: { status: "partial", onlineEndpoints: 1, totalEndpoints: 2 },
 };
 
 type SessionSheetHarnessProps = {
   events: string[];
-  renamed: PwaPeerRecord[];
-  removed: PwaPeerRecord[];
+  renamed: PwaDeviceRecord[];
+  removed: PwaDeviceRecord[];
   rejectClose?: boolean;
 };
 
@@ -100,19 +70,19 @@ function SessionSheetHarness({ events, renamed, removed, rejectClose = false }: 
 
   return (
     <>
-      <button type="button" onClick={open}>Open sessions</button>
-      {actionTarget ? <button ref={actionTargetRef} type="button" data-testid="session-action-target">{actionTarget}</button> : null}
+      <button type="button" onClick={open}>Open endpoints</button>
+      {actionTarget ? <button ref={actionTargetRef} type="button" data-testid="endpoint-action-target">{actionTarget}</button> : null}
       {request ? <SessionSheet
-        peers={peers}
-        rooms={rooms}
-        activePeerId={alphaPeer.id}
-        activeRoomId="room-current"
+        devices={devices}
+        endpoints={endpoints}
+        activeDeviceId={alphaDevice.id}
+        activeEndpointId="alpha-live"
         pairingPresence={pairingPresence}
-        onSelectPeer={(peerId) => { events.push(`select-peer:${peerId}`); setActionTarget(`Selected ${peerId}`); }}
-        onSelectRoom={(roomId) => { events.push(`select-room:${roomId}`); setActionTarget(`Selected ${roomId}`); }}
+        onSelectDevice={(deviceId) => { events.push(`select-device:${deviceId}`); setActionTarget(`Selected ${deviceId}`); }}
+        onSelectEndpoint={(endpointId) => { events.push(`select-endpoint:${endpointId}`); setActionTarget(`Selected ${endpointId}`); }}
         onPair={() => { events.push("pair"); setActionTarget("Pairing destination"); }}
-        onRename={(peer) => renamed.push(peer)}
-        onRemove={(peer) => removed.push(peer)}
+        onRename={(device) => renamed.push(device)}
+        onRemove={(device) => removed.push(device)}
         onClose={close}
         focusOrigin={request.focusOrigin}
       /> : null}
@@ -136,15 +106,24 @@ function drawerOverlay() {
   return page.elementLocator(overlay!);
 }
 
-function roomLocator(roomId: string) {
-  const room = [...document.querySelectorAll<HTMLButtonElement>(".pwa-sheet-room")]
-    .find((element) => element.textContent?.includes(`session ID ${roomId}`));
-  expect(room).toBeDefined();
-  return page.elementLocator(room!);
+function endpointLocator(endpointId: string) {
+  const endpoint = [...document.querySelectorAll<HTMLButtonElement>(".pwa-sheet-room")]
+    .find((element) => element.textContent?.includes(`endpoint ID ${endpointId}`));
+  expect(endpoint).toBeDefined();
+  return page.elementLocator(endpoint!);
+}
+
+function deviceSelectLocator(deviceId: string) {
+  const row = [...document.querySelectorAll<HTMLElement>(".pwa-sheet-peer")]
+    .find((element) => element.textContent?.includes(`Device key ${deviceId.slice(0, 8)}`));
+  expect(row).toBeDefined();
+  const select = row!.querySelector<HTMLButtonElement>(".pwa-sheet-peer-select");
+  expect(select).not.toBeNull();
+  return page.elementLocator(select!);
 }
 
 async function openSheet(screen: Awaited<ReturnType<typeof renderPwa>>) {
-  const trigger = screen.getByRole("button", { name: "Open sessions" });
+  const trigger = screen.getByRole("button", { name: "Open endpoints" });
   trigger.element().focus();
   await expect.element(trigger).toHaveFocus();
   await trigger.click();
@@ -163,7 +142,7 @@ test("portals the accessible Drawer in the PWA root, traps focus, and restores i
   await expect.element(dialog).toHaveAttribute("aria-modal", "true");
   const labelledBy = dialogElement.getAttribute("aria-labelledby");
   expect(labelledBy).toBeTruthy();
-  await expect.element(screen.getByRole("heading", { name: "Sessions", exact: true })).toBeVisible();
+  await expect.element(screen.getByRole("heading", { name: "Endpoints", exact: true })).toBeVisible();
   expect(root.closest(".pwa-root")).not.toBeNull();
   expect(getComputedStyle(root).getPropertyValue("--mb-z-index")).toBe("30");
   await expect.poll(() => dialogElement.contains(document.activeElement)).toBe(true);
@@ -172,7 +151,7 @@ test("portals the accessible Drawer in the PWA root, traps focus, and restores i
   await userEvent.tab({ shift: true });
   expect(dialogElement.contains(document.activeElement)).toBe(true);
 
-  await screen.getByRole("button", { name: "Close sessions" }).click();
+  await screen.getByRole("button", { name: "Close endpoints" }).click();
   await expect.element(dialog).not.toBeInTheDocument();
   await expect.element(trigger).toHaveFocus();
 
@@ -198,7 +177,7 @@ test("keeps focus inside the Drawer when its parent rejects a close request", as
   const { trigger, dialog } = await openSheet(screen);
   const dialogElement = dialog.element();
 
-  await screen.getByRole("button", { name: "Close sessions" }).click();
+  await screen.getByRole("button", { name: "Close endpoints" }).click();
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
   await expect.element(dialog).toBeVisible();
@@ -207,44 +186,42 @@ test("keeps focus inside the Drawer when its parent rejects a close request", as
   expect(events).toEqual(["close"]);
 });
 
-test("deduplicates pairing presence by first peer key and restricts sorted rooms to the active peer", async () => {
+test("summarizes each device and restricts sorted endpoints to the active device", async () => {
   const screen = await renderPwa(<SessionSheetHarness events={[]} renamed={[]} removed={[]} />);
   await openSheet(screen);
 
   await expect.element(screen.getByText("2 ONLINE", { exact: true })).toBeVisible();
-  await expect.element(screen.getByText("1 OFFLINE", { exact: true })).toBeVisible();
-  await expect.element(screen.getByText("3 of 6 sessions online", { exact: true })).toBeVisible();
-  const peerRows = [...document.querySelectorAll<HTMLElement>(".pwa-sheet-peer")].map((element) => element.textContent);
-  expect(peerRows).toEqual(expect.arrayContaining([
-    expect.stringContaining("Alpha PiPi key alpha-pu…ONLINE2/3 SESSIONSCURRENT"),
-    expect.stringContaining("Alpha archivePi key alpha-pu…OFFLINE50/50 SESSIONS"),
-    expect.stringContaining("Beta PiPi key beta-pub…PARTIAL1/2 SESSIONS"),
-    expect.stringContaining("Gamma PiPi key gamma-pu…OFFLINE0/1 SESSIONS"),
-    expect.stringContaining("Delta PiPi key delta-pu…CHECKING0/0 SESSIONS"),
-  ]));
+  await expect.element(screen.getByText("0 OFFLINE", { exact: true })).toBeVisible();
+  await expect.element(screen.getByText("3 of 6 endpoints online", { exact: true })).toBeVisible();
+  const deviceRows = [...document.querySelectorAll<HTMLElement>(".pwa-sheet-peer")].map((element) => element.textContent ?? "");
+  expect(deviceRows).toHaveLength(2);
+  expect(deviceRows.join(" ")).toContain("Alpha Pi");
+  expect(deviceRows.join(" ")).toContain("Device key alpha-pu…");
+  expect(deviceRows.join(" ")).toContain("Beta Pi");
+  expect(deviceRows.join(" ")).toContain("Device key beta-pub…");
 
-  const activeRoomIds = [...document.querySelectorAll<HTMLElement>(".pwa-sheet-rooms .pwa-sheet-room")]
-    .map((element) => element.textContent?.match(/session ID ([\w-]+)/)?.[1]?.replace("CURRENT", ""));
-  expect(activeRoomIds).toEqual(["room-current", "room-working", "room-checking", "room-offline"]);
+  const activeEndpointIds = [...document.querySelectorAll<HTMLElement>(".pwa-sheet-rooms .pwa-sheet-room")]
+    .map((element) => element.querySelector("code")?.textContent?.replace("endpoint ID ", ""));
+  expect(activeEndpointIds).toEqual(["alpha-live", "alpha-working", "alpha-checking", "alpha-offline"]);
   expect([...document.querySelectorAll(".pwa-sheet-rooms .pwa-sheet-room")]
-    .some((element) => element.textContent?.includes("room-beta"))).toBe(false);
+    .some((element) => element.textContent?.includes("beta-live"))).toBe(false);
 });
 
-test("keeps current, checking, and offline rooms inert while selecting an online working room before closing", async () => {
+test("keeps current, checking, and offline endpoints inert while selecting an online endpoint before closing", async () => {
   const events: string[] = [];
   const screen = await renderPwa(<SessionSheetHarness events={events} renamed={[]} removed={[]} />);
   const { trigger } = await openSheet(screen);
-  const current = roomLocator("room-current");
-  const working = roomLocator("room-working");
-  const checking = roomLocator("room-checking");
-  const offline = roomLocator("room-offline");
+  const current = endpointLocator("alpha-live");
+  const working = endpointLocator("alpha-working");
+  const checking = endpointLocator("alpha-checking");
+  const offline = endpointLocator("alpha-offline");
 
   await expect.element(current).toBeDisabled();
-  await expect.element(current).toHaveAttribute("title", "Current session is read-only here");
+  await expect.element(current).toHaveAttribute("title", "Current endpoint");
   await expect.element(checking).toBeDisabled();
-  await expect.element(checking).toHaveAttribute("title", "Checking session status");
+  await expect.element(checking).toHaveAttribute("title", "Checking endpoint status");
   await expect.element(offline).toBeDisabled();
-  await expect.element(offline).toHaveAttribute("title", "This session is offline");
+  await expect.element(offline).toHaveAttribute("title", "This endpoint is offline");
   await expect.element(working).toBeEnabled();
 
   (current.element() as HTMLButtonElement).click();
@@ -253,23 +230,23 @@ test("keeps current, checking, and offline rooms inert while selecting an online
   expect(events).toEqual([]);
 
   await working.click();
-  expect(events).toEqual(["select-room:room-working", "close"]);
+  expect(events).toEqual(["select-endpoint:alpha-working", "close"]);
   await expect.element(screen.getByRole("dialog")).not.toBeInTheDocument();
-  await expect.element(screen.getByTestId("session-action-target")).toHaveFocus();
+  await expect.element(screen.getByTestId("endpoint-action-target")).toHaveFocus();
   await expect.element(trigger).not.toHaveFocus();
 });
 
-test("routes peer, pair, rename, and delete actions without closing for the peer-object actions", async () => {
+test("routes device, pair, rename, and delete actions without closing for device-object actions", async () => {
   const events: string[] = [];
-  const renamed: PwaPeerRecord[] = [];
-  const removed: PwaPeerRecord[] = [];
+  const renamed: PwaDeviceRecord[] = [];
+  const removed: PwaDeviceRecord[] = [];
   const screen = await renderPwa(<SessionSheetHarness events={events} renamed={renamed} removed={removed} />);
   const { trigger } = await openSheet(screen);
 
-  await screen.getByRole("button", { name: /Beta Pi Pi key/ }).click();
-  expect(events).toEqual(["select-peer:peer:beta", "close"]);
+  await deviceSelectLocator(betaDevice.deviceId).click();
+  expect(events).toEqual(["select-device:device:beta", "close"]);
   await expect.element(screen.getByRole("dialog")).not.toBeInTheDocument();
-  await expect.element(screen.getByTestId("session-action-target")).toHaveFocus();
+  await expect.element(screen.getByTestId("endpoint-action-target")).toHaveFocus();
   await expect.element(trigger).not.toHaveFocus();
 
   events.length = 0;
@@ -277,7 +254,7 @@ test("routes peer, pair, rename, and delete actions without closing for the peer
   await screen.getByRole("button", { name: "Pair a Pi" }).click();
   expect(events).toEqual(["pair", "close"]);
   await expect.element(screen.getByRole("dialog")).not.toBeInTheDocument();
-  await expect.element(screen.getByTestId("session-action-target")).toHaveFocus();
+  await expect.element(screen.getByTestId("endpoint-action-target")).toHaveFocus();
   await expect.element(trigger).not.toHaveFocus();
 
   events.length = 0;
@@ -285,13 +262,13 @@ test("routes peer, pair, rename, and delete actions without closing for the peer
   const dialog = screen.getByRole("dialog");
   await screen.getByRole("button", { name: "Rename Beta Pi" }).click();
   expect(renamed).toHaveLength(1);
-  expect(renamed[0]).toBe(betaPeer);
+  expect(renamed[0]).toBe(betaDevice);
   expect(events).toEqual([]);
   await expect.element(dialog).toBeVisible();
 
   await screen.getByRole("button", { name: "Delete Beta Pi" }).click();
   expect(removed).toHaveLength(1);
-  expect(removed[0]).toBe(betaPeer);
+  expect(removed[0]).toBe(betaDevice);
   expect(events).toEqual([]);
   await expect.element(dialog).toBeVisible();
 });
@@ -314,7 +291,7 @@ test("keeps the mobile Drawer in the viewport with scrollable content and reacha
   expect(getComputedStyle(body!).overflowY).toBe("auto");
 
   const actions = [
-    screen.getByRole("button", { name: "Close sessions" }),
+    screen.getByRole("button", { name: "Close endpoints" }),
     screen.getByRole("button", { name: "Pair a Pi" }),
     screen.getByRole("button", { name: "Rename Alpha Pi" }),
     screen.getByRole("button", { name: "Delete Alpha Pi" }),

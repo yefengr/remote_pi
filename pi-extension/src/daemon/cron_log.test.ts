@@ -5,67 +5,28 @@ import { join } from "node:path";
 import { appendCronLog, firedFor, readCronLog } from "./cron_log.js";
 
 let home: string;
+beforeEach(() => { home = mkdtempSync(join(tmpdir(), "pi-cron-log-")); process.env["REMOTE_PI_HOME"] = home; });
+afterEach(() => { delete process.env["REMOTE_PI_HOME"]; rmSync(home, { recursive: true, force: true }); });
 
-beforeEach(() => {
-  home = mkdtempSync(join(tmpdir(), "pi-cronlog-"));
-  process.env["REMOTE_PI_HOME"] = home;
-});
-afterEach(() => {
-  delete process.env["REMOTE_PI_HOME"];
-  try { rmSync(home, { recursive: true, force: true }); } catch { /* best-effort */ }
-});
-
-describe("cron_log", () => {
-  test("missing file → []", () => {
-    expect(readCronLog()).toEqual([]);
-  });
-
-  test("append creates the file + records all fields", () => {
-    appendCronLog({ job_id: "j_1", daemon_id: "d1", schedule: "0 9 * * *", result: "delivered", prompt: "hello world" });
-    const out = readCronLog();
-    expect(out).toHaveLength(1);
-    expect(out[0]).toMatchObject({
-      job_id: "j_1", daemon_id: "d1", schedule: "0 9 * * *",
-      fired: true, result: "delivered", prompt_preview: "hello world",
-    });
-    expect(typeof out[0]!.ts).toBe("number");
-  });
-
-  test("records skips too (fired:false)", () => {
-    appendCronLog({ job_id: "j_1", daemon_id: "d1", schedule: "0 9 * * *", result: "skipped_busy", prompt: "x" });
-    appendCronLog({ job_id: "j_1", daemon_id: "d1", schedule: "0 9 * * *", result: "skipped_down", prompt: "x" });
-    const out = readCronLog();
-    expect(out.map((e) => [e.result, e.fired])).toEqual([
-      ["skipped_busy", false],
-      ["skipped_down", false],
+describe("cron audit", () => {
+  test("records accepted RPC dispatch separately from skipped desired state", () => {
+    appendCronLog({ job_id: "j", daemon_id: "d", schedule: "* * * * *", result: "accepted", prompt: "hello" });
+    appendCronLog({ job_id: "j", daemon_id: "d", schedule: "* * * * *", result: "skipped_desired_stopped", prompt: "hello" });
+    expect(readCronLog().map((entry) => [entry.result, entry.fired])).toEqual([
+      ["accepted", true],
+      ["skipped_desired_stopped", false],
     ]);
   });
 
-  test("tail returns the last N, in order", () => {
-    for (let i = 0; i < 5; i++) {
-      appendCronLog({ job_id: "j_1", daemon_id: "d", schedule: "s", result: "delivered", prompt: `p${i}` });
-    }
-    const out = readCronLog({ tail: 2 });
-    expect(out.map((e) => e.prompt_preview)).toEqual(["p3", "p4"]);
+  test("filters, tails and truncates preview", () => {
+    appendCronLog({ job_id: "j1", daemon_id: "d", schedule: "s", result: "skipped_blocked", prompt: "x".repeat(100) });
+    appendCronLog({ job_id: "j2", daemon_id: "d", schedule: "s", result: "rejected", prompt: "p" });
+    expect(readCronLog({ jobId: "j1", tail: 1 })[0]).toMatchObject({ result: "skipped_blocked", prompt_preview: "x".repeat(80) });
   });
 
-  test("filters by job_id", () => {
-    appendCronLog({ job_id: "j_a", daemon_id: "d", schedule: "s", result: "delivered", prompt: "a" });
-    appendCronLog({ job_id: "j_b", daemon_id: "d", schedule: "s", result: "delivered", prompt: "b" });
-    appendCronLog({ job_id: "j_a", daemon_id: "d", schedule: "s", result: "skipped_busy", prompt: "a2" });
-    const out = readCronLog({ jobId: "j_a" });
-    expect(out.map((e) => e.prompt_preview)).toEqual(["a", "a2"]);
-  });
-
-  test("prompt_preview is truncated to 80 chars", () => {
-    appendCronLog({ job_id: "j", daemon_id: "d", schedule: "s", result: "delivered", prompt: "x".repeat(200) });
-    expect(readCronLog()[0]!.prompt_preview).toHaveLength(80);
-  });
-
-  test("firedFor maps results", () => {
-    expect(firedFor("delivered")).toBe(true);
-    expect(firedFor("woke_and_delivered")).toBe(true);
-    expect(firedFor("deliver_failed")).toBe(false);
-    expect(firedFor("skipped_busy")).toBe(false);
+  test("only accepted RPC responses count as fired", () => {
+    expect(firedFor("accepted")).toBe(true);
+    expect(firedFor("rejected")).toBe(false);
+    expect(firedFor("skipped_retrying")).toBe(false);
   });
 });

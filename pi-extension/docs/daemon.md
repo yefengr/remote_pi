@@ -1,64 +1,31 @@
-# Daemon mode — troubleshooting
+# Daemon mode — operations and troubleshooting
 
-Companion to the README's [Daemon mode](../README.md#daemon-mode) section.
-Each scenario starts with the symptom you'd actually observe, followed by
-likely causes and how to fix.
+Daemon mode is an explicit v2-registry opt-in for keeping selected Pi endpoints alive under one user-level supervisor. It is not part of ordinary interactive pairing.
+
+Each registration has an opaque daemon/endpoint identifier, canonical cwd, display name, creation time, and persisted desired lifecycle:
+
+```text
+running | stopped
+```
+
+A daemon process is a runtime of that stable endpoint. Restarting the daemon creates a new runtime identity without changing the endpoint card selected by the PWA.
 
 ---
 
-## 1. `remote-pi install` fails
-
-### "supervisor script not found"
-
-```
-[remote-pi] install failed: Error: supervisor script not found at
-/Users/x/dist/bin/supervisord.js. Run `pnpm build` (dev) or
-`npm install -g @yefengr/remote-pi` (prod) first.
-```
-
-You're running `remote-pi install` from a dev clone where `dist/` doesn't
-exist yet, or from a partial install.
+## Install the supervisor once per computer
 
 ```bash
-# Dev clone:
-cd pi-extension && pnpm build
-
-# Production install:
-npm install -g @yefengr/remote-pi      # or pnpm install -g @yefengr/remote-pi
-which pi-supervisord          # confirm bin is on PATH
+npm install -g @yefengr/remote-pi
 remote-pi install
 ```
 
-### "launchctl: bootstrap … already running"
+`install` configures `launchd` on macOS or `systemd --user` on Linux, links `remote-pi` and `pi-supervisord`, and starts the service. The service reads the v2 registry from `~/.pi/remote/daemons.json`.
 
-A previous install left a stale entry. The fix is built into `install` —
-re-run it and the supervisor unloads the old entry before bootstrapping
-the new one. If it still fails:
+The supervisor launches Pi in RPC mode without passing an extra extension argument. Pi settings are the only source for extension loading, model selection, providers, and tool permissions. Correct Pi settings before registering an unattended daemon.
 
-```bash
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/dev.remotepi.supervisord.plist
-launchctl unload ~/Library/LaunchAgents/dev.remotepi.supervisord.plist 2>/dev/null
-rm ~/Library/LaunchAgents/dev.remotepi.supervisord.plist
-remote-pi install
-```
+### Service does not start at login
 
-### "systemctl --user … No such file or directory"
-
-Linux without a logged-in graphical session (headless server). On most
-distros `systemctl --user` requires `loginctl enable-linger <user>` so
-the unit survives logout:
-
-```bash
-loginctl enable-linger $USER
-systemctl --user daemon-reload
-remote-pi install
-```
-
----
-
-## 2. Supervisor doesn't start at login
-
-### Check the service status
+Check the service first:
 
 ```bash
 # Linux
@@ -70,220 +37,137 @@ launchctl list | grep remotepi
 tail -100 ~/.pi/remote/supervisord.log
 ```
 
-### Common failures
+Common causes:
 
-- **`pi: command not found`** in the log — Pi's binary isn't on the
-  PATH that the unit inherited. `remote-pi install` captures
-  `process.env.PATH` at install time; if you installed Pi *after*
-  running install, re-run `remote-pi install` to refresh.
-- **`Cannot find module …`** — the path baked into the unit doesn't
-  match where `dist/bin/supervisord.js` actually lives. Happens if you
-  uninstalled then reinstalled the package to a different location.
-  Fix: `remote-pi uninstall && remote-pi install`.
-- **Permission denied on UDS** — `~/.pi/remote/` exists with wrong
-  perms (rare; only happens if you ran `pi` as `sudo` once). Delete
-  the dir and let it re-create: `rm -rf ~/.pi/remote && remote-pi install`.
+- **`pi: command not found`** — reinstall the service after fixing the PATH seen by the user service.
+- **Missing compiled package files** — build a development clone or reinstall the global package, then run `remote-pi install` again.
+- **Linux user service unavailable after logout** — enable lingering where required by the distribution: `loginctl enable-linger $USER`.
 
-### Run the supervisor in the foreground for debugging
-
-Bypass systemd/launchd and run it directly so you can see startup
-errors live:
-
-```bash
-pi-supervisord
-# or: node /path/to/remote-pi/dist/bin/supervisord.js
-```
-
-Ctrl-C to stop. If that works but the service doesn't, the problem is
-in the unit/plist environment (PATH, HOME) — re-run `remote-pi install`.
+For foreground diagnosis, run `pi-supervisord` in a terminal and stop it with Ctrl-C when done.
 
 ---
 
-## 3. A specific daemon stays `crashed`
+## Register and control daemons
 
-`remote-pi daemon status` shows one row with `state=crashed` and a
-restart count near 4 (the supervisor gives up after exponential
-backoff: 1s, 5s, 30s, 5min).
-
-### Step 1 — read the daemon's stderr
-
-The supervisor forwards each daemon's stderr with a `[<cwd>]` prefix:
+Registering is explicit and starts with desired state `running`:
 
 ```bash
-# Linux
-journalctl --user -u remote-pi-supervisord -f | grep '\[/Users/x/Movies\]'
-
-# macOS
-tail -f ~/.pi/remote/supervisord.log | grep '\[/Users/x/Movies\]'
-```
-
-### Step 2 — run that daemon manually
-
-Reproduce the failure with full visibility:
-
-```bash
-cd /Users/x/Movies
-REMOTE_PI_DAEMON=1 pi --mode rpc -e $(npm root -g)/remote-pi/dist/index.js
-```
-
-Common reasons a daemon won't start:
-
-- **Local config missing.** `cd` into the daemon's folder and check
-  `.pi/remote-pi/config.json` exists with `auto_start_relay: true`.
-  Recreate via `remote-pi create <cwd>` (it provisions a default config
-  when missing).
-- **Pi extension config drift.** Pi's own settings (model, API keys)
-  reset → daemon fails to authenticate to the provider. Run
-  `cd <cwd> && pi` interactively to fix.
-- **Port/UDS collision.** Another Pi process is already running in
-  that cwd. The cwd-lock should reject the second one, but stale UDS
-  sockets sometimes linger; check `lsof ~/.pi/remote/locks/<roomId>.sock`.
-
-### Step 3 — force a re-spawn
-
-After fixing the underlying problem, kick the supervisor:
-
-```bash
-remote-pi daemon restart      # bounces every daemon
-```
-
----
-
-## 4. `daemon send` says "daemon not running"
-
-The supervisor has the registry entry but no live child for that id.
-Most common cause: the daemon never started OR it crashed past the
-retry budget.
-
-```bash
-remote-pi daemon status       # is state running?
-remote-pi daemon start        # spawn any that aren't running
-# Then retry send.
-```
-
-If `daemon start` shows `started=0, already_running=N`, the supervisor
-isn't actually spawning. Possible reasons:
-- Registry empty: `remote-pi daemons` to verify.
-- Child crashes faster than the status check: `daemon status` immediately
-  after start may still show `running` for a few seconds before the
-  exit event marks it crashed. Re-check 2-3 seconds later.
-
----
-
-## 5. Browser PWA doesn't connect to a daemon
-
-The daemon is up but the browser PWA doesn't see it.
-
-### Confirm the daemon is paired
-
-`pair_request` must have happened **before** the folder became a daemon
-(daemons don't show QRs themselves):
-
-```bash
-cd <daemon-cwd>
-pi
-> /remote-pi devices         # confirm the device is listed
-> /remote-pi stop            # stop interactive session — daemon takes over
-remote-pi daemon restart
-```
-
-### Confirm the relay URL matches
-
-The daemon uses the cwd's local config (`<cwd>/.pi/remote-pi/config.json`
-agent_name + `~/.pi/remote/config.json` relay). Verify with:
-
-```bash
-cd <daemon-cwd>
-pi
-> /remote-pi status
-```
-
-The relay line should match what the browser PWA is connecting to. If
-not, update the relay URL and bounce the daemon:
-
-```bash
-remote-pi set-relay https://relay.example.tld
-remote-pi daemon restart
-```
-
----
-
-## 6. Registry corrupted / partial
-
-Symptom: `remote-pi daemons` errors out or shows nothing despite
-having created entries.
-
-```bash
-cat ~/.pi/remote/daemons.json    # inspect
-```
-
-The file should be:
-
-```json
-{
-  "daemons": [
-    { "cwd": "/Users/x/Movies" },
-    { "cwd": "/Users/x/Projects/backend" }
-  ]
-}
-```
-
-Fix manually if needed (it's a JSON list of `{cwd}` entries), or wipe
-and re-create:
-
-```bash
-rm ~/.pi/remote/daemons.json
-remote-pi create ~/Movies --name "Video Editor"
-remote-pi create ~/Projects/backend --name "Backend"
-remote-pi daemon restart
-```
-
----
-
-## 7. Uninstall cleanly + re-install from scratch
-
-When you suspect everything is misconfigured:
-
-```bash
-remote-pi uninstall              # removes service, keeps registry
-rm -rf ~/.pi/remote               # nukes registry + paired devices + keys
-npm uninstall -g remote-pi
-npm install -g @yefengr/remote-pi
-remote-pi install
-# Then re-pair + re-create daemons from scratch.
-```
-
-This is the "nuke everything" path. After this, the only state left is
-each cwd's `<cwd>/.pi/remote-pi/config.json` — which you can either
-keep (re-create restores the daemon) or delete (full reset).
-
----
-
-## 8. Diagnostic commands cheat-sheet
-
-```bash
-# Where is the supervisor's UDS?
-ls -la ~/.pi/remote/supervisor.sock
-
-# Talk to the supervisor manually (raw JSONL):
-echo '{"op":"list"}' | nc -U ~/.pi/remote/supervisor.sock
-
-# Where are the daemon configs?
-find ~/Projects -name "config.json" -path "*/.pi/remote-pi/*" 2>/dev/null
-
-# Where are the cwd locks?
-ls ~/.pi/remote/locks/
-
-# Where are the paired devices?
-cat ~/.pi/remote/peers.json
-
-# What Pi binary is the supervisor about to spawn?
-remote-pi install --dry-run      # (not implemented; check ~/Library/LaunchAgents or systemd unit manually)
-
-# Quick liveness check
+remote-pi create ~/Projects/backend
+remote-pi daemons
 remote-pi daemon status
 ```
 
-If after walking the list you're still stuck, file an issue with the
-output of `remote-pi daemon status`, the recent supervisor log, and
-the contents of `~/.pi/remote/daemons.json`.
+The supervisor starts the registration immediately when it is online. At a future supervisor start, it restores only registrations whose desired state remains `running`. A stopped registration remains stopped.
+
+```bash
+remote-pi daemon start <daemon-id>
+remote-pi daemon stop <daemon-id>
+remote-pi daemon restart <daemon-id>
+remote-pi daemon start                 # every registration
+remote-pi daemon stop                  # every registration
+remote-pi daemon restart               # every registration
+remote-pi remove <daemon-id>
+remote-pi remove-cwd ~/Projects/backend
+```
+
+`remove-cwd <cwd>` is idempotent: it succeeds whether or not that cwd currently has a registration. It is safe for external worktree cleanup integrations.
+
+The browser PWA may show multiple endpoints on the same computer. Pairing is independent for every computer, and revoking a pairing on one computer does not alter another computer's local pairing records.
+
+---
+
+## Read status as independent dimensions
+
+Do not infer health from a single summary label. `remote-pi daemon status` reports:
+
+| Field | Interpretation |
+|---|---|
+| registration | The persisted registration is present; a missing cwd is marked missing |
+| desired | Persistent operator intent: `running` or `stopped` |
+| process | OS child lifecycle: absent, spawning, running, or exited |
+| runtime | RPC readiness: pending, ready, or failed |
+| relay | Disconnected, connecting, connected, or reconnecting |
+| health | Derived stopped, starting, healthy, degraded, failed, or blocked state |
+
+A runtime can be ready while the Relay reconnects. That is a **degraded** state, not a reason to restart Pi. The runtime remains available locally and reconnects through its normal transport path.
+
+A deterministic bad configuration, unsupported startup condition, or exhausted retry budget becomes **blocked**. Read `last_error_code`, `last_error_message`, and `startup_stage`, correct the cause, then explicitly start or restart the daemon. The supervisor does not loop forever on a blocked failure.
+
+---
+
+## Missing and moved working directories
+
+The registry records the canonical cwd that existed at registration time. A daemon send to a missing cwd is denied immediately. The supervisor then reconciles stale registrations after bounded confirmation: it stops any child, removes the registration, and prevents later restoration.
+
+If a project moved, register its new canonical cwd intentionally rather than editing the registry by hand:
+
+```bash
+remote-pi create /new/path/to/project
+remote-pi remove-cwd /old/path/to/project
+```
+
+A corrupted or pre-v2 registry is an operator-visible error. It is never treated as an empty registry, because doing so could overwrite registrations. Replace the registry only after inspecting and backing up its contents.
+
+---
+
+## Scheduled prompts
+
+Cron schedules prompt delivery; it never starts a daemon. A fire is accepted only when all of these are true:
+
+1. The registration exists and its cwd is present.
+2. Desired lifecycle is `running`.
+3. The RPC runtime is ready.
+4. The daemon is not busy, unless the job uses `--no-skip-busy`.
+
+```bash
+remote-pi cron add <daemon-id> "0 9 * * 1-5" "Summarize the new PRs" --tz America/Sao_Paulo
+remote-pi cron list
+remote-pi cron run <job-id>
+remote-pi cron disable <job-id>
+remote-pi cron log --tail 20
+```
+
+Schedules closer than 60 seconds are rejected. `--tz Area/City` uses a DST-aware timezone. `--catchup` allows one missed fire after supervisor startup. The cron audit at `~/.pi/remote/cron.jsonl` records every acceptance and skip, including desired-stopped, starting, retrying, failed, blocked, missing, disabled, busy, and rejected outcomes.
+
+---
+
+## Pairing and Relay diagnosis
+
+Generate a fresh QR from an interactive endpoint:
+
+```text
+/remote-pi pair
+/remote-pi devices
+/remote-pi revoke <shortid>
+```
+
+The QR identifies the current endpoint and runtime. In the PWA, check that the expected device and endpoint card are selected. If a daemon was restarted, select its current runtime state and allow the endpoint to reconnect; a Relay reconnect should report degraded health rather than causing a Pi restart.
+
+Confirm both sides use the same Relay URL:
+
+```text
+/remote-pi config
+/remote-pi set-relay https://relay.example.com
+```
+
+After correcting a Relay URL, restart only the affected endpoint if it does not reconnect on its own.
+
+---
+
+## Logs and reset
+
+| Platform | Command |
+|---|---|
+| Linux | `journalctl --user -u remote-pi-supervisord -f` |
+| macOS | `tail -f ~/.pi/remote/supervisord.log` |
+
+For a complete service reset:
+
+```bash
+remote-pi uninstall
+npm uninstall -g @yefengr/remote-pi
+npm install -g @yefengr/remote-pi
+remote-pi install
+```
+
+Uninstalling the service preserves registrations. Remove individual registrations with `remote-pi remove` or `remote-pi remove-cwd`; do not delete registry state unless a deliberate full reset is required.

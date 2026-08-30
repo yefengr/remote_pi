@@ -80,9 +80,9 @@ test("renders an accessible dialog and closes through Cancel and Escape", async 
   expect(document.getElementById(labelledBy!)?.textContent).toContain("Start a fresh session?");
   const describedBy = dialogElement.getAttribute("aria-describedby");
   expect(describedBy).toBeTruthy();
-  expect(document.getElementById(describedBy!)?.textContent).toContain("All Owners in this Session will switch to a fresh session.");
+  expect(document.getElementById(describedBy!)?.textContent).toContain("All Owners on this endpoint will switch to a fresh session.");
   await expect.element(screen.getByRole("heading", { name: "Start a fresh session?", exact: true })).toBeVisible();
-  await expect.element(screen.getByText("All Owners in this Session will switch to a fresh session.")).toBeVisible();
+  await expect.element(screen.getByText("All Owners on this endpoint will switch to a fresh session.")).toBeVisible();
   await expect.element(screen.getByRole("button", { name: "Start fresh session" })).toBeVisible();
   await expect.element(screen.getByRole("button", { name: "Close confirmation dialog" })).toBeVisible();
 
@@ -228,11 +228,11 @@ test("keeps the Settings Drawer open for the first Escape and above the confirma
   await expect.element(drawer).not.toBeInTheDocument();
 });
 
-test("keeps the Session Drawer open and falls back to its close button after the trigger is removed", async () => {
+test("keeps the Endpoint Drawer open and falls back to its close button after the trigger is removed", async () => {
   const screen = await renderPwa(<SessionConfirmHarness />);
   const drawer = locatorFor(".pwa-session-sheet");
-  const closeButton = screen.getByRole("button", { name: "Close sessions" });
-  const deleteButton = screen.getByRole("button", { name: /Delete Remote Pi/ });
+  const closeButton = screen.getByRole("button", { name: "Close endpoints" });
+  const deleteButton = screen.getByRole("button", { name: /Delete Pi on office/ });
   const drawerRoot = document.querySelector<HTMLElement>(".mantine-Drawer-root");
   expect(drawerRoot).not.toBeNull();
   expect(drawerRoot!.closest(".pwa-root")).not.toBeNull();

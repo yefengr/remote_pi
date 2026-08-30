@@ -6,9 +6,11 @@ type UserMessageFrame = Extract<ClientFrame, { type: "user_message" }>;
 type UserMessageImages = NonNullable<UserMessageFrame["images"]>;
 type UserMessageSendResult = { frame: UserMessageFrame; change: TimelineRuntimeChange };
 
+/** A timeline's live scope is endpoint/runtime-bound while persistence omits runtime. */
 export type TimelineScope = {
-  peerEpk: string;
-  roomId: string;
+  deviceId: string;
+  endpointId: string;
+  runtimeInstanceId: string;
   sessionId: string;
   historyGeneration: string;
   selfSenderRef: string;
@@ -28,16 +30,8 @@ export type TimelinePending = {
   requestId: string;
   messageId?: string;
 };
-export type TimelinePartialView = {
-  kind: "partial";
-  partial: TimelinePartial;
-  createdAt: number;
-};
-export type TimelineViewItem =
-  | { kind: "event"; event: TimelineEvent }
-  | TimelinePending
-  | TimelinePartialView;
-
+export type TimelinePartialView = { kind: "partial"; partial: TimelinePartial; createdAt: number };
+export type TimelineViewItem = { kind: "event"; event: TimelineEvent } | TimelinePending | TimelinePartialView;
 export type TimelineRuntimeChange = {
   items: TimelineViewItem[];
   committed: TimelineEvent[];
@@ -45,29 +39,22 @@ export type TimelineRuntimeChange = {
   unknown: TimelinePending[];
   reset?: Extract<ServerFrame, { type: "reset" }>;
 };
-
 type Pending = TimelinePending & { kind: "pending" };
 
 function randomId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
-
 function compareItems(a: TimelineViewItem, b: TimelineViewItem): number {
   const aTime = a.kind === "event" ? a.event.timestamp : a.createdAt;
   const bTime = b.kind === "event" ? b.event.timestamp : b.createdAt;
   return aTime - bTime || itemId(a).localeCompare(itemId(b));
 }
-
 function itemId(item: TimelineViewItem): string {
-  if (item.kind === "event") return item.event.event_id;
-  if (item.kind === "partial") return item.partial.partial_id;
-  return item.clientRequestId;
+  return item.kind === "event" ? item.event.event_id : item.kind === "partial" ? item.partial.partial_id : item.clientRequestId;
 }
-
 function isMatchingScope(scope: TimelineScope | null, frame: { session_id: string; history_generation: string }): boolean {
   return scope !== null && scope.sessionId === frame.session_id && scope.historyGeneration === frame.history_generation;
 }
-
 function mergePartial(previous: TimelinePartial | undefined, next: TimelinePartial): TimelinePartial {
   if (!previous || ("blocks" in next && next.blocks !== undefined)) return next;
   if (next.delta === undefined) return { ...next, ...(previous.delta === undefined ? {} : { delta: previous.delta }) };
@@ -88,7 +75,11 @@ export class TimelineRuntime {
   private readonly observedQueue: ClientFrame[] = [];
 
   setScope(scope: TimelineScope): TimelineRuntimeChange {
-    const changed = this.scope?.sessionId !== scope.sessionId || this.scope.historyGeneration !== scope.historyGeneration;
+    const changed = this.scope?.deviceId !== scope.deviceId
+      || this.scope.endpointId !== scope.endpointId
+      || this.scope.runtimeInstanceId !== scope.runtimeInstanceId
+      || this.scope.sessionId !== scope.sessionId
+      || this.scope.historyGeneration !== scope.historyGeneration;
     if (changed) {
       this.clearTransient(true);
       this.events.clear();
@@ -97,7 +88,6 @@ export class TimelineRuntime {
     this.scope = scope;
     return this.change();
   }
-
   invalidateScope(): TimelineRuntimeChange {
     this.clearTransient(true);
     this.scope = null;
@@ -105,7 +95,6 @@ export class TimelineRuntime {
     this.historyEvents = [];
     return this.change();
   }
-
   clear(): TimelineRuntimeChange {
     this.scope = null;
     this.events.clear();
@@ -115,35 +104,19 @@ export class TimelineRuntime {
     this.unknown = [];
     return this.change();
   }
-
   markDisconnected(): TimelineRuntimeChange {
     this.clearTransient(true);
     return this.change();
   }
-
   sendUser(text: string, images?: UserMessageImages, requestIds?: { clientRequestId: string; requestId: string }): UserMessageSendResult | null {
     const scope = this.scope;
     const hasImages = Boolean(images?.length);
     if (!scope || images?.length && images.length > 1 || (!text.trim() && !hasImages)) return null;
     const clientRequestId = requestIds?.clientRequestId ?? randomId();
     const requestId = requestIds?.requestId ?? randomId();
-    const now = Date.now();
-    this.pending.set(clientRequestId, {
-      kind: "pending",
-      id: `pending:${clientRequestId}`,
-      clientRequestId,
-      requestId,
-      text,
-      ...(hasImages ? { images } : {}),
-      createdAt: now,
-      delivery: "pending",
-    });
-    return {
-      frame: this.userMessageFrame(scope, requestId, clientRequestId, text, images),
-      change: this.change(),
-    };
+    this.pending.set(clientRequestId, { kind: "pending", id: `pending:${clientRequestId}`, clientRequestId, requestId, text, ...(hasImages ? { images } : {}), createdAt: Date.now(), delivery: "pending" });
+    return { frame: this.userMessageFrame(scope, requestId, clientRequestId, text, images), change: this.change() };
   }
-
   markUnknownDelivery(clientRequestId: string): TimelineRuntimeChange {
     const pending = this.pending.get(clientRequestId);
     if (!pending) return this.change();
@@ -151,7 +124,6 @@ export class TimelineRuntime {
     this.unknown.push({ ...pending, delivery: "unknown_delivery" });
     return this.change();
   }
-
   retryUnknown(clientRequestId: string): UserMessageSendResult | null {
     const scope = this.scope;
     const index = this.unknown.findIndex((pending) => pending.clientRequestId === clientRequestId);
@@ -161,12 +133,8 @@ export class TimelineRuntime {
     const pending = { ...previous, requestId, delivery: "pending" as const };
     this.unknown.splice(index, 1);
     this.pending.set(clientRequestId, pending);
-    return {
-      frame: this.userMessageFrame(scope, requestId, clientRequestId, pending.text, pending.images),
-      change: this.change(),
-    };
+    return { frame: this.userMessageFrame(scope, requestId, clientRequestId, pending.text, pending.images), change: this.change() };
   }
-
   receive(frame: ServerFrame): TimelineRuntimeChange {
     if (frame.type === "session_ready") return this.change();
     if (frame.type === "reset") return { ...this.invalidateScope(), reset: frame };
@@ -179,14 +147,12 @@ export class TimelineRuntime {
       }
       for (const item of frame.items) this.queuedSnapshotItems.set(item.id, item);
       if (!frame.final) return this.change();
-      const nextQueuedItems = [...this.queuedSnapshotItems.values()];
-      const nextQueuedIds = new Set(nextQueuedItems.map((item) => item.id));
+      const nextItems = [...this.queuedSnapshotItems.values()];
+      const nextIds = new Set(nextItems.map((item) => item.id));
       for (const clientRequestId of this.queuedIds) {
-        if (nextQueuedIds.has(clientRequestId)) continue;
-        const pending = this.pending.get(clientRequestId);
-        if (pending?.messageId === undefined) this.pending.delete(clientRequestId);
+        if (!nextIds.has(clientRequestId) && this.pending.get(clientRequestId)?.messageId === undefined) this.pending.delete(clientRequestId);
       }
-      for (const item of nextQueuedItems) {
+      for (const item of nextItems) {
         const existing = this.pending.get(item.id);
         if (existing) {
           existing.text = item.text;
@@ -196,20 +162,10 @@ export class TimelineRuntime {
           continue;
         }
         this.unknown = this.unknown.filter((pending) => pending.clientRequestId !== item.id);
-        this.pending.set(item.id, {
-          kind: "pending",
-          id: `pending:${item.id}`,
-          clientRequestId: item.id,
-          text: item.text,
-          ...(item.images ? { images: item.images } : {}),
-          cancelable: item.sender_ref === scope.selfSenderRef,
-          createdAt: item.created_at,
-          delivery: "accepted",
-          requestId: item.id,
-        });
+        this.pending.set(item.id, { kind: "pending", id: `pending:${item.id}`, clientRequestId: item.id, text: item.text, ...(item.images ? { images: item.images } : {}), cancelable: item.sender_ref === scope.selfSenderRef, createdAt: item.created_at, delivery: "accepted", requestId: item.id });
       }
       this.queuedIds.clear();
-      for (const clientRequestId of nextQueuedIds) this.queuedIds.add(clientRequestId);
+      for (const clientRequestId of nextIds) this.queuedIds.add(clientRequestId);
       this.queuedSnapshotItems.clear();
       this.queuedSnapshotId = null;
       return this.change();
@@ -253,35 +209,23 @@ export class TimelineRuntime {
       try {
         const partial = parseTimelinePartialV2(frame);
         const previous = this.partials.get(partial.partial_id);
-        this.partials.set(partial.partial_id, {
-          kind: "partial",
-          partial: mergePartial(previous?.partial, partial),
-          createdAt: previous?.createdAt ?? Date.now(),
-        });
-      } catch {
-        return this.change();
-      }
+        this.partials.set(partial.partial_id, { kind: "partial", partial: mergePartial(previous?.partial, partial), createdAt: previous?.createdAt ?? Date.now() });
+      } catch { /* strict decoder rejects invalid data */ }
       return this.change();
     }
     if (frame.type === "timeline_event") {
-      if (!isMatchingScope(this.scope, frame)) return this.change();
-      this.commit(frame.event);
+      if (isMatchingScope(this.scope, frame)) this.commit(frame.event);
       return this.change();
     }
     return this.change();
   }
-
   commit(event: TimelineEvent): TimelineRuntimeChange {
     try {
       const parsed = parseTimelineEventV2(event);
-      if (this.scope && (parsed.session_id !== this.scope.sessionId || parsed.history_generation !== this.scope.historyGeneration)) return this.change();
-      this.commitParsed(parsed);
-    } catch {
-      return this.change();
-    }
+      if (this.scope && isMatchingScope(this.scope, parsed)) this.commitParsed(parsed);
+    } catch { /* strict decoder rejects invalid data */ }
     return this.change();
   }
-
   replaceHistory(events: readonly TimelineEvent[]): TimelineRuntimeChange {
     this.historyEvents = [];
     this.events.clear();
@@ -289,47 +233,25 @@ export class TimelineRuntime {
       try {
         const parsed = parseTimelineEventV2(event);
         if (!this.scope || isMatchingScope(this.scope, parsed)) this.historyEvents.push(parsed);
-      } catch {
-        // Invalid windows are rejected by the transfer assembler; ignore defensive failures here.
-      }
+      } catch { /* transfer assembler has already rejected malformed windows */ }
     }
     for (const event of this.historyEvents) this.commitParsed(event);
     return this.change();
   }
-
   prependHistory(events: readonly TimelineEvent[]): TimelineRuntimeChange {
     for (const event of events) {
       try {
         const parsed = parseTimelineEventV2(event);
         if (!this.scope || isMatchingScope(this.scope, parsed)) this.commitParsed(parsed);
-      } catch {
-        // The transfer assembler already rejects an invalid page atomically.
-      }
+      } catch { /* transfer assembler has already rejected malformed windows */ }
     }
     return this.change();
   }
-
-  get currentScope(): TimelineScope | null {
-    return this.scope;
-  }
-
-  get pendingItems(): TimelinePending[] {
-    return [...this.pending.values(), ...this.unknown];
-  }
-
+  get currentScope(): TimelineScope | null { return this.scope; }
+  get pendingItems(): TimelinePending[] { return [...this.pending.values(), ...this.unknown]; }
   private userMessageFrame(scope: TimelineScope, requestId: string, clientRequestId: string, text: string, images?: UserMessageImages): UserMessageFrame {
-    return {
-      protocol_version: 2,
-      type: "user_message",
-      id: requestId,
-      channel_id: scope.channelId,
-      history_generation: scope.historyGeneration,
-      client_request_id: clientRequestId,
-      text,
-      ...(images?.length ? { images } : {}),
-    };
+    return { protocol_version: 2, type: "user_message", id: requestId, channel_id: scope.channelId, history_generation: scope.historyGeneration, client_request_id: clientRequestId, text, ...(images?.length ? { images } : {}) };
   }
-
   private commitParsed(event: TimelineEvent): void {
     const previous = this.events.get(event.event_id);
     if (previous && JSON.stringify(previous) !== JSON.stringify(event)) return;
@@ -338,44 +260,31 @@ export class TimelineRuntime {
     if (event.kind === "assistant" || event.kind === "tool") {
       for (const [partialId, partial] of this.partials) {
         if (partial.partial.group_id !== event.group_id) continue;
-        const matchesFormalEvent = event.kind === "assistant"
-          ? partial.partial.kind === "assistant" || partial.partial.kind === "thinking"
-          : partial.partial.kind === "tool";
-        if (matchesFormalEvent) this.partials.delete(partialId);
+        const matches = event.kind === "assistant" ? partial.partial.kind === "assistant" || partial.partial.kind === "thinking" : partial.partial.kind === "tool";
+        if (matches) this.partials.delete(partialId);
       }
     }
   }
-
   private reconcileUserMessage(messageId: string): void {
     const formal = [...this.events.values()].find((event): event is Extract<TimelineEvent, { kind: "user" }> => event.kind === "user" && event.message_id === messageId);
     if (!formal) return;
-    const matches = [...this.pending.entries(), ...this.unknown.map((pending) => [pending.clientRequestId, pending] as const)]
-      .filter(([, pending]) => pending.messageId === messageId);
+    const matches = [...this.pending.entries(), ...this.unknown.map((pending) => [pending.clientRequestId, pending] as const)].filter(([, pending]) => pending.messageId === messageId);
     for (const [clientRequestId] of matches) {
       this.pending.delete(clientRequestId);
       this.unknown = this.unknown.filter((pending) => pending.clientRequestId !== clientRequestId);
       if (this.scope) this.observedQueue.push({ protocol_version: 2, type: "user_message_observed", id: randomId(), channel_id: this.scope.channelId, history_generation: this.scope.historyGeneration, client_request_id: clientRequestId, message_id: formal.message_id, status: "committed" });
     }
   }
-
   private clearTransient(movePendingToUnknown: boolean): void {
     this.partials.clear();
     this.queuedIds.clear();
     this.queuedSnapshotItems.clear();
     this.queuedSnapshotId = null;
-    if (movePendingToUnknown) {
-      for (const pending of this.pending.values()) this.unknown.push({ ...pending, delivery: "unknown_delivery" });
-    }
+    if (movePendingToUnknown) for (const pending of this.pending.values()) this.unknown.push({ ...pending, delivery: "unknown_delivery" });
     this.pending.clear();
   }
-
   private change(): TimelineRuntimeChange {
-    const items: TimelineViewItem[] = [
-      ...this.events.values().map((event) => ({ kind: "event" as const, event })),
-      ...this.pending.values(),
-      ...this.unknown,
-      ...this.partials.values(),
-    ];
+    const items: TimelineViewItem[] = [...this.events.values().map((event) => ({ kind: "event" as const, event })), ...this.pending.values(), ...this.unknown, ...this.partials.values()];
     items.sort(compareItems);
     return { items, committed: [], observed: this.observedQueue.splice(0), unknown: [...this.unknown] };
   }

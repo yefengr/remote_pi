@@ -1,23 +1,17 @@
 import type { TimelineEvent } from "../remote-pi/protocol-v2/schema";
-import {
-  getPwaDatabase,
-  type PwaTimelineEventRecord,
-} from "./db";
+import { getPwaDatabase, type PwaTimelineEventRecord } from "./db";
 
+/** Runtime identity deliberately does not participate in persistent history keys. */
 export type TimelineScope = {
-  peerEpk: string;
-  roomId: string;
+  deviceId: string;
+  endpointId: string;
   sessionId: string;
   historyGeneration: string;
 };
 
 const MAX_RECENT_GROUPS = 5;
 
-type TimelineEventWithGroup = {
-  event: TimelineEvent;
-  groupId: string;
-  timestamp: number;
-};
+type TimelineEventWithGroup = { event: TimelineEvent; groupId: string; timestamp: number };
 
 export class TimelineStoreConflictError extends Error {
   constructor(message: string) {
@@ -27,7 +21,7 @@ export class TimelineStoreConflictError extends Error {
 }
 
 export function makePwaTimelineEventId(scope: TimelineScope, eventId: string): string {
-  return [scope.peerEpk, scope.roomId, scope.sessionId, scope.historyGeneration, eventId]
+  return [scope.deviceId, scope.endpointId, scope.sessionId, scope.historyGeneration, eventId]
     .map((value) => encodeURIComponent(value))
     .join(":");
 }
@@ -37,10 +31,7 @@ export function isPersistableTimelineEvent(event: TimelineEvent): boolean {
   if (event.kind === "user") return event.status === "committed";
   if (event.kind === "assistant") return event.status === "complete" || event.status === "interrupted";
   if (event.kind === "tool") return event.status === "complete" || event.status === "error" || event.status === "interrupted";
-  return event.kind === "provider_error"
-    || event.kind === "compaction"
-    || event.kind === "branch_summary"
-    || event.kind === "custom";
+  return event.kind === "provider_error" || event.kind === "compaction" || event.kind === "branch_summary" || event.kind === "custom";
 }
 
 function eventGroupId(event: TimelineEvent): string | undefined {
@@ -82,10 +73,7 @@ function recentGroupIds(events: TimelineEventWithGroup[]): Set<string> {
 export function selectRecentTimelineEvents(scope: TimelineScope, events: TimelineEvent[]): TimelineEvent[] {
   const grouped = toGroupedEvents(scope, events);
   const groups = recentGroupIds(grouped);
-  return grouped
-    .filter((item) => groups.has(item.groupId))
-    .sort(compareEvents)
-    .map((item) => item.event);
+  return grouped.filter((item) => groups.has(item.groupId)).sort(compareEvents).map((item) => item.event);
 }
 
 function toRecord(scope: TimelineScope, event: TimelineEvent): PwaTimelineEventRecord {
@@ -93,8 +81,8 @@ function toRecord(scope: TimelineScope, event: TimelineEvent): PwaTimelineEventR
   if (groupId === undefined) throw new Error("Only grouped committed timeline events can be stored.");
   return {
     id: makePwaTimelineEventId(scope, event.event_id),
-    peerEpk: scope.peerEpk,
-    roomId: scope.roomId,
+    deviceId: scope.deviceId,
+    endpointId: scope.endpointId,
     sessionId: scope.sessionId,
     historyGeneration: scope.historyGeneration,
     eventId: event.event_id,
@@ -108,20 +96,14 @@ function sameJsonValue(left: unknown, right: unknown): boolean {
   if (Object.is(left, right)) return true;
   if (typeof left !== "object" || left === null || typeof right !== "object" || right === null) return false;
   if (Array.isArray(left) || Array.isArray(right)) {
-    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
-    return left.every((value, index) => sameJsonValue(value, right[index]));
+    return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((value, index) => sameJsonValue(value, right[index]));
   }
   const leftKeys = Object.keys(left).sort();
   const rightKeys = Object.keys(right).sort();
-  return leftKeys.length === rightKeys.length
-    && leftKeys.every((key, index) => key === rightKeys[index]
-      && sameJsonValue((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key]));
+  return leftKeys.length === rightKeys.length && leftKeys.every((key, index) => key === rightKeys[index] && sameJsonValue((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key]));
 }
 
-export function findTimelineConflict(
-  existing: PwaTimelineEventRecord[],
-  incoming: PwaTimelineEventRecord[],
-): PwaTimelineEventRecord | undefined {
+export function findTimelineConflict(existing: PwaTimelineEventRecord[], incoming: PwaTimelineEventRecord[]): PwaTimelineEventRecord | undefined {
   const byId = new Map(existing.map((record) => [record.id, record]));
   for (const record of incoming) {
     const previous = byId.get(record.id);
@@ -132,30 +114,18 @@ export function findTimelineConflict(
 }
 
 function scopeWhere(scope: TimelineScope): readonly [string, string, string, string] {
-  return [scope.peerEpk, scope.roomId, scope.sessionId, scope.historyGeneration];
+  return [scope.deviceId, scope.endpointId, scope.sessionId, scope.historyGeneration];
 }
 
 async function recordsForScope(scope: TimelineScope): Promise<PwaTimelineEventRecord[]> {
-  const db = getPwaDatabase();
-  return db.timelineEvents
-    .where("[peerEpk+roomId+sessionId+historyGeneration]")
-    .equals(scopeWhere(scope))
-    .toArray();
+  return getPwaDatabase().timelineEvents.where("[deviceId+endpointId+sessionId+historyGeneration]").equals(scopeWhere(scope)).toArray();
 }
 
 async function clearScopeInTransaction(scope: TimelineScope): Promise<void> {
-  const db = getPwaDatabase();
-  await db.timelineEvents
-    .where("[peerEpk+roomId+sessionId+historyGeneration]")
-    .equals(scopeWhere(scope))
-    .delete();
+  await getPwaDatabase().timelineEvents.where("[deviceId+endpointId+sessionId+historyGeneration]").equals(scopeWhere(scope)).delete();
 }
 
-async function clearAndReportConflict(
-  scope: TimelineScope,
-  existing: PwaTimelineEventRecord[],
-  incoming: PwaTimelineEventRecord[],
-): Promise<string | undefined> {
+async function clearAndReportConflict(scope: TimelineScope, existing: PwaTimelineEventRecord[], incoming: PwaTimelineEventRecord[]): Promise<string | undefined> {
   const conflict = findTimelineConflict(existing, incoming);
   if (conflict === undefined) return undefined;
   await clearScopeInTransaction(scope);
@@ -169,15 +139,14 @@ export async function loadRecent(scope: TimelineScope): Promise<TimelineEvent[]>
 
 export async function replaceRecentWindow(scope: TimelineScope, events: TimelineEvent[], realtimeJournal: TimelineEvent[] = []): Promise<void> {
   const db = getPwaDatabase();
-  const allIncoming = toGroupedEvents(scope, [...events, ...realtimeJournal]).map((item) => toRecord(scope, item.event));
+  const incoming = toGroupedEvents(scope, [...events, ...realtimeJournal]).map((item) => toRecord(scope, item.event));
   const conflictEventId = await db.transaction("rw", db.timelineEvents, async () => {
     const existing = await recordsForScope(scope);
-    const conflict = await clearAndReportConflict(scope, existing, allIncoming);
+    const conflict = await clearAndReportConflict(scope, existing, incoming);
     if (conflict !== undefined) return conflict;
-    const authoritative = new Map(allIncoming.map((record) => [record.id, record]));
-    const retainedEvents = selectRecentTimelineEvents(scope, Array.from(authoritative.values()).map((record) => record.event));
+    const retained = selectRecentTimelineEvents(scope, Array.from(new Map(incoming.map((record) => [record.id, record])).values()).map((record) => record.event));
     await clearScopeInTransaction(scope);
-    await db.timelineEvents.bulkPut(retainedEvents.map((event) => toRecord(scope, event)));
+    await db.timelineEvents.bulkPut(retained.map((event) => toRecord(scope, event)));
     return undefined;
   });
   if (conflictEventId !== undefined) throw new TimelineStoreConflictError(`Conflicting timeline event: ${conflictEventId}`);
@@ -185,7 +154,7 @@ export async function replaceRecentWindow(scope: TimelineScope, events: Timeline
 
 export async function commitRealtime(scope: TimelineScope, events: TimelineEvent[]): Promise<void> {
   const db = getPwaDatabase();
-  const incoming = toGroupedEvents(scope, events).map((item) => item.event).map((event) => toRecord(scope, event));
+  const incoming = toGroupedEvents(scope, events).map((item) => toRecord(scope, item.event));
   if (incoming.length === 0) return;
   const conflictEventId = await db.transaction("rw", db.timelineEvents, async () => {
     const existing = await recordsForScope(scope);
@@ -193,10 +162,9 @@ export async function commitRealtime(scope: TimelineScope, events: TimelineEvent
     if (conflict !== undefined) return conflict;
     const merged = new Map(existing.map((record) => [record.id, record]));
     for (const record of incoming) merged.set(record.id, record);
-    const retainedEvents = selectRecentTimelineEvents(scope, Array.from(merged.values()).map((record) => record.event));
-    const retained = retainedEvents.map((event) => toRecord(scope, event));
+    const retained = selectRecentTimelineEvents(scope, Array.from(merged.values()).map((record) => record.event));
     await clearScopeInTransaction(scope);
-    await db.timelineEvents.bulkPut(retained);
+    await db.timelineEvents.bulkPut(retained.map((event) => toRecord(scope, event)));
     return undefined;
   });
   if (conflictEventId !== undefined) throw new TimelineStoreConflictError(`Conflicting timeline event: ${conflictEventId}`);

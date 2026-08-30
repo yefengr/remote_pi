@@ -147,7 +147,7 @@ test("accepts server frames while rejecting old wrappers and direction drift", (
     { ...version, type: "user_message_status", ...direct, in_reply_to: "R1", ...session, client_request_id: "R1", status: "unknown_delivery" },
   ];
   const frames = [
-    { ...version, type: "pair_ok", in_reply_to: "P1", session_name: "demo", session_started_at: 1, room_id: "R" },
+    { ...version, type: "pair_ok", in_reply_to: "P1", session_name: "demo", session_started_at: 1, endpoint_id: "E" },
     { ...version, type: "pair_error", in_reply_to: "P2", code: "token_expired", message: "expired" },
     ready,
     started,

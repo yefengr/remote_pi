@@ -3,23 +3,23 @@
 import { useEffect, useRef, useState } from "react";
 import { Group, Modal, Stack, Text } from "@mantine/core";
 import { Button, Input } from "@/components/ui";
-import type { PwaPeerRecord } from "@/lib/pwa/db";
-import { displayPeer } from "@/components/pwa/workspace-view";
+import type { PwaDeviceRecord } from "@/lib/pwa/db";
+import { displayDevice } from "@/components/pwa/workspace-view";
 
 type RenamePairingDialogProps = {
-  peer: PwaPeerRecord;
+  device: PwaDeviceRecord;
   onSave: (nickname: string) => Promise<void>;
   onClose: () => void;
   focusOrigin?: HTMLElement | null;
   focusFallbackSelectors?: readonly string[];
 };
 
-function suggestedName(peer: PwaPeerRecord): string {
-  return peer.nickname || (peer.hostname ? `Pi on ${peer.hostname}` : "");
+function suggestedName(device: PwaDeviceRecord): string {
+  return device.nickname || (device.hostname ? `Pi on ${device.hostname}` : "");
 }
 
-export function RenamePairingDialog({ peer, onSave, onClose, focusOrigin = null, focusFallbackSelectors = [] }: RenamePairingDialogProps) {
-  const [value, setValue] = useState(() => suggestedName(peer));
+export function RenamePairingDialog({ device, onSave, onClose, focusOrigin = null, focusFallbackSelectors = [] }: RenamePairingDialogProps) {
+  const [value, setValue] = useState(() => suggestedName(device));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const savingRef = useRef(false);
@@ -100,7 +100,7 @@ export function RenamePairingDialog({ peer, onSave, onClose, focusOrigin = null,
     styles={{ header: { padding: 0 }, body: { padding: 0 } }}
   >
     <Stack gap={0}>
-      <Text component="p" id="pwa-rename-description" className="pwa-rename-description">Choose a local name for <Text component="strong">{displayPeer(peer)}</Text>. This only changes the label in this browser.</Text>
+      <Text component="p" id="pwa-rename-description" className="pwa-rename-description">Choose a local name for <Text component="strong">{displayDevice(device)}</Text>. This only changes the label in this browser.</Text>
       <form onSubmit={(event) => { event.preventDefault(); void submit(); }}>
         <Input
           className="pwa-rename-field"

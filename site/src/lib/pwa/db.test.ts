@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { makePwaPeerId, makePwaSyncStateId } from "./db";
+import { makePwaDeviceId, makePwaEndpointId } from "./db";
 
-test("creates a distinct pairing id for each Pi room", () => {
-  const peer = "ER0CaBbQVX";
-  assert.notEqual(makePwaPeerId(peer, "room-a"), makePwaPeerId(peer, "room-b"));
-  assert.equal(makePwaPeerId(peer, "room/a"), "ER0CaBbQVX:room%2Fa");
-  assert.equal(makePwaSyncStateId(peer, "room/a"), makePwaPeerId(peer, "room/a"));
+test("creates stable device and endpoint keys without room aliases", () => {
+  const device = "ER0CaBbQVX";
+  assert.equal(makePwaDeviceId(device), device);
+  assert.notEqual(makePwaEndpointId(device, "endpoint-a"), makePwaEndpointId(device, "endpoint-b"));
+  assert.equal(makePwaEndpointId(device, "endpoint/a"), "ER0CaBbQVX:endpoint%2Fa");
 });

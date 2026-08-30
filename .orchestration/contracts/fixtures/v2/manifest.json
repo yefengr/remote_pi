@@ -1,0 +1,137 @@
+{
+  "schema_version": 2,
+  "cases": [
+    {
+      "id": "pair-request",
+      "direction": "client",
+      "valid": true,
+      "value": {
+        "protocol_version": 2,
+        "type": "pair_request",
+        "id": "request-1",
+        "token": "token-1",
+        "device_name": "Browser"
+      }
+    },
+    {
+      "id": "session-hello",
+      "direction": "client",
+      "valid": true,
+      "value": {
+        "protocol_version": 2,
+        "type": "session_hello",
+        "id": "hello-1",
+        "channel_id": "channel-1"
+      }
+    },
+    {
+      "id": "pair-ok",
+      "direction": "server",
+      "valid": true,
+      "value": {
+        "protocol_version": 2,
+        "type": "pair_ok",
+        "in_reply_to": "request-1",
+        "session_name": "Pi",
+        "session_started_at": 0,
+        "endpoint_id": "endpoint-1"
+      }
+    },
+    {
+      "id": "timeline-event",
+      "direction": "timeline",
+      "valid": true,
+      "value": {
+        "event_id": "event-1",
+        "session_id": "session-1",
+        "history_generation": "generation-1",
+        "timestamp": 0,
+        "group_id": "group-1",
+        "kind": "user",
+        "message_id": "event-1",
+        "blocks": [
+          { "type": "text", "text": "hello" }
+        ],
+        "origin": "unknown",
+        "delivery": "normal",
+        "status": "committed"
+      }
+    },
+    {
+      "id": "timeline-event-fragment",
+      "direction": "server",
+      "valid": true,
+      "value": {
+        "protocol_version": 2,
+        "type": "timeline_event_fragment",
+        "session_id": "session-1",
+        "history_generation": "generation-1",
+        "event_id": "event-1",
+        "index": 0,
+        "data_base64": "aGk=",
+        "final": true
+      }
+    },
+    {
+      "id": "marker-assistant",
+      "direction": "marker",
+      "valid": true,
+      "value": {
+        "version": 2,
+        "event_id": "event-1",
+        "group_id": "group-1",
+        "kind": "assistant"
+      }
+    },
+    {
+      "id": "unknown-frame",
+      "direction": "client",
+      "valid": false,
+      "value": {
+        "protocol_version": 2,
+        "type": "unknown_frame",
+        "id": "unknown-1"
+      },
+      "expected_code": "unsupported"
+    },
+    {
+      "id": "server-frame-as-client",
+      "direction": "client",
+      "valid": false,
+      "value": {
+        "protocol_version": 2,
+        "type": "pair_ok",
+        "in_reply_to": "request-1",
+        "session_name": "Pi",
+        "session_started_at": 0,
+        "endpoint_id": "endpoint-1"
+      },
+      "expected_code": "direction"
+    },
+    {
+      "id": "wrong-version",
+      "direction": "client",
+      "valid": false,
+      "value": {
+        "protocol_version": 1,
+        "type": "pair_request",
+        "id": "request-1",
+        "token": "token-1",
+        "device_name": "Browser"
+      },
+      "expected_code": "version"
+    },
+    {
+      "id": "missing-pair-request-id",
+      "direction": "client",
+      "valid": false,
+      "value": {
+        "protocol_version": 2,
+        "type": "pair_request",
+        "token": "token-1",
+        "device_name": "Browser"
+      },
+      "expected_code": "schema"
+    }
+  ]
+}

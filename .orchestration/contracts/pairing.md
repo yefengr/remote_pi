@@ -1,212 +1,195 @@
-# Contrato — Pareamento (rollback E2E, 2026-05-19)
+# Remote Pi Protocol v2 配对契约
 
-Fonte de verdade do pareamento entre **app** (Flutter) e **pi-extension**
-(Node), com **relay** (Rust) só roteando payload opaco. Modelo MVP:
-**1 pareamento = 1 sessão Pi**.
+本文件描述 Browser/PWA Owner 与单台 Remote Pi 设备的当前配对流程。配对作用域是 `device_id`：同一 Owner 可分别配对多台电脑，每台电脑独立授权、独立撤销，不存在跨设备 membership 传播。
 
-> **Cripto E2E removida** (plano 06). Mensagens trafegam em **JSON em claro
-> base64** no `ct` do outer envelope. Confiança contra terceiros vem de
-> TLS no transporte (futuro relay público) + Ed25519 challenge-response
-> pra impedir squatting. Operador do relay vê conteúdo — usuário sério
-> deve self-hostar o relay (open-source). Re-ativar E2E é roadmap aditivo
-> (plano 09 opcional) — shape do envelope permanece igual.
+## 1. QR payload
 
----
+URI：
 
-## QR payload
+```text
+remotepi://pair?t=<token>&epk=<device_id>&n=<display_name>&ep=<endpoint_id>&rt=<runtime_instance_id>
+```
 
-URI scheme: `remotepi://pair?...`
-
-Campos (query string, URL-encoded):
-
-| Campo | Tipo | Descrição |
+| query | 类型 | 规则 |
 |---|---|---|
-| `t` | base64url, 16 bytes | Token efêmero. Single-use. Válido por 60s |
-| `epk` | base64url, 32 bytes | Pubkey **Ed25519** de longo prazo do Mac. Único peer ID do Pi no relay |
-| ~~`r`~~ | ~~string~~ | **REMOVIDO (plano 14, 2026-05-21)** — relay agora vem de config do app (`Preferences.relayUrl`) e do pi-ext (env `REMOTE_PI_RELAY` ou config file). Encurta QR em ~30-50 chars. Legacy QRs com `r` ainda são lidos pelo app com aviso de conflito (modal) |
-| `n` | string UTF-8, max 80 chars | Nome legível da sessão (ex: `remote_pi · feature/protocol`) |
-| `rm` | base64url, 12 chars | **ADICIONADO (plano 17 fix, 2026-05-21)** — room_id derivado do cwd (`base64url(sha256(realpath(cwd)))[:12]`). Sem isso, app não saberia pra qual room mandar `pair_request` e tentaria a "main" (que falha porque Pi atual está em room=hash). Legacy QRs sem `rm` fallback pra "main" |
+| `t` | Base64url，16 bytes | 必填；单次使用；默认 60 秒有效 |
+| `epk` | Base64url，32 bytes | 必填；Host 设备 Ed25519 公钥；PWA 规范化为 Relay canonical Base64 STANDARD `device_id` |
+| `n` | UTF-8 string | 必填；1–80 字符；仅展示用途 |
+| `ep` | opaque UUID | 必填；发起配对的 endpoint |
+| `rt` | opaque UUID | 必填；QR 生成时的当前 runtime |
+| `r` | HTTP(S) Relay URL | 可选配置提示；PWA 若配置不一致必须提示，不得静默改写 |
 
-> **Por que só Ed25519?** O `pk` (Curve25519) do plano 04 servia ao
-> handshake Noise XX. Sem Noise, sobra apenas a chave de autenticação
-> Ed25519 — usada pelo challenge-response do relay e como identificador
-> de peer roteável. O `epk` do plano 04 vira simplesmente `epk` (não há
-> mais ambiguidade com `pk`).
+拒绝重复 query、未知 query、错误 URI authority、无效 Base64、错误字节长度、非 UUID、空值和超长名称。没有 `ep` 或 `rt` 的 QR 无 fallback。
 
-> **Por que sem `r` (plano 14)?** App e pi-ext compartilham a mesma
-> constante `kDefaultRelayUrl = 'wss://relay.remote-pi.dev'`, ambas
-> sobreponíveis via Settings (app) / env+config (pi-ext). Pareamento
-> assume mesmo relay nos 2 lados. Se app tem relay diferente do Pi,
-> sync `pair_request` simplesmente falha por timeout — app mostra erro
-> "Pi não respondeu, verifique se está no mesmo relay".
+## 2. 为什么 QR 必须包含 endpoint/runtime
 
-**Regras**:
-- QR rotaciona a cada 60s no terminal do Pi
-- Cada token aceita **1 uso** — pi-extension marca consumido após `pair_request` válido
-- Novo `/remote-pi pair` invalida o token anterior (um pair em curso = um QR ativo)
-- Token expirado/consumido/desconhecido → Pi responde `pair_error` (não fecha WS)
+未配对 Owner 不在 Host ACL 中，因此不能依赖 ACL 受限的 endpoint discovery。QR 提供初始 route identity，PWA 可以直接发送：
 
----
-
-## Fluxo de pareamento (3 mensagens, sem cripto)
-
-```
-APP                                       PI-EXTENSION
-───                                       ────────────
-escaneia QR, valida t não expirou local
-abre WS, auth Ed25519 (challenge-resp)
-
-pair_request {                            ──▶  valida t (presente, vivo, não consumido)
-  id: uuid,                                    valida peer Ed25519 do app (já tem do relay auth)
-  token: "<t do QR>",                          consome t
-  device_name: "iPhone do Jacob"               salva peer em peers.json:
-}                                                {epk_app, name, paired_at}
-
-                                          ◀──  pair_ok {
-                                                 in_reply_to: <uuid>,
-                                                 session_name: "remote_pi · feature/protocol",
-                                                 session_started_at: 1716234500000  // epoch ms quando /remote-pi start rodou — usado pelo session_sync (plano 11) pra detectar Pi restart
-                                               }
-
-                                          OU em erro:
-                                          ◀──  pair_error {
-                                                 in_reply_to: <uuid>,
-                                                 code: "token_expired" | "token_consumed"
-                                                       | "token_unknown" | "internal_error",
-                                                 message: "Token efêmero expirou..."
-                                               }
-
-UI mostra "Pareado com <session_name>"
-adopta canal pra ChatPage
+```json
+{
+  "type": "route",
+  "purpose": "pairing",
+  "device_id": "<device_id>",
+  "endpoint_id": "<endpoint_id>",
+  "runtime_instance_id": "<runtime_instance_id>",
+  "ct": "<Base64 STANDARD Protocol v2 pair_request bytes>"
+}
 ```
 
-A partir daí, todas as mensagens do inner envelope (`protocol.md`)
-trafegam em **JSON em claro base64** no `ct` do outer envelope.
+Owner 原始 route 不得携带 `target_owner_id` 或 `source_owner_id`。Relay 完成 Owner challenge-response 后，向 Host 转发时注入可信 canonical `source_owner_id`。Host 只把该注入值当作待配对 Owner 身份；不从 inner payload 或客户端自报字段猜测 Owner。
 
-> **Sem `safety number`** — não há derivação criptográfica bilateral
-> pra mostrar. Confiança vem de: (a) token do QR ser single-use, (b)
-> peer ID (Ed25519) do Pi estar no QR, (c) auth no relay garantir que
-> só quem tem a privkey Ed25519 do app consegue assinar como o app.
+若 QR runtime 已被新实例接管，Relay 将旧 runtime route 视为 stale；用户必须刷新 QR。
 
----
+## 3. 配对流程
 
-## Storage pós-pareamento
+```text
+Browser/PWA                              Relay                              Pi Extension
+    | owner hello + Ed25519 auth           |                                     |
+    |------------------------------------->|                                     |
+    | pairing route(pair_request)          |                                     |
+    |------------------------------------->| inject source_owner_id ------------>|
+    |                                      |                       validate token |
+    |                                      |                  persist Owner ACL   |
+    |                                      |<------------- endpoint_update ACL --|
+    |<-------------------------------------|<---- pairing route(pair_ok) ----------|
+    | subscribe_endpoints(device_id)       |                                     |
+    |------------------------------------->|                                     |
+    |<---------------- endpoint snapshot --|                                     |
+    | session route(session_hello)         |                                     |
+    |------------------------------------->|------------------------------------>|
+    |<---------------- session_ready ------|<------------------------------------|
+```
 
-### Mac — `~/.pi/remote/peers.json` (público)
+### `pair_request`
+
+inner frame：
+
+```json
+{
+  "protocol_version": 2,
+  "type": "pair_request",
+  "id": "<request-id>",
+  "token": "<t>",
+  "device_name": "My Browser"
+}
+```
+
+Extension 必须：
+
+1. 使用 Relay 注入的 `source_owner_id` 作为 Owner 身份；
+2. 原子校验 token 是否存在、未过期、未消费；
+3. 消费成功 token；
+4. 把 Owner 记录写入设备本地 `~/.pi/remote/peers.json`；
+5. 通过 `endpoint_update.authorized_owner_ids` 同步 Relay ACL；
+6. 向该 Owner 返回 `pair_ok`。
+
+### `pair_ok`
+
+```json
+{
+  "protocol_version": 2,
+  "type": "pair_ok",
+  "in_reply_to": "<request-id>",
+  "session_name": "project",
+  "session_started_at": 1788010000000,
+  "endpoint_id": "<endpoint_id>",
+  "harness": { "name": "Pi coding agent", "version": "<extension-version>" },
+  "hostname": "<host-name>"
+}
+```
+
+`endpoint_id` 必须与 QR/route endpoint 一致。PWA 将 pairing 保存为 device-scoped record，再独立维护 device 下的 endpoint records。
+
+### `pair_error`
+
+```json
+{
+  "protocol_version": 2,
+  "type": "pair_error",
+  "in_reply_to": "<request-id>",
+  "code": "token_expired",
+  "message": "Pairing token is invalid or expired"
+}
+```
+
+稳定 code：
+
+```text
+token_expired
+token_consumed
+token_unknown
+internal_error
+```
+
+错误响应后不得为该 Owner 开放 session route。
+
+## 4. 本地授权存储
+
+### Host
+
+Host identity：
+
+- 优先平台 keyring（macOS Keychain、Linux secret service、Windows Credential Manager）；
+- headless fallback 为 `~/.pi/remote/identity.json`，文件权限 `0600`，父目录 `0700`；
+- 已有 pairing 但身份不可读时不得静默生成新身份，否则会使全部 pairing 失效；应上报 deterministic blocked failure。
+
+Owner ACL：
 
 ```json
 {
   "peers": [
     {
-      "name": "iPhone do Jacob",
-      "remote_epk": "<base64 standard, 32 bytes Ed25519>",
-      "paired_at": "2026-05-19T16:00:00Z"
+      "name": "My Browser",
+      "remote_epk": "<canonical-or-normalizable Owner Ed25519 public key>",
+      "paired_at": "2026-08-29T00:00:00.000Z"
     }
   ]
 }
 ```
 
-Campos `remote_pk` (Curve25519), `session_id`, `session_name` removidos —
-não havia mais uso fora do Noise/safety/cred-helper.
+该文件只属于这一台设备，不由 Relay 复制到其他设备。
 
-### Mac — Keychain (privado)
+### Browser/PWA
 
-- ~~Chave de longo prazo Curve25519~~ removida (sem Noise)
-- Chave Ed25519 pra auth no relay — **singleton por Mac**, gerada na 1ª
-  invocação de `/remote-pi start`
-- Bridge: `security add-generic-password -s dev.remotepi.mac -a longterm-ed25519 -w <base64>`
+IndexedDB 保存：
 
-### Mobile — Keychain (iOS) / Keystore (Android)
+- 一个 Owner Ed25519 identity；
+- device-scoped pairing record：`deviceId`、Relay URL、pairedAt、nickname/hostname/harness；
+- device+endpoint record及最新 runtime metadata；
+- endpoint/session/generation scoped timeline。
 
-Por pareamento (`service: dev.remotepi.peers`, account = hash do `remote_epk`):
+Owner 私钥不得写入日志、URL、route metadata 或 Relay control frame。
 
-```json
-{
-  "remote_epk": "<base64 standard, 32B Ed25519>",
-  "session_name": "...",
-  "relay_url": "...",
-  "paired_at": "..."
-}
-```
+## 5. 重连与 endpoint discovery
 
-Campos `remote_pk`, `local_pk`, `local_sk` (Curve25519) removidos — não
-existem mais sem Noise.
+已配对 Owner 重连时：
 
-Device-level singleton (`service: dev.remotepi.device`, account = `ed25519`):
+1. 读取本地 Owner identity 与 device records；
+2. 使用 Owner identity 对 Relay challenge 签名；
+3. `subscribe_endpoints([device_id...])`；
+4. Relay 只返回当前 Host ACL 仍包含该 Owner 的 endpoints；
+5. PWA 对选中 endpoint/runtime 创建 session channel，发送 `session_hello`；
+6. 收到 `session_ready` 后才能发送业务请求。
 
-```json
-{
-  "pk": "<base64 standard, 32B Ed25519>",
-  "sk": "<base64 standard, 32B Ed25519>"
-}
-```
+没有在线 Owner 不影响 daemon health；Relay 断线时 Extension 后台重连，不通过重启 Pi 修复网络故障。
 
-Gerada na primeira execução do app, persiste pra todos os pareamentos.
-Implementação Flutter via `flutter_secure_storage`.
+## 6. 撤销
 
----
+Host 本地撤销 Owner 时必须：
 
-## Reconexão
+1. 从 `peers.json` 删除该 Owner；
+2. 关闭该 Owner 的活动 endpoint binding；
+3. 立即发送 `endpoint_update.authorized_owner_ids`；
+4. Relay 对被撤销 Owner 发 `endpoint_ended`，并拒绝其后续 `purpose=session` route。
 
-Em cada reconexão (app reabrindo, rede caindo e voltando):
+撤销只影响当前 `device_id`。其他电脑上的同一个 Owner pairing 不变。
 
-1. App lê pareamento do Keychain
-2. Conecta no relay (challenge-response Ed25519)
-3. **Sem novo handshake** — o canal já está paired no Pi (auto-listener
-   do `started` state aceita peer presente em `peers.json`)
-4. App envia próxima mensagem do protocolo normal (ex: `user_message` ou `ping`)
+## 7. 安全不变量
 
-> **Sem forward secrecy nesta versão** — sem Noise, sem keys de sessão.
-> TLS no transporte protege contra escuta passiva enquanto a conexão
-> está aberta, mas o relay vê tudo. Trade-off aceito por simplicidade
-> do MVP; revisitado em plano 09 (E2E restore).
-
----
-
-## Challenge-response do relay (autenticação)
-
-**Inalterado pelo rollback.** Antes de qualquer roteamento, peer
-autentica no relay com sua chave **Ed25519 de longo prazo**:
-
-1. Cliente abre WS, envia `{ "type": "hello", "pubkey": "<base64 Ed25519 32 bytes>" }`
-2. Relay responde `{ "type": "challenge", "nonce": "<base64 32 bytes random>" }`
-3. Cliente assina `nonce` com sua Ed25519 privkey e envia `{ "type": "auth", "sig": "<base64 64 bytes>" }`
-4. Relay valida assinatura (`ed25519-dalek`)
-5. Se válido → adiciona peer ao roteamento. Se não → fecha WS em <100ms
-
-Relay **continua opaco** ao conteúdo do `ct`. Mesmo sem cifra E2E, o
-relay **nunca chama `JSON.parse(ct)`** — só faz roteamento por `peer`.
-Logs proibidos de incluir `ct` (princípio mantido, mesmo que conteúdo
-agora seja teoricamente legível).
-
----
-
-## Revoke (previsto, não implementado no MVP)
-
-- Mac: remover entrada de `~/.pi/remote/peers.json` + comando `/remote-pi revoke <nome>`
-- Mobile: remover entrada do Keychain/Keystore via UI de settings
-- Sem propagação remota — cada lado limpa seu próprio storage
-- Próxima tentativa de reconnect cai em `unknown_peer` quando app tentar
-  mandar inner pra peer que não está mais em peers.json — Pi responde
-  `error { code: "unknown_peer" }` e o app deve re-disparar fluxo de QR
-
----
-
-## Códigos de erro do pareamento
-
-Estes são erros do `pair_error` (inner envelope, in_reply_to do `pair_request`):
-
-| `code` | Significado |
-|---|---|
-| `token_expired` | QR expirou (>60s desde geração) |
-| `token_consumed` | QR já foi usado por outro `pair_request` |
-| `token_unknown` | Token não foi emitido por este Pi |
-| `internal_error` | Falha inesperada ao persistir peer ou outro side effect |
-
-Erros adicionais que aparecem **fora** do pair_error (no `error` inner
-genérico do `protocol.md`):
-
-| `code` | Significado |
-|---|---|
-| `unknown_peer` | App mandou inner pra peer epk que não está em `peers.json` (não pareado ou revogado) |
-| `auth_failed` | Challenge-response do relay falhou — WS é fechado, não há inner |
+- Relay 对 Owner→Host 只信认证连接并自行注入的 `source_owner_id`。
+- Owner 不能在 route 中自带 source/target Owner 字段。
+- Host→Owner 必须指定 `target_owner_id`，且 session route 必须命中 Host 当前 ACL。
+- Pairing route 绕过 ACL 仅用于 token 验证，不意味着 session 授权。
+- token single-use；新 pairing 操作替换旧活动 token。
+- endpoint/runtime 必须同时匹配；旧 runtime QR 和迟到 route fail closed。
+- 不提供旧 QR、旧路由字段或旧本地数据库的兼容迁移。

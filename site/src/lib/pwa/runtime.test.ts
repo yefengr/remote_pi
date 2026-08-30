@@ -1,61 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { markStreamingMessagesInterrupted, mergeMessages, mergeRooms, migrateLegacyDefaultRelay, upsertMessage } from "./runtime";
+import { acceptEndpointRuntime, mergeEndpoints, migrateLegacyDefaultRelay } from "./runtime";
 
 const LEGACY_RELAY = "https://relay-rp1.jacobmoura.work";
 const CURRENT_RELAY = "https://relay-pi.yefengr.cn";
+const endpoint = { id: "device:endpoint", deviceId: "device", endpointId: "endpoint", runtimeInstanceId: "runtime-old", kind: "interactive" as const, online: false, model: "old", updatedAt: 1 };
 
-test("keeps preferred realtime messages over an older history snapshot", () => {
-  const base = [{ id: "agent-1", peerEpk: "peer", roomId: "room", kind: "assistant" as const, text: "old", createdAt: 1, status: "complete" as const }];
-  const realtime = [{ ...base[0], text: "new", status: "streaming" as const }];
-  assert.deepEqual(mergeMessages(base, realtime), realtime);
-});
-
-test("accumulates a burst of streamed Markdown deltas without losing text", () => {
-  const deltas = Array.from({ length: 2000 }, (_, index) => {
-    if (index % 4 === 0) return "正文";
-    if (index % 4 === 1) return "\n";
-    if (index % 4 === 2) return "```json\n";
-    return `{"index":${index}}\n\`\`\`\n`;
-  });
-  let messages = [] as Parameters<typeof upsertMessage>[0];
-  let expected = "";
-
-  for (const delta of deltas) {
-    expected += delta;
-    messages = upsertMessage(messages, {
-      id: "assistant-request",
-      peerEpk: "peer",
-      roomId: "room",
-      kind: "assistant",
-      text: expected,
-      createdAt: 1,
-      replyTo: "request",
-      status: "streaming",
-    });
-  }
-
-  assert.equal(messages.length, 1);
-  assert.equal(messages[0].text, expected);
-});
-
-test("keeps preferred room metadata over an older local cache record", () => {
-  const cached = [{ id: "peer:room", peerEpk: "peer", roomId: "room", online: true, model: "old", updatedAt: 1 }];
-  const snapshot = [{ ...cached[0], online: false, model: "new", updatedAt: 2 }];
-  assert.deepEqual(mergeRooms(cached, snapshot), snapshot);
-});
-
-test("marks only the active room's streaming output as interrupted", () => {
-  const messages = [
-    { id: "active", peerEpk: "peer", roomId: "room", kind: "assistant" as const, text: "partial", createdAt: 1, status: "streaming" as const },
-    { id: "other-room", peerEpk: "peer", roomId: "other", kind: "assistant" as const, text: "partial", createdAt: 2, status: "streaming" as const },
-    { id: "complete", peerEpk: "peer", roomId: "room", kind: "assistant" as const, text: "done", createdAt: 3, status: "complete" as const },
-  ];
-  assert.deepEqual(markStreamingMessagesInterrupted(messages, "peer", "room").map((message) => message.status), ["interrupted", "streaming", "complete"]);
+test("keeps the preferred endpoint runtime over a cached endpoint", () => {
+  const cached = [endpoint];
+  const current = [{ ...endpoint, runtimeInstanceId: "runtime-current", online: true, model: "new", updatedAt: 2 }];
+  assert.deepEqual(mergeEndpoints(cached, current), current);
 });
 
 test("migrates only missing or legacy default Relay URLs", () => {
   assert.equal(migrateLegacyDefaultRelay(undefined, LEGACY_RELAY, CURRENT_RELAY), CURRENT_RELAY);
   assert.equal(migrateLegacyDefaultRelay(LEGACY_RELAY, LEGACY_RELAY, CURRENT_RELAY), CURRENT_RELAY);
   assert.equal(migrateLegacyDefaultRelay("https://custom.example.com", LEGACY_RELAY, CURRENT_RELAY), "https://custom.example.com");
+});
+
+test("rejects a late event from a runtime that already lost endpoint takeover", () => {
+  const history = new Map<string, Set<string>>();
+  const oldRuntime = { ...endpoint, runtimeInstanceId: "runtime-old" };
+  const newRuntime = { ...oldRuntime, runtimeInstanceId: "runtime-new" };
+  assert.equal(acceptEndpointRuntime(history, undefined, oldRuntime), true);
+  assert.equal(acceptEndpointRuntime(history, oldRuntime, newRuntime), true);
+  assert.equal(acceptEndpointRuntime(history, oldRuntime, oldRuntime), false);
 });

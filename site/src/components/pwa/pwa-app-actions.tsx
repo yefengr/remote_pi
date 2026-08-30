@@ -37,7 +37,7 @@ export function SessionSwitcherTrigger({ label, expanded, onOpen }: SessionSwitc
       className="pwa-session-trigger"
       type="button"
       onClick={onOpen}
-      aria-label="Open session switcher"
+      aria-label="Open endpoint switcher"
       aria-haspopup="dialog"
       aria-expanded={expanded}
       leftSection={<MessageSquare size={16} />}

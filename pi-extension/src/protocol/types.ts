@@ -269,7 +269,7 @@ export type ServerMessage =
       in_reply_to: string;
       session_name: string;
       session_started_at: number;
-      room_id: string;
+      endpoint_id: string;
       /**
        * Plan/27 Wave A: identifies the host coding agent driving this
        * pi-extension instance. `name` is hardcoded to "Pi coding agent"

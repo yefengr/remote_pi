@@ -4,7 +4,7 @@ import type { TimelineEvent } from "../remote-pi/protocol-v2/schema";
 const DATABASE_NAME = "remote-pi-pwa";
 const DATABASE_OPEN_TIMEOUT_MS = 10000;
 
-export type PwaDatabaseErrorCode = "blocked" | "versionchange" | "migration_failed" | "open_failed";
+export type PwaDatabaseErrorCode = "blocked" | "versionchange" | "open_failed";
 
 export class PwaDatabaseError extends Error {
   constructor(public readonly code: PwaDatabaseErrorCode, message: string, options?: { cause?: unknown }) {
@@ -13,55 +13,40 @@ export class PwaDatabaseError extends Error {
   }
 }
 
-export type PwaPeerRecord = {
+/** A pairing is device-scoped. Endpoint selection is intentionally separate. */
+export type PwaDeviceRecord = {
   id: string;
-  remoteEpk: string;
-  sessionName: string;
+  deviceId: string;
   relayUrl: string;
   pairedAt: string;
   nickname?: string;
   hostname?: string;
   harness?: { name: string; version: string };
-  roomId: string;
 };
 
-export type PwaRoomRecord = {
+/** One logical endpoint may receive a new runtime after a daemon restart. */
+export type PwaEndpointRecord = {
   id: string;
-  peerEpk: string;
-  roomId: string;
+  deviceId: string;
+  endpointId: string;
+  runtimeInstanceId: string;
+  kind: "daemon" | "interactive";
   name?: string;
   cwd?: string;
+  pid?: number;
   startedAt?: number;
   model?: string;
   thinking?: string;
   working?: boolean;
-  /** Runtime-only presence; never persisted to IndexedDB. */
+  /** Runtime presence is intentionally not persisted. */
   online?: boolean;
   updatedAt: number;
 };
 
-export type PwaMessageRecord = {
-  id: string;
-  peerEpk: string;
-  roomId: string;
-  kind: "user" | "assistant" | "system";
-  text: string;
-  createdAt: number;
-  replyTo?: string;
-  status?: "streaming" | "interrupted" | "complete" | "error";
-};
-
-export type PwaSyncStateRecord = {
-  id: string;
-  peerEpk: string;
-  roomId: string;
-  lastSyncedAt?: number;
-};
-
 export type PwaTimelineEventRecord = {
   id: string;
-  peerEpk: string;
-  roomId: string;
+  deviceId: string;
+  endpointId: string;
   sessionId: string;
   historyGeneration: string;
   eventId: string;
@@ -84,8 +69,34 @@ type PwaSettingRecord = {
 
 export class PwaDatabase extends Dexie {
   identities!: Table<PwaIdentityRecord, string>;
+  devices!: Table<PwaDeviceRecord, string>;
+  endpoints!: Table<PwaEndpointRecord, string>;
+  timelineEvents!: Table<PwaTimelineEventRecord, string>;
+  settings!: Table<PwaSettingRecord, string>;
+
   private openFailure: PwaDatabaseError | null = null;
   private readonly openFailureListeners = new Set<(error: PwaDatabaseError) => void>();
+
+  constructor() {
+    super(DATABASE_NAME);
+    this.on("blocked", () => {
+      this.reportOpenFailure(new PwaDatabaseError("blocked", "Another tab is holding an older local workspace open."));
+    });
+    this.on("versionchange", () => {
+      this.reportOpenFailure(new PwaDatabaseError("versionchange", "The local workspace changed in another tab."));
+      this.close();
+    });
+
+    // Plan 69 is deliberately destructive: products were never released, so
+    // no room/peer IndexedDB data is migrated or exposed to this schema.
+    this.version(7).stores({
+      identities: "id, publicKey",
+      devices: "id, deviceId, relayUrl, pairedAt",
+      endpoints: "id, deviceId, [deviceId+endpointId], endpointId, updatedAt",
+      timelineEvents: "id, [deviceId+endpointId+sessionId+historyGeneration], timestamp, eventId",
+      settings: "key",
+    });
+  }
 
   onOpenFailure(listener: (error: PwaDatabaseError) => void): () => void {
     this.openFailureListeners.add(listener);
@@ -102,91 +113,14 @@ export class PwaDatabase extends Dexie {
     this.openFailure = error;
     for (const listener of this.openFailureListeners) listener(error);
   }
-  peers!: Table<PwaPeerRecord, string>;
-  pairings!: Table<PwaPeerRecord, string>;
-  rooms!: Table<PwaRoomRecord, string>;
-  timelineEvents!: Table<PwaTimelineEventRecord, string>;
-  settings!: Table<PwaSettingRecord, string>;
-
-  constructor() {
-    super(DATABASE_NAME);
-    this.on("blocked", () => {
-      this.reportOpenFailure(new PwaDatabaseError("blocked", "Another tab is holding an older local workspace open."));
-    });
-    this.on("versionchange", () => {
-      this.reportOpenFailure(new PwaDatabaseError("versionchange", "The local workspace changed in another tab."));
-      this.close();
-    });
-    this.version(1).stores({
-      identities: "id, publicKey",
-      peers: "remoteEpk, relayUrl, pairedAt",
-      messages: "id, [peerEpk+roomId], createdAt, replyTo",
-      settings: "key",
-    });
-    this.version(2).stores({
-      identities: "id, publicKey",
-      peers: "remoteEpk, relayUrl, pairedAt",
-      messages: "id, [peerEpk+roomId], createdAt, replyTo",
-      rooms: "id, [peerEpk+roomId], online, updatedAt",
-      settings: "key",
-    });
-    this.version(3).stores({
-      identities: "id, publicKey",
-      peers: "remoteEpk, relayUrl, pairedAt",
-      messages: "id, [peerEpk+roomId], createdAt, replyTo",
-      rooms: "id, peerEpk, [peerEpk+roomId], online, updatedAt",
-      settings: "key",
-    });
-    this.version(4)
-      .stores({
-        identities: "id, publicKey",
-        peers: "remoteEpk, relayUrl, pairedAt",
-        pairings: "id, remoteEpk, [remoteEpk+roomId], relayUrl, pairedAt",
-        messages: "id, [peerEpk+roomId], createdAt, replyTo",
-        rooms: "id, peerEpk, [peerEpk+roomId], online, updatedAt",
-        settings: "key",
-      })
-      .upgrade(async (transaction) => {
-        try {
-          const legacyPeers = await transaction.table("peers").toArray() as Array<Omit<PwaPeerRecord, "id" | "roomId"> & { roomId?: string }>;
-          await transaction.table("pairings").bulkPut(legacyPeers.map((peer) => {
-            const roomId = peer.roomId || "main";
-            return { ...peer, id: makePwaPeerId(peer.remoteEpk, roomId), roomId };
-          }));
-        } catch (error) {
-          throw new PwaDatabaseError("migration_failed", "Could not migrate the local workspace.", { cause: error });
-        }
-      });
-    this.version(5).stores({
-      identities: "id, publicKey",
-      peers: "remoteEpk, relayUrl, pairedAt",
-      pairings: "id, remoteEpk, [remoteEpk+roomId], relayUrl, pairedAt",
-      messages: "id, [peerEpk+roomId], createdAt, replyTo",
-      rooms: "id, peerEpk, [peerEpk+roomId], online, updatedAt",
-      syncState: "id, [peerEpk+roomId], lastSyncedAt",
-      settings: "key",
-    });
-    this.version(6)
-      .stores({
-        identities: "id, publicKey",
-        peers: "remoteEpk, relayUrl, pairedAt",
-        pairings: "id, remoteEpk, [remoteEpk+roomId], relayUrl, pairedAt",
-        rooms: "id, peerEpk, [peerEpk+roomId], online, updatedAt",
-        timelineEvents: "id, [peerEpk+roomId+sessionId+historyGeneration], timestamp, eventId",
-        settings: "key",
-      })
-      .upgrade(() => {
-        // v6 intentionally omits the legacy messages/syncState stores; Dexie removes them during schema upgrade.
-      });
-  }
 }
 
-export function makePwaPeerId(remoteEpk: string, roomId: string): string {
-  return `${encodeURIComponent(remoteEpk)}:${encodeURIComponent(roomId)}`;
+export function makePwaDeviceId(deviceId: string): string {
+  return encodeURIComponent(deviceId);
 }
 
-export function makePwaSyncStateId(remoteEpk: string, roomId: string): string {
-  return makePwaPeerId(remoteEpk, roomId);
+export function makePwaEndpointId(deviceId: string, endpointId: string): string {
+  return `${encodeURIComponent(deviceId)}:${encodeURIComponent(endpointId)}`;
 }
 
 let database: PwaDatabase | null = null;
@@ -220,48 +154,43 @@ export async function openPwaDatabase(): Promise<PwaDatabase> {
   } finally {
     removeFailureListener();
     if (timeoutTimer) clearTimeout(timeoutTimer);
-    timeoutTimer = null;
   }
 }
 
-export async function listPwaPeers(): Promise<PwaPeerRecord[]> {
-  return getPwaDatabase().pairings.orderBy("pairedAt").reverse().toArray();
+export async function listPwaDevices(): Promise<PwaDeviceRecord[]> {
+  return getPwaDatabase().devices.orderBy("pairedAt").reverse().toArray();
 }
 
-export async function listPwaRooms(peerEpk: string): Promise<PwaRoomRecord[]> {
-  return getPwaDatabase().rooms.where("peerEpk").equals(peerEpk).sortBy("updatedAt");
+export async function listPwaEndpoints(deviceId: string): Promise<PwaEndpointRecord[]> {
+  return getPwaDatabase().endpoints.where("deviceId").equals(deviceId).sortBy("updatedAt");
 }
 
-export async function removePwaPairingData(peerEpk: string, roomId: string, pairingId: string, activeRoomSettingKey?: string): Promise<void> {
+export async function removePwaDeviceData(deviceId: string, deviceRecordId: string, activeEndpointSettingKey?: string): Promise<void> {
   const db = getPwaDatabase();
-  await db.transaction("rw", [db.pairings, db.rooms, db.timelineEvents, db.settings], async () => {
+  await db.transaction("rw", [db.devices, db.endpoints, db.timelineEvents, db.settings], async () => {
     await Promise.all([
-      db.pairings.delete(pairingId),
-      db.rooms.where("[peerEpk+roomId]").equals([peerEpk, roomId]).delete(),
-      db.timelineEvents.where("[peerEpk+roomId+sessionId+historyGeneration]").between(
-        [peerEpk, roomId, "", ""],
-        [peerEpk, roomId, "\uffff", "\uffff"],
+      db.devices.delete(deviceRecordId),
+      db.endpoints.where("deviceId").equals(deviceId).delete(),
+      db.timelineEvents.where("[deviceId+endpointId+sessionId+historyGeneration]").between(
+        [deviceId, "", "", ""],
+        [deviceId, "\uffff", "\uffff", "\uffff"],
         true,
         true,
       ).delete(),
-      activeRoomSettingKey ? db.settings.delete(activeRoomSettingKey) : Promise.resolve(),
+      activeEndpointSettingKey ? db.settings.delete(activeEndpointSettingKey) : Promise.resolve(),
     ]);
   });
 }
 
 export async function clearPwaData(): Promise<void> {
-  await getPwaDatabase().transaction(
-    "rw",
-    [getPwaDatabase().identities, getPwaDatabase().peers, getPwaDatabase().pairings, getPwaDatabase().rooms, getPwaDatabase().timelineEvents, getPwaDatabase().settings],
-    async () => {
-      await Promise.all([
-        getPwaDatabase().identities.clear(),
-        getPwaDatabase().peers.clear(),
-        getPwaDatabase().pairings.clear(),
-        getPwaDatabase().rooms.clear(),
-        getPwaDatabase().timelineEvents.clear(),
-        getPwaDatabase().settings.clear(),
-      ]);
-    },
-  );
+  const db = getPwaDatabase();
+  await db.transaction("rw", [db.identities, db.devices, db.endpoints, db.timelineEvents, db.settings], async () => {
+    await Promise.all([
+      db.identities.clear(),
+      db.devices.clear(),
+      db.endpoints.clear(),
+      db.timelineEvents.clear(),
+      db.settings.clear(),
+    ]);
+  });
 }

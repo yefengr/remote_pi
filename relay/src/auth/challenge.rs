@@ -26,6 +26,14 @@ pub enum ServerAuthMsg {
     Challenge { nonce: String },
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthMessage {
+    #[serde(rename = "type")]
+    message_type: String,
+    sig: String,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
     #[error("expected hello, got other message")]
@@ -76,11 +84,11 @@ pub fn challenge_line(nonce_b64: &str) -> String {
 /// Parses an "auth" line and verifies the Ed25519 signature against `nonce`.
 /// Relay never decodes `ct` — this only verifies the auth-handshake signature.
 pub fn verify_auth(nonce: &[u8; 32], vk: &VerifyingKey, line: &str) -> Result<(), AuthError> {
-    let msg: ClientAuthMsg = serde_json::from_str(line)?;
-    let sig_b64 = match msg {
-        ClientAuthMsg::Auth { sig } => sig,
-        _ => return Err(AuthError::UnexpectedMsg),
-    };
+    let msg: AuthMessage = serde_json::from_str(line)?;
+    if msg.message_type != "auth" {
+        return Err(AuthError::UnexpectedMsg);
+    }
+    let sig_b64 = msg.sig;
     let sig_bytes = B64.decode(&sig_b64)?;
     let sig_arr: [u8; 64] = sig_bytes.try_into().map_err(|_| AuthError::InvalidSig)?;
     let sig = Signature::from_bytes(&sig_arr);

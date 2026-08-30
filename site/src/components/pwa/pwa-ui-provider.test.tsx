@@ -12,9 +12,9 @@ function renderPilot(): string {
         <div className="pwa-root">
           <Button>Save</Button>
         <Input label="Pairing name" defaultValue="Office" />
-        <Select id="room-id" label="Session" value="main" disabled data={[{ value: "main", label: "main" }, { value: "old", label: "Old workspace" }]} onChange={() => {}} defaultDropdownOpened comboboxProps={{ withinPortal: false }} />
+        <Select id="endpoint-id" label="Endpoint" value="endpoint-main" disabled data={[{ value: "endpoint-main", label: "endpoint-main" }, { value: "endpoint-old", label: "Old endpoint" }]} onChange={() => {}} defaultDropdownOpened comboboxProps={{ withinPortal: false }} />
         <Badge>ONLINE</Badge>
-        <Drawer opened title="Sessions" withinPortal={false} onClose={() => {}}>
+        <Drawer opened title="Endpoints" withinPortal={false} onClose={() => {}}>
           Session content
         </Drawer>
         <Modal opened title="Rename pairing" withinPortal={false} onClose={() => {}}>
@@ -35,16 +35,16 @@ test("Mantine PWA pilot renders core controls with the Remote Pi provider", () =
 
   assert.match(html, /Save/);
   assert.match(html, /Pairing name/);
-  assert.match(html, /Sessions/);
+  assert.match(html, /Endpoints/);
   assert.match(html, /Rename pairing/);
   assert.match(html, /Settings/);
   assert.match(html, /pwa-button/);
   assert.match(html, /pwa-input/);
   assert.match(html, /pwa-select/);
-  assert.match(html, /id="room-id"/);
-  assert.match(html, /value="main"/);
+  assert.match(html, /id="endpoint-id"/);
+  assert.match(html, /value="endpoint-main"/);
   assert.match(html, /disabled=""/);
-  assert.match(html, /Old workspace/);
+  assert.match(html, /Old endpoint/);
   assert.match(html, /pwa-badge/);
   assert.match(html, /data-tone="primary"/);
   assert.match(html, /\.pwa-ui-scope\[data-mantine-color-scheme="dark"\]/);

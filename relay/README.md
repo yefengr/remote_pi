@@ -1,189 +1,72 @@
 # Remote Pi — Relay
 
-A lightweight WebSocket relay server that connects the **Remote Pi browser PWA** to
-`pi-extension` processes running on your operating system. It handles peer routing,
-presence, authorized Pi-to-Pi forwarding, and signed membership metadata.
+A lightweight WebSocket relay between the Remote Pi browser PWA and Pi endpoints. It authenticates device connections, announces reachable endpoints to authorized browser devices, and forwards opaque payload containers.
 
-For a full overview of the project, see the
-[root README](../README.md).
-
----
-
-## Protocol & Security
-
-For wire format, identity model, ACK protocol, cross-PC routing, mesh
-membership, trust model, and failure modes, see
-[PROTOCOL.md](../PROTOCOL.md) at the repo root. It is the canonical reference
-for everything the relay enforces on the wire.
+For the product overview, see the [root README](../README.md).
 
 ---
 
 ## How it works
 
-Every device authenticates with an Ed25519 keypair during the WebSocket handshake
-(challenge-response). The Relay then applies these content boundaries:
+A connected computer announces one or more endpoints. Each endpoint has a stable endpoint identifier and a runtime identifier that changes whenever its Pi process starts again. Browser devices subscribe to paired computers and receive endpoint updates while they are connected.
 
-- For PWA↔Pi traffic, the outer `ct` remains opaque and is never decoded.
-- Pi→Pi `pi_envelope` frames and signed membership blobs are parsed in memory only
-  as needed for routing and authorization.
-- No envelope body, key material, or signature is logged or persisted as a message
-  payload. SQLite persistence is limited to Owner-signed membership authorization
-  metadata, not message traffic.
-- A route is eligible when any correctly signed Owner blob directly lists both
-  canonical Pi keys. This does not prove that the Owner paired with or controls
-  either Pi, and is not a stronger trust guarantee. Membership is not transitive
-  across overlapping Owner blobs.
-- The positive authorization cache can retain a revoked permission for at most
-  60 seconds. Negative sender misses are cached for 1 second, and the cache is
-  bounded.
+The Relay keeps this routing authority **only in memory**:
+
+- The registry is empty after a Relay restart; endpoints announce themselves again when they reconnect.
+- No database, message store, pairing history, or endpoint inventory is written by the Relay.
+- Route payloads use the `ct` container. The Relay does not decode its contents.
+- A browser device can route a session payload only to an endpoint that authorizes that device. Pairing routes are allowed only for the endpoint/runtime named by the QR flow.
+- A newer runtime for the same device and endpoint replaces the older connection atomically, so stale processes cannot publish or receive routes.
+
+The Relay does not create pairings. Pairing keys and per-device authorization are maintained by the PWA and Pi extension.
+
+## Security boundary
+
+Connections use a challenge-response authentication handshake with Ed25519 keys and should use TLS in production.
+
+The shipped service forwards opaque `ct` payloads without decoding, logging, or persisting their contents. This is an implementation boundary, not a guarantee against an operator who controls the Relay executable or TLS endpoint. For private code, credentials, or regulated data, self-host a Relay under infrastructure you control.
+
+The Relay still handles connection metadata needed to operate WebSockets, including public-key identifiers, endpoint identifiers, timing, and transport sizes. Browser pairing controls which connected device may route to an endpoint; it is not an account system.
 
 ---
 
-## Public relay
+## Public Relay
 
-A shared relay is available at:
+A shared Relay is available at:
 
-```
+```text
 https://relay-pi.yefengr.cn
 ```
 
-You can use it to get started without any setup. However, be aware of the security
-trade-offs below.
+The Pi extension and PWA accept an `http://` or `https://` Relay URL and convert it to the matching WebSocket scheme internally. Shared infrastructure is best-effort; use a Relay you trust for sensitive work.
 
-### Security considerations
+## Self-hosting
 
-Messages are protected in two ways on the public relay:
-
-- **TLS (SSL)** — the WebSocket connection is encrypted in transit.
-- **Ed25519 connection key** — challenge-response authenticates possession of the
-  announced connection key. It does not itself prove PWA pairing or authorize every
-  route.
-
-PWA↔Pi pairing and room addressing are client protocol responsibilities. Pi→Pi
-forwarding has separate Relay route eligibility: any correctly signed Owner blob
-must directly list both Pi keys. This does not prove that the Owner paired with
-or controls either Pi, and is not a stronger trust guarantee.
-
-The shipped Relay never decodes the outer `ct` and does not log or persist message
-traffic. That implementation behavior is not an end-to-end trust boundary: the
-relay operator controls the TLS endpoint, executable, and host, and a compromised
-or malicious operator could replace or instrument the service to inspect or retain
-traffic. Pi→Pi envelope content is also parsed transiently in the Relay process for
-routing and authorization.
-
-**If you handle sensitive work — private code, credentials, proprietary data — we
-strongly recommend running your own relay.**
-
----
-
-## Self-hosted relay (recommended for privacy)
-
-Running your own relay removes the shared Relay operator from the trust path and
-places the TLS endpoint, executable, and storage under infrastructure you control.
-
-### Docker (quickest)
+### Docker
 
 ```bash
 docker run -d \
   --name remote-pi-relay \
   -p 3000:3000 \
-  -v remote-pi-data:/data \
   --restart unless-stopped \
   jacobmoura7/remote-pi-relay
 ```
 
-The relay listens on a **single port** (`3000` by default) and serves three
-surfaces at once:
+The Relay serves the WebSocket upgrade at `/` and a liveness response at `/health` on port `3000`. It has no persistent state to mount or back up.
 
-- `GET /` — WebSocket upgrade (the peer protocol)
-- `GET /health` — health check (returns `200 OK`)
-- `GET / POST /mesh/<owner_pk_hash>` — signed membership versions
+Point both the browser PWA and the Pi extension to `http://<host>:3000`, or put the Relay behind a TLS-terminating proxy and use the proxy's `https://` URL.
 
-Point your browser PWA and `pi-extension` to `ws://<your-server-ip>:3000` (or `wss://`
-if you put it behind a TLS-terminating reverse proxy such as Caddy or nginx).
+### Reverse proxy
 
-**`/data` volume**: the relay stores its SQLite database (signed membership
-versions) at `/data/mesh.db` inside the container. Mount a named volume (as in
-the example above) or a host directory (`-v /srv/remote-pi:/data`) so the state
-survives `docker rm` and image upgrades. Without a mount, the database is
-recreated empty each time the container starts and clients re-publish their
-state at the next mutation.
+Example Caddy configuration:
 
-### Environment variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `REMOTEPI_RELAY_PORT` | `3000` | TCP port that serves the WebSocket upgrade, `/health`, and `/mesh/*` (all on the same port) |
-| `REMOTEPI_MESH_DB_PATH` | `/data/mesh.db` in Docker · `data/mesh.db` (cwd-relative) for bare-metal builds | Path to the SQLite database that stores signed membership versions. The parent directory is created automatically on first boot. The Docker image presets this to `/data/mesh.db` and declares `/data` as a volume — see the volume note above |
-| `RUST_LOG` | _(none)_ | Log level filter — e.g. `info`, `debug`, `warn` |
-
-Example with a custom port and logging (volume mount is the same):
-
-```bash
-docker run -d \
-  --name remote-pi-relay \
-  -p 8080:8080 \
-  -v remote-pi-data:/data \
-  -e REMOTEPI_RELAY_PORT=8080 \
-  -e RUST_LOG=info \
-  --restart unless-stopped \
-  jacobmoura7/remote-pi-relay
-```
-
-### Mesh membership endpoint
-
-The `/mesh/<owner_pk_hash>` endpoint stores **Owner-signed** lists of Pi keys,
-keyed by `sha256(owner_pk)` in lowercase hex. It enables a browser PWA
-profile to recover its peer list after restoring its Owner Ed25519 key from
-its own IndexedDB data.
-
-The relay verifies every `POST` against the embedded `owner_pk` using Ed25519
-and only accepts versions strictly greater than the current one (monotonic).
-Bodies are capped at 500 KB. The relay does not create membership: it stores the
-Owner-signed authorization metadata and treats Pi A↔B as route-eligible when any
-correctly signed Owner blob directly lists both keys, without transitive
-authorization across blobs. This does not prove that the Owner paired with or
-controls either Pi, and is not a stronger trust guarantee. The shipped POST
-endpoint prevents an unprivileged caller from modifying a particular Owner slot
-without that Owner private key. This is not protection against Relay/operator
-compromise: an operator controls the executable and SQLite authorization state.
-A positive authorization cache entry can delay a revocation for at most 60
-seconds; negative sender misses are cached for 1 second, and the cache is bounded.
-
-**Self-hosting note**: the SQLite database at `REMOTEPI_MESH_DB_PATH`
-(`/data/mesh.db` inside the official Docker image) is your operational
-responsibility — make sure `/data` is on a persistent volume and back it up
-alongside any other server state. If you lose it, clients re-publish their
-current view at their next mutation.
-
-**Storage layout**: SQLite runs in the default rollback-journal mode (NOT
-WAL), so only `mesh.db` persists. During a write transaction a transient
-`mesh.db-journal` may appear in the same directory and is deleted on commit.
-Both files live under `REMOTEPI_MESH_DB_PATH`'s parent directory — typically
-`/data/` in Docker or `data/` next to the binary on bare metal. The directory
-is created automatically on first boot. This database contains membership
-authorization metadata only, never message traffic.
-
-For upgrades, deploy Relay 0.3 first: old Extensions can consume its UUID
-errors. Then coordinate the Extension 0.6 rollout and minimize mixed old/new
-Extensions because mixed wire-label interoperability is deferred. Extension
-0.6's old-Relay error shim is for an old Relay or Relay rollback, not the reason
-Relay-first is safe. The centralized rollout gates are in
-[Plan 51](../plan/51-cross-pc-mesh-routing-hardening.md).
-
-### Behind a reverse proxy (HTTPS/WSS)
-
-For production use, put the relay behind a TLS-terminating proxy. Example Caddy config:
-
-```
-relay.yourdomain.com {
+```text
+relay.example.com {
     reverse_proxy localhost:3000
 }
 ```
 
-Then set your browser PWA and `pi-extension` relay URL to `wss://relay.yourdomain.com`.
-
----
+Use `https://relay.example.com` in the PWA and with `/remote-pi set-relay https://relay.example.com`.
 
 ## Building from source
 
@@ -192,11 +75,7 @@ cargo build --release
 ./target/release/relay
 ```
 
-```bash
-REMOTEPI_RELAY_PORT=8080 RUST_LOG=info ./target/release/relay
-```
-
-## Running tests
+## Tests
 
 ```bash
 cargo test

@@ -1,74 +1,65 @@
-# Remote Pi — Relay (Rust)
+# Remote Pi — Relay（Rust）
 
-Servidor WebSocket que autentica conexões por `peer_id`, roteia tráfego App↔Pi,
-autoriza e encaminha envelopes Pi→Pi e mantém metadados de membership assinados
-pelo Owner em SQLite.
+WebSocket Relay：认证 Browser/PWA Owner 与 Pi Host 连接，在内存中维护 device/endpoint/runtime registry 和每个 endpoint 的 Owner ACL，发布 endpoint snapshot/update，并转发 opaque `ct` route。
+
+Relay 不提供 Agent Mesh、Pi-to-Pi forwarding、room/presence、membership API、SQLite storage 或 message queue。当前跨端真源见 [`../PROTOCOL.md`](../PROTOCOL.md) 和 [`../.orchestration/contracts/protocol.md`](../.orchestration/contracts/protocol.md)。
 
 ## Stack
 
-- Rust 1.94+ (edição 2024)
-- Runtime: `tokio` (full features)
-- WebSocket: `tokio-tungstenite`
-- Serialização: `serde` + `serde_json`
-- Logging: `tracing` + `tracing-subscriber` (NÃO usar `println!`)
+- Rust 1.94+（edition 2024）
+- Tokio
+- Axum / tokio-tungstenite
+- Serde / serde_json
+- tracing / tracing-subscriber
+- Ed25519 challenge-response
 
-## Comandos
+## 常用命令
 
-- `cargo build` — build dev
-- `cargo build --release` — build otimizado
-- `cargo run` — roda local
-- `RUST_LOG=info cargo run` — com logs visíveis
-- `cargo clippy -- -D warnings` — lint estrito (deve passar antes de commit)
-- `cargo fmt` — formata
-- `cargo test` — testes
+```bash
+cargo build
+cargo build --release
+cargo run
+RUST_LOG=info cargo run
+cargo fmt -- --check
+cargo clippy --locked -- -D warnings
+cargo test --locked
+```
 
-## Convenções
+## Protocol 规则
 
-- **Erros**: `anyhow::Result<()>` no `main`, `thiserror::Error` em libs internas
-- **Async**: tudo via `tokio::spawn` / `tokio::select!`, nada de `std::thread`
-- **Logging**: spans com `tracing::info_span!` em handlers, `info!`/`warn!`/`error!`
-- **Sem `unwrap()`** em código de produção. Use `?` e propague
-- **Sem `clone()` desnecessário** — passe `&` quando possível
+- 连接必须发送 `protocol_version=2` 的 role-aware Host/Owner hello，并完成 Ed25519 challenge-response。
+- Host identity 是 canonical `device_id`；Owner identity 是 canonical `owner_id`。
+- 相同 `(device_id, endpoint_id)` 只有一个权威 runtime；新 runtime takeover 后旧 connection/frame stale。
+- Owner discovery 只能返回 Host 当前 ACL 包含该 Owner 的 endpoint。
+- Owner→Host route 禁止自带 source/target Owner；Relay 注入认证连接的 canonical `source_owner_id`。
+- Host→Owner route 必须携带 `target_owner_id`，且禁止 `source_owner_id`。
+- `purpose=pairing` 只允许 QR pairing exchange；`purpose=session` 必须命中当前 Host ACL。
+- `ct` 始终 opaque：不得 decode、parse、log 或 persist。
+- Strict schema 拒绝未知字段、错误方向、错误 UUID/key 和旧 room frame；不得增加 compatibility fallback。
 
-## Política de segurança e conteúdo
+## 状态与持久化
 
-- No tráfego App↔Pi, o `ct` externo permanece opaco e nunca é decodificado.
-- `pi_envelope` Pi→Pi e membership assinado são parseados em memória somente
-  conforme necessário para routing e autorização.
-- Nenhum body de envelope, material de chave ou assinatura pode ser logado ou
-  persistido como payload de mensagem.
-- A persistência SQLite é limitada a metadados de autorização de membership
-  assinados pelo Owner; tráfego de mensagens nunca é persistido.
-- Uma rota é elegível quando qualquer blob Owner corretamente assinado lista
-  diretamente as duas chaves Pi canônicas. Isso não prova que o Owner pareou ou
-  controla qualquer Pi, nem oferece uma garantia de confiança mais forte. Não
-  há transitividade entre blobs sobrepostos.
-- O cache positivo de autorização pode reter uma permissão revogada por no
-  máximo 60 segundos; misses negativos de remetente são cacheados por 1 segundo
-  e o cache é limitado.
-- Rate limit por `peer_id` e por IP de origem.
+- Endpoint registry、ACL、subscriptions 和 connection senders 全在内存中。
+- Relay restart 后状态清空，由 Host/Owner reconnect 重建。
+- 不添加数据库、membership storage、endpoint inventory、offline queue 或 traffic persistence。
+- `/` 是 WebSocket upgrade；`/health` 是 liveness。
 
-## Upgrade
+## 安全与日志
 
-- Implante primeiro o Relay 0.3: Extensions antigas consomem seus erros UUID.
-  Depois coordene a Extension 0.6 e minimize Extensions mistas, pois labels de
-  wire mistos continuam adiados. O shim da 0.6 cobre Relay antigo ou rollback,
-  não é a razão de Relay-first ser seguro.
-- Os procedimentos de rollout ficam centralizados no
-  [Plano 51](../plan/51-cross-pc-mesh-routing-hardening.md).
+- 不记录 `ct`、消息正文、private key、signature、pairing token 或完整 public key。
+- 可以记录 role、结果枚举和脱敏 connection metadata。
+- 使用 `tracing`，不要使用 `println!`。
+- 生产路径不使用 `.unwrap()` / `.expect()`；序列化等静态不可失败路径沿现有例外处理。
+- 所有 async 工作使用 Tokio；不要用 `std::thread`。
+- 不引入无界持久缓存；内存结构需有明确所有权和 stale cleanup。
 
-## NÃO fazer
+## 不要做
 
-- Não usar `println!` (use `tracing`)
-- Não usar `.unwrap()` ou `.expect()` em paths de produção
-- Não logar conteúdo de mensagens, chaves completas ou assinaturas
-- Não adicionar persistência de tráfego/payload; apenas metadata de membership
-  assinada pelo Owner pertence ao SQLite
-- Não comitar `target/` (já no .gitignore raiz)
+- 不恢复 `/mesh`、room、presence、Pi forwarding 或 SQLite volume。
+- 不解析 inner Protocol v2 来做业务授权；Relay 只依据 outer role、endpoint/runtime 和 ACL。
+- 不把 pairing route 当成 session 授权。
+- 不提交 `target/`。
 
-## Modo orquestrado
+## 编排模式
 
-Se receber um prompt começando com `[ORCH:<task-id>]`, leia
-`../.orchestration/INSTRUCTIONS.md` antes de qualquer outra ação. Esse marker
-indica que outro agente está coordenando o trabalho e tem regras específicas
-(onde escrever resultado, não comitar, etc).
+收到 `[ORCH:<task-id>]` 时，先完整阅读 `../.orchestration/INSTRUCTIONS.md`，遵守白名单、结果文件、验证和不提交约束。

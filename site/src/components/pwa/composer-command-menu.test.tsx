@@ -49,7 +49,7 @@ test("renders all root Pi commands with Mantine unstyled controls", () => {
   assert.match(html, /Thinking level: medium/);
 });
 
-test("falls back to room metadata before the current model catalog arrives", () => {
+test("falls back to endpoint metadata before the current model catalog arrives", () => {
   const html = renderPanel("root", { currentModel: null, currentModelFallback: "GPT-5.4" });
 
   assert.match(html, /GPT-5.4/);
@@ -62,7 +62,7 @@ test("shows an explicit unavailable state when no current model is known", () =>
   assert.match(html, /Current model unavailable/);
 });
 
-test("disables new and compact while the active room is working", () => {
+test("disables new and compact while the active endpoint is working", () => {
   const html = renderPanel("root", { isWorking: true });
 
   assert.equal((html.match(/disabled=""/g) ?? []).length, 2);

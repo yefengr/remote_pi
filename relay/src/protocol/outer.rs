@@ -1,145 +1,439 @@
-// Tipos ainda não usados no handler — serão conectados no próximo passo
-#![allow(dead_code)]
-
-use std::sync::OnceLock;
+use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-fn default_room() -> String {
-    "main".to_string()
+use crate::identity::canonical_ed25519_public_key;
+
+pub const PROTOCOL_VERSION: u64 = 2;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EndpointKind {
+    Daemon,
+    Interactive,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OuterEnvelope {
-    pub peer: String,
-    /// Optional sub-channel (plano 17). Absent in legacy frames → "main".
-    #[serde(default = "default_room")]
-    pub room: String,
-    pub ct: String, // base64 — nunca decodificado aqui
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EndpointMetadata {
+    pub kind: EndpointKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub working: Option<bool>,
 }
 
-/// Nome da env var que sobrescreve o teto do outer envelope (inteiro em MiB).
-pub const MAX_CT_ENV: &str = "RELAY_MAX_CT_MIB";
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostHello {
+    pub device_id: String,
+    pub endpoint_id: String,
+    pub runtime_instance_id: String,
+    pub metadata: EndpointMetadata,
+    pub authorized_owner_ids: HashSet<String>,
+}
 
-/// Default do teto: 4 MiB de payload base64-decoded. Históricamente era 1 MiB
-/// fixo, mas imagens passam por base64 duplo (inner `data` + outer `ct` ≈
-/// 1,333× o JPEG bruto), então 1 MiB dropava em silêncio qualquer imagem
-/// acima de ~768 KB e travava o app em "sending…". 4 MiB cobre o teto de
-/// compressão do app (~1,5 MB, ~2 MB estimado) com folga.
-pub const DEFAULT_MAX_CT_MIB: usize = 4;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Hello {
+    Host(Box<HostHello>),
+    Owner { owner_id: String },
+}
 
-/// Teto efetivo do outer envelope, em bytes. Lido **uma vez** de
-/// [`MAX_CT_ENV`] (valor em MiB) na primeira chamada e memoizado. Ausência ou
-/// valor inválido (não-inteiro, zero, vazio) cai no default de 4 MiB —
-/// **nunca** entra em panic (convenção do relay: zero `unwrap`/`expect` em
-/// prod).
-pub fn max_ct_bytes() -> usize {
-    static MAX_CT_BYTES: OnceLock<usize> = OnceLock::new();
-    *MAX_CT_BYTES.get_or_init(|| {
-        let mib = std::env::var(MAX_CT_ENV)
-            .ok()
-            .and_then(|s| s.trim().parse::<usize>().ok())
-            .filter(|&n| n > 0)
-            .unwrap_or(DEFAULT_MAX_CT_MIB);
-        mib * 1024 * 1024
-    })
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutePurpose {
+    Pairing,
+    Session,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouteFrame {
+    #[serde(rename = "type")]
+    pub frame_type: String,
+    pub purpose: RoutePurpose,
+    pub device_id: String,
+    pub endpoint_id: String,
+    pub runtime_instance_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_owner_id: Option<String>,
+    /// Injected by the relay on Owner → Host delivery; never supplied by an Owner.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_owner_id: Option<String>,
+    pub ct: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EndpointUpdate {
+    pub metadata: Option<EndpointMetadata>,
+    pub authorized_owner_ids: Option<HashSet<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EndpointInfo {
+    pub endpoint_id: String,
+    pub runtime_instance_id: String,
+    pub metadata: EndpointMetadata,
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ParseError {
+pub enum OuterError {
     #[error("invalid json: {0}")]
     InvalidJson(#[from] serde_json::Error),
-    #[error("payload too large: {0} bytes (max {1})")]
-    TooLarge(usize, usize),
+    #[error("unknown outer frame type")]
+    UnknownFrameType,
+    #[error("unsupported protocol version")]
+    UnsupportedProtocolVersion,
+    #[error("non-canonical public key")]
+    NonCanonicalPublicKey,
+    #[error("invalid public key: {0}")]
+    InvalidPublicKey(String),
+    #[error("invalid opaque UUID")]
+    InvalidUuid,
+    #[error("invalid hello shape")]
+    InvalidHello,
+    #[error("invalid endpoint update")]
+    InvalidEndpointUpdate,
 }
 
-/// Parseia uma linha JSONL no outer envelope e valida o tamanho de `ct`
-/// contra o teto configurado ([`max_ct_bytes`]). Nunca decodifica o conteúdo
-/// de `ct` — apenas mede o comprimento da string base64 para estimar o tamanho
-/// do payload (3/4 do len base64).
-pub fn parse_line(line: &str) -> Result<OuterEnvelope, ParseError> {
-    parse_line_with_max(line, max_ct_bytes())
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum WireRole {
+    Host,
+    Owner,
 }
 
-/// Núcleo testável de [`parse_line`] com o teto injetado, para que os testes
-/// exerçam o limite sem mexer na env var global (evita corrida entre testes
-/// paralelos e o `OnceLock` memoizado).
-fn parse_line_with_max(line: &str, max_ct_bytes: usize) -> Result<OuterEnvelope, ParseError> {
-    let env: OuterEnvelope = serde_json::from_str(line)?;
-    let estimated = env.ct.len() * 3 / 4;
-    if estimated > max_ct_bytes {
-        return Err(ParseError::TooLarge(estimated, max_ct_bytes));
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HelloWire {
+    #[serde(rename = "type")]
+    frame_type: String,
+    protocol_version: u64,
+    role: WireRole,
+    pubkey: String,
+    endpoint_id: Option<String>,
+    runtime_instance_id: Option<String>,
+    metadata: Option<EndpointMetadata>,
+    authorized_owner_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RouteWire {
+    #[serde(rename = "type")]
+    frame_type: String,
+    purpose: RoutePurpose,
+    device_id: String,
+    endpoint_id: String,
+    runtime_instance_id: String,
+    target_owner_id: Option<String>,
+    source_owner_id: Option<String>,
+    ct: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SubscribeEndpointsWire {
+    #[serde(rename = "type")]
+    frame_type: String,
+    device_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EndpointUpdateWire {
+    #[serde(rename = "type")]
+    frame_type: String,
+    metadata: Option<EndpointMetadata>,
+    authorized_owner_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FrameTypeWire {
+    #[serde(rename = "type")]
+    frame_type: String,
+}
+
+pub fn frame_type(line: &str) -> Result<String, OuterError> {
+    Ok(serde_json::from_str::<FrameTypeWire>(line)?.frame_type)
+}
+
+pub fn parse_hello(line: &str) -> Result<Hello, OuterError> {
+    let wire: HelloWire = serde_json::from_str(line)?;
+    if wire.frame_type != "hello" {
+        return Err(OuterError::UnknownFrameType);
     }
-    Ok(env)
+    if wire.protocol_version != PROTOCOL_VERSION {
+        return Err(OuterError::UnsupportedProtocolVersion);
+    }
+
+    let identity = canonical_id(&wire.pubkey)?;
+    match wire.role {
+        WireRole::Host => {
+            let endpoint_id = wire.endpoint_id.ok_or(OuterError::InvalidHello)?;
+            let runtime_instance_id = wire.runtime_instance_id.ok_or(OuterError::InvalidHello)?;
+            let metadata = wire.metadata.ok_or(OuterError::InvalidHello)?;
+            if !is_uuid(&endpoint_id) || !is_uuid(&runtime_instance_id) {
+                return Err(OuterError::InvalidUuid);
+            }
+            let authorized_owner_ids = wire
+                .authorized_owner_ids
+                .unwrap_or_default()
+                .into_iter()
+                .map(|owner_id| canonical_id(&owner_id))
+                .collect::<Result<HashSet<_>, _>>()?;
+            Ok(Hello::Host(Box::new(HostHello {
+                device_id: identity,
+                endpoint_id,
+                runtime_instance_id,
+                metadata,
+                authorized_owner_ids,
+            })))
+        }
+        WireRole::Owner => {
+            if wire.endpoint_id.is_some()
+                || wire.runtime_instance_id.is_some()
+                || wire.metadata.is_some()
+                || wire.authorized_owner_ids.is_some()
+            {
+                return Err(OuterError::InvalidHello);
+            }
+            Ok(Hello::Owner { owner_id: identity })
+        }
+    }
+}
+
+pub fn parse_route(line: &str) -> Result<RouteFrame, OuterError> {
+    let wire: RouteWire = serde_json::from_str(line)?;
+    if wire.frame_type != "route" {
+        return Err(OuterError::UnknownFrameType);
+    }
+    if !is_uuid(&wire.endpoint_id) || !is_uuid(&wire.runtime_instance_id) {
+        return Err(OuterError::InvalidUuid);
+    }
+    Ok(RouteFrame {
+        frame_type: "route".to_string(),
+        purpose: wire.purpose,
+        device_id: canonical_id(&wire.device_id)?,
+        endpoint_id: wire.endpoint_id,
+        runtime_instance_id: wire.runtime_instance_id,
+        target_owner_id: wire
+            .target_owner_id
+            .map(|owner_id| canonical_id(&owner_id))
+            .transpose()?,
+        source_owner_id: wire
+            .source_owner_id
+            .map(|owner_id| canonical_id(&owner_id))
+            .transpose()?,
+        ct: wire.ct,
+    })
+}
+
+pub fn parse_subscribe_endpoints(line: &str) -> Result<Vec<String>, OuterError> {
+    let wire: SubscribeEndpointsWire = serde_json::from_str(line)?;
+    if wire.frame_type != "subscribe_endpoints" {
+        return Err(OuterError::UnknownFrameType);
+    }
+    wire.device_ids
+        .into_iter()
+        .map(|device_id| canonical_id(&device_id))
+        .collect()
+}
+
+pub fn parse_endpoint_update(line: &str) -> Result<EndpointUpdate, OuterError> {
+    let wire: EndpointUpdateWire = serde_json::from_str(line)?;
+    if wire.frame_type != "endpoint_update" {
+        return Err(OuterError::UnknownFrameType);
+    }
+    if wire.metadata.is_none() && wire.authorized_owner_ids.is_none() {
+        return Err(OuterError::InvalidEndpointUpdate);
+    }
+    let authorized_owner_ids = wire
+        .authorized_owner_ids
+        .map(|owner_ids| {
+            owner_ids
+                .into_iter()
+                .map(|owner_id| canonical_id(&owner_id))
+                .collect::<Result<HashSet<_>, _>>()
+        })
+        .transpose()?;
+    Ok(EndpointUpdate {
+        metadata: wire.metadata,
+        authorized_owner_ids,
+    })
+}
+
+pub fn endpoints_line(device_id: &str, endpoints: Vec<EndpointInfo>) -> Option<String> {
+    #[derive(Serialize)]
+    struct EndpointsFrame<'a> {
+        #[serde(rename = "type")]
+        frame_type: &'static str,
+        device_id: &'a str,
+        endpoints: Vec<EndpointInfo>,
+    }
+
+    serde_json::to_string(&EndpointsFrame {
+        frame_type: "endpoints",
+        device_id,
+        endpoints,
+    })
+    .ok()
+}
+
+pub fn endpoint_announced_line(device_id: &str, endpoint: &EndpointInfo) -> Option<String> {
+    endpoint_event_line("endpoint_announced", device_id, endpoint, true)
+}
+
+pub fn endpoint_updated_line(device_id: &str, endpoint: &EndpointInfo) -> Option<String> {
+    endpoint_event_line("endpoint_updated", device_id, endpoint, true)
+}
+
+pub fn endpoint_ended_line(device_id: &str, endpoint: &EndpointInfo) -> Option<String> {
+    endpoint_event_line("endpoint_ended", device_id, endpoint, false)
+}
+
+fn endpoint_event_line(
+    frame_type: &'static str,
+    device_id: &str,
+    endpoint: &EndpointInfo,
+    include_metadata: bool,
+) -> Option<String> {
+    #[derive(Serialize)]
+    struct EndpointEvent<'a> {
+        #[serde(rename = "type")]
+        frame_type: &'static str,
+        device_id: &'a str,
+        endpoint_id: &'a str,
+        runtime_instance_id: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        metadata: Option<&'a EndpointMetadata>,
+    }
+
+    serde_json::to_string(&EndpointEvent {
+        frame_type,
+        device_id,
+        endpoint_id: &endpoint.endpoint_id,
+        runtime_instance_id: &endpoint.runtime_instance_id,
+        metadata: include_metadata.then_some(&endpoint.metadata),
+    })
+    .ok()
+}
+
+fn canonical_id(value: &str) -> Result<String, OuterError> {
+    let canonical = canonical_ed25519_public_key(value)
+        .map_err(|error| OuterError::InvalidPublicKey(error.to_string()))?;
+    if canonical != value {
+        return Err(OuterError::NonCanonicalPublicKey);
+    }
+    Ok(canonical)
+}
+
+fn is_uuid(value: &str) -> bool {
+    value.len() == 36
+        && value.as_bytes().iter().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                *byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        })
 }
 
 #[cfg(test)]
 mod tests {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
     use super::*;
 
-    #[test]
-    fn parses_minimal_envelope() {
-        let line = r#"{"peer":"abc","ct":"AAA="}"#;
-        let env = parse_line(line).unwrap();
-        assert_eq!(env.peer, "abc");
-        assert_eq!(env.room, "main"); // defaults to "main" when absent
-        assert_eq!(env.ct, "AAA=");
+    fn device_id(byte: u8) -> String {
+        STANDARD.encode([byte; 32])
+    }
+
+    fn metadata() -> serde_json::Value {
+        serde_json::json!({"kind": "daemon", "pid": 42})
     }
 
     #[test]
-    fn parses_envelope_with_room() {
-        let line = r#"{"peer":"abc","room":"aB12CD34eF56","ct":"AAA="}"#;
-        let env = parse_line(line).unwrap();
-        assert_eq!(env.room, "aB12CD34eF56");
+    fn parses_strict_host_hello() {
+        let host_device_id = device_id(1);
+        let hello = serde_json::json!({
+            "type": "hello",
+            "protocol_version": 2,
+            "role": "host",
+            "pubkey": host_device_id,
+            "endpoint_id": "11111111-1111-4111-8111-111111111111",
+            "runtime_instance_id": "22222222-2222-4222-8222-222222222222",
+            "metadata": metadata(),
+            "authorized_owner_ids": [device_id(2)],
+        });
+
+        let parsed = parse_hello(&hello.to_string()).unwrap();
+        let Hello::Host(host) = parsed else {
+            panic!("host hello expected");
+        };
+        assert_eq!(host.device_id, host_device_id);
+        assert!(host.authorized_owner_ids.contains(&device_id(2)));
+        assert_eq!(host.metadata.kind, EndpointKind::Daemon);
     }
 
     #[test]
-    fn rejects_too_large() {
-        // 12 MiB de "A" → estimativa 9 MiB, acima do default de 4 MiB.
-        // (Antes era 2 MiB → 1,5 MiB estimado, que agora PASSARIA no default.)
-        let big = "A".repeat(12 * 1024 * 1024);
-        let line = format!(r#"{{"peer":"abc","ct":"{}"}}"#, big);
-        assert!(matches!(parse_line(&line), Err(ParseError::TooLarge(..))));
-    }
-
-    #[test]
-    fn accepts_two_mb_payload_under_default() {
-        // Regressão do bug da imagem: 3 MiB de base64 → ~2,25 MiB estimado.
-        // Sob o antigo teto de 1 MiB isto era dropado em silêncio (app travava
-        // em "sending…"); sob o default atual de 4 MiB deve passar.
-        let img = "A".repeat(3 * 1024 * 1024);
-        let line = format!(r#"{{"peer":"abc","ct":"{}"}}"#, img);
-        let env = parse_line(&line).expect("≈2 MB payload must pass under 4 MiB default");
-        assert_eq!(env.peer, "abc");
-    }
-
-    #[test]
-    fn default_max_ct_bytes_is_four_mib() {
-        // Sem RELAY_MAX_CT_MIB no ambiente de teste, o teto efetivo é 4 MiB.
-        assert_eq!(max_ct_bytes(), DEFAULT_MAX_CT_MIB * 1024 * 1024);
-        assert_eq!(max_ct_bytes(), 4 * 1024 * 1024);
-    }
-
-    #[test]
-    fn injected_max_overrides_limit() {
-        // Override testável via núcleo com teto injetado — sem mexer na env
-        // global (evita corrida com o OnceLock memoizado / testes paralelos).
-        // ~2,25 MiB estimado: rejeitado por um teto de 1 MiB, aceito por 4 MiB.
-        let payload = "A".repeat(3 * 1024 * 1024);
-        let line = format!(r#"{{"peer":"abc","ct":"{}"}}"#, payload);
-
+    fn rejects_room_and_noncanonical_hello_fields() {
+        let hello = serde_json::json!({
+            "type": "hello",
+            "protocol_version": 2,
+            "role": "owner",
+            "pubkey": STANDARD.encode([3; 32]),
+            "room_id": "main",
+        });
         assert!(matches!(
-            parse_line_with_max(&line, 1024 * 1024),
-            Err(ParseError::TooLarge(..))
+            parse_hello(&hello.to_string()),
+            Err(OuterError::InvalidJson(_))
         ));
-        assert!(parse_line_with_max(&line, 4 * 1024 * 1024).is_ok());
+
+        let url_safe = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([3; 32]);
+        let hello = serde_json::json!({
+            "type": "hello",
+            "protocol_version": 2,
+            "role": "owner",
+            "pubkey": url_safe,
+        });
+        assert!(matches!(
+            parse_hello(&hello.to_string()),
+            Err(OuterError::NonCanonicalPublicKey)
+        ));
     }
 
     #[test]
-    fn rejects_invalid_json() {
+    fn route_leaves_ct_opaque() {
+        let mut route = serde_json::json!({
+            "type": "route",
+            "purpose": "session",
+            "device_id": device_id(4),
+            "endpoint_id": "11111111-1111-4111-8111-111111111111",
+            "runtime_instance_id": "22222222-2222-4222-8222-222222222222",
+            "ct": "this is neither base64 nor JSON",
+        });
+        let parsed = parse_route(&route.to_string()).unwrap();
+        assert_eq!(parsed.ct, "this is neither base64 nor JSON");
+        assert!(parsed.target_owner_id.is_none());
+
+        route["room"] = serde_json::json!("main");
         assert!(matches!(
-            parse_line("not json at all"),
-            Err(ParseError::InvalidJson(_))
+            parse_route(&route.to_string()),
+            Err(OuterError::InvalidJson(_))
         ));
+
+        route.as_object_mut().unwrap().remove("room");
+        route["source_owner_id"] = serde_json::json!(device_id(5));
+        let parsed = parse_route(&route.to_string()).unwrap();
+        assert_eq!(parsed.source_owner_id, Some(device_id(5)));
     }
 }
