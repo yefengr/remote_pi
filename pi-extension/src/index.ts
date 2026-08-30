@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /** One local Pi process is one stable Relay endpoint with replaceable sessions. */
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { readFileSync, realpathSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { hostname } from "node:os";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory, SessionManager } from "@earendil-works/pi-coding-agent";
@@ -595,6 +595,6 @@ export async function _stopForTest(_ctx: unknown): Promise<void> { closeRelay("p
 export async function _connectForTest(ctx: unknown): Promise<void> { await start(ctx as Pick<ExtensionContext, "ui" | "cwd">); }
 
 runDirectCli(commandDependencies, (() => {
-  try { return fileURLToPath(import.meta.url) === resolve(process.argv[1] ?? ""); }
+  try { return fileURLToPath(import.meta.url) === realpathSync(process.argv[1] ?? ""); }
   catch { return false; }
 })());
