@@ -2,9 +2,11 @@
 
 import { useRef } from "react";
 import { Drawer } from "@mantine/core";
-import { Badge, Button, IconButton } from "@/components/ui";
-import { MessageSquare, Pencil, Plus, Trash2 } from "lucide-react";
-import { displayPeer, type PairingPresence, type PairingStatus } from "@/components/pwa/workspace-view";
+import { Button } from "@/components/ui";
+import { Plus } from "lucide-react";
+import { PairingRecordCard } from "@/components/pwa/pairing-record-card";
+import { selectActiveSessionRows, displayPeer, selectPairingRecord, selectPairingSummary, type PairingPresence } from "@/components/pwa/pwa-view-model";
+import { SessionList } from "@/components/pwa/session-list";
 import type { PwaPeerRecord, PwaRoomRecord } from "@/lib/pwa/db";
 
 type SessionSheetProps = {
@@ -23,32 +25,11 @@ type SessionSheetProps = {
   withinPortal?: boolean;
 };
 
-function pairingStatusLabel(status: PairingStatus): string {
-  return status.toUpperCase();
-}
-
-function sessionLabel(session: PwaRoomRecord): string {
-  const cwd = session.cwd?.replace(/[\\/]$/, "");
-  const folder = cwd?.split(/[\\/]/).filter(Boolean).pop();
-  return folder ? `Session · ${folder}` : "Session";
-}
-
 export function SessionSheet({ peers, rooms, activePeerId, activeRoomId, pairingPresence = {}, onSelectPeer, onSelectRoom, onPair, onRename, onRemove, onClose, focusOrigin = null, withinPortal = true }: SessionSheetProps) {
   const contentRef = useRef<HTMLDivElement | null>(null);
   const activePeer = peers.find((peer) => peer.id === activePeerId);
-  const activeSessions = activePeer
-    ? rooms.filter((session) => session.peerEpk === activePeer.remoteEpk).sort((a, b) => (a.name || a.cwd || a.roomId).localeCompare(b.name || b.cwd || b.roomId))
-    : [];
-  const distinctPresence = new Map<string, PairingPresence>();
-  for (const peer of peers) {
-    const presence = pairingPresence[peer.id];
-    if (presence && !distinctPresence.has(peer.remoteEpk)) distinctPresence.set(peer.remoteEpk, presence);
-  }
-  const onlineSessionCount = [...distinctPresence.values()].reduce((count, presence) => count + presence.onlineSessions, 0);
-  const totalSessionCount = [...distinctPresence.values()].reduce((count, presence) => count + presence.totalSessions, 0);
-  const onlinePairingCount = [...distinctPresence.values()].filter((presence) => presence.status === "online" || presence.status === "partial").length;
-  const offlinePairingCount = [...distinctPresence.values()].filter((presence) => presence.status === "offline").length;
-  const checkingPairingCount = [...distinctPresence.values()].filter((presence) => presence.status === "checking").length;
+  const activeSessions = selectActiveSessionRows(rooms, activePeer?.remoteEpk, activeRoomId);
+  const pairingSummary = selectPairingSummary(peers, pairingPresence);
   const closeDrawer = () => {
     const content = contentRef.current;
     onClose();
@@ -91,42 +72,18 @@ export function SessionSheet({ peers, rooms, activePeerId, activeRoomId, pairing
       <Drawer.Overlay backgroundOpacity={0.7} blur={7} />
       <Drawer.Content ref={contentRef} role="dialog" aria-modal="true" aria-labelledby="pwa-session-sheet-title">
         <Drawer.Header>
-          <div><span className="pwa-kicker">Pairing records · {peers.length}</span><Drawer.Title id="pwa-session-sheet-title">Sessions</Drawer.Title><p className="pwa-sheet-summary"><span className="pwa-summary-online">{onlinePairingCount} ONLINE</span><span>·</span><span>{offlinePairingCount} OFFLINE</span>{checkingPairingCount ? <><span>·</span><span>{checkingPairingCount} CHECKING</span></> : null}<small>{onlineSessionCount} of {totalSessionCount} sessions online</small></p></div>
+          <div><span className="pwa-kicker">Pairing records · {peers.length}</span><Drawer.Title id="pwa-session-sheet-title">Sessions</Drawer.Title><p className="pwa-sheet-summary"><span className="pwa-summary-online">{pairingSummary.onlinePairingCount} ONLINE</span><span>·</span><span>{pairingSummary.offlinePairingCount} OFFLINE</span>{pairingSummary.checkingPairingCount ? <><span>·</span><span>{pairingSummary.checkingPairingCount} CHECKING</span></> : null}<small>{pairingSummary.onlineSessionCount} of {pairingSummary.totalSessionCount} sessions online</small></p></div>
           <Drawer.CloseButton aria-label="Close sessions" title="Close sessions" />
         </Drawer.Header>
         <Drawer.Body>
           <div className="pwa-sheet-section-head"><span>Pairing records</span><Button tone="secondary" type="button" onClick={() => { onPair(); onClose(); }} leftSection={<Plus size={15} />}>Pair a Pi</Button></div>
-          {peers.length ? peers.map((peer) => {
-            const active = peer.id === activePeerId;
-            const presence = pairingPresence[peer.id];
-            const status = presence?.status ?? "checking";
-            const onlineSessions = presence?.onlineSessions ?? 0;
-            const totalSessions = presence?.totalSessions ?? 0;
-            return (
-              <div className={`pwa-sheet-peer ${active ? "active" : ""}`} key={peer.id}>
-                <button className="pwa-sheet-peer-select" type="button" onClick={() => choosePeer(peer.id)}>
-                  <span className={`pwa-peer-icon ${status === "online" ? "online" : ""}`}><MessageSquare size={17} /></span>
-                  <span className="pwa-peer-copy"><strong>{displayPeer(peer)}</strong><small className="pwa-peer-technical">Pi key {peer.remoteEpk.slice(0, 8)}…</small><span className="pwa-peer-presence"><Badge tone={status} className={`pwa-presence-label ${status}`}>{pairingStatusLabel(status)}</Badge><span>{onlineSessions}/{totalSessions} SESSIONS</span></span></span>
-                  {active ? <Badge tone="current" className="pwa-current-label">CURRENT</Badge> : null}
-                </button>
-                <IconButton className="pwa-peer-action" type="button" onClick={() => onRename(peer)} aria-label={`Rename ${displayPeer(peer)}`} title="Rename pairing"><Pencil size={16} /></IconButton>
-                <IconButton className="pwa-peer-remove" type="button" onClick={() => onRemove(peer)} aria-label={`Delete ${displayPeer(peer)}`} title="Delete pairing"><Trash2 size={16} /></IconButton>
-              </div>
-            );
-          }) : <p className="pwa-muted">No pairing records yet.</p>}
+          {peers.length ? peers.map((peer) => <PairingRecordCard key={peer.id} viewModel={selectPairingRecord(peer, peer.id === activePeerId, pairingPresence[peer.id])} surface="sheet" onSelect={() => choosePeer(peer.id)} onRename={() => onRename(peer)} onRemove={() => onRemove(peer)} />) : <p className="pwa-muted">No pairing records yet.</p>}
           {activePeer ? (
             <div className="pwa-sheet-rooms">
               <div className="pwa-sheet-section-head"><span>Sessions in {displayPeer(activePeer)}</span></div>
               {activeSessions.length === 0 ? <p className="pwa-muted pwa-sheet-empty">No sessions have been discovered for this pairing.</p> : <>
-                {!activeSessions.some((session) => session.online) ? <p className="pwa-muted pwa-sheet-empty">No sessions are online right now.</p> : null}
-                {activeSessions.map((session) => {
-                  const active = activeRoomId === session.roomId;
-                  const online = session.online === true;
-                  const checking = session.online === undefined;
-                  const selectable = online && !active;
-                  const status = checking ? "checking" : online ? "online" : "offline";
-                  return <button className={`pwa-sheet-room ${active ? "active" : ""} ${!selectable ? "disabled" : ""}`} key={session.id} type="button" disabled={!selectable} aria-disabled={!selectable} title={active ? "Current session is read-only here" : checking ? "Checking session status" : online ? undefined : "This session is offline"} onClick={() => chooseSession(session.roomId)}><span className="pwa-sheet-session-copy"><strong>{sessionLabel(session)}</strong><small><Badge tone={status} className={`pwa-presence-label ${status}`}>{status.toUpperCase()}</Badge>{session.cwd ? <span className="pwa-sheet-session-cwd">{session.cwd}</span> : null}<code>session ID {session.roomId}</code></small></span>{active ? <Badge tone="current" className="pwa-current-label">CURRENT</Badge> : null}</button>;
-                })}
+                {!activeSessions.some((session) => session.status === "online") ? <p className="pwa-muted pwa-sheet-empty">No sessions are online right now.</p> : null}
+                <SessionList sessions={activeSessions} onSelect={chooseSession} />
               </>}
             </div>
           ) : null}

@@ -1,31 +1,15 @@
 "use client";
 
-import { Badge, Button, IconButton } from "@/components/ui";
-import { Circle, Link2, MessageSquare, Pencil, Plus, Radio, Trash2 } from "lucide-react";
+import { Button, IconButton } from "@/components/ui";
+import { Link2, Plus, Radio } from "lucide-react";
+import { PairingRecordCard } from "@/components/pwa/pairing-record-card";
+import { countOnlinePairings, selectPairingRecord, type PairingPresence } from "@/components/pwa/pwa-view-model";
 import type { PwaPeerRecord } from "@/lib/pwa/db";
 
+export type { PairingPresence, PairingStatus } from "@/components/pwa/pwa-view-model";
+export { displayPeer } from "@/components/pwa/pwa-view-model";
+
 export type ConnectionViewState = "offline" | "connecting" | "online" | "retrying" | "no_network";
-export type PairingStatus = "online" | "checking" | "offline" | "partial";
-export type PairingPresence = {
-  status: PairingStatus;
-  onlineSessions: number;
-  totalSessions: number;
-  lastSeenAt?: number;
-};
-
-export function displayPeer(peer: PwaPeerRecord): string {
-  const nickname = peer.nickname?.trim();
-  if (nickname) return nickname;
-
-  const hostname = peer.hostname?.trim();
-  if (hostname) return `Pi on ${hostname}`;
-
-  return `Remote Pi · ${peer.remoteEpk.slice(0, 8)}`;
-}
-
-function pairingStatusLabel(status: PairingStatus): string {
-  return status.toUpperCase();
-}
 
 export function ConnectionStatus({ state, retryAttempt = 0 }: { state: ConnectionViewState; retryAttempt?: number }) {
   const label = state === "online" ? "Connected" : state === "connecting" ? "Connecting" : state === "retrying" ? `Retrying ${retryAttempt}/5` : state === "no_network" ? "No network" : "Offline";
@@ -46,21 +30,12 @@ export function DesktopSidebar({ peers, activePeerId, pairingPresence = {}, onPa
     <aside className="pwa-sidebar">
       <div className="pwa-sidebar-head"><div><span className="pwa-kicker">Workspace</span><h1>Pairing records</h1></div><IconButton className="pwa-round-button" type="button" radius="xl" onClick={onPair} aria-label="Pair a Pi" title="Pair a Pi"><Plus size={18} /></IconButton></div>
       <div className="pwa-peer-list">
-        {peers.length > 0 ? <div className="pwa-sidebar-summary"><span>Pairing records · {peers.length}</span><span>{Object.values(pairingPresence).filter((presence) => presence.status === "online" || presence.status === "partial").length} online</span></div> : null}
-        {peers.length === 0 ? <div className="pwa-empty"><Radio size={22} /><strong>No Pi paired yet</strong><span>Open <code>/remote-pi pair</code> in Pi and scan its QR.</span><Button tone="primary" type="button" onClick={onPair} leftSection={<Link2 size={16} />}>Pair a Pi</Button></div> : peers.map((peer) => <PeerCard key={peer.id} peer={peer} active={peer.id === activePeerId} presence={pairingPresence[peer.id]} onSelect={() => onSelect(peer.id)} onRename={() => onRename(peer)} onRemove={() => onRemove(peer)} />)}
+        {peers.length > 0 ? <div className="pwa-sidebar-summary"><span>Pairing records · {peers.length}</span><span>{countOnlinePairings(pairingPresence)} online</span></div> : null}
+        {peers.length === 0 ? <div className="pwa-empty"><Radio size={22} /><strong>No Pi paired yet</strong><span>Open <code>/remote-pi pair</code> in Pi and scan its QR.</span><Button tone="primary" type="button" onClick={onPair} leftSection={<Link2 size={16} />}>Pair a Pi</Button></div> : peers.map((peer) => <PairingRecordCard key={peer.id} viewModel={selectPairingRecord(peer, peer.id === activePeerId, pairingPresence[peer.id])} surface="desktop" onSelect={() => onSelect(peer.id)} onRename={() => onRename(peer)} onRemove={() => onRemove(peer)} />)}
       </div>
       <div className="pwa-sidebar-foot"><span><span className="pwa-local-dot" /> Local workspace</span><Button tone="text" type="button" onClick={() => void onClearData()}>Clear data</Button></div>
     </aside>
   );
-}
-
-function PeerCard({ peer, active, presence, onSelect, onRename, onRemove }: { peer: PwaPeerRecord; active: boolean; presence?: PairingPresence; onSelect: () => void; onRename: () => void; onRemove: () => void }) {
-  const status = presence?.status ?? "checking";
-  const onlineSessions = presence?.onlineSessions ?? 0;
-  const totalSessions = presence?.totalSessions ?? 0;
-  const sessionSummary = status === "checking" ? "Checking sessions" : `${onlineSessions}/${totalSessions} sessions`;
-
-  return <div className={`pwa-peer-card ${active ? "active" : ""}`}><button className="pwa-peer-select" type="button" onClick={onSelect}><span className={`pwa-peer-icon ${status === "online" ? "online" : ""}`}><MessageSquare size={17} /></span><span className="pwa-peer-copy"><strong>{displayPeer(peer)}</strong><small className="pwa-peer-technical">Pi key {peer.remoteEpk.slice(0, 8)}…</small><span className="pwa-peer-presence"><Badge tone={status} className={`pwa-presence-label ${status}`}>{pairingStatusLabel(status)}</Badge><span>{sessionSummary}</span></span></span>{active ? <Badge tone="current" className="pwa-current-label">CURRENT</Badge> : null}<span className={`pwa-peer-state ${status}`} aria-label={pairingStatusLabel(status)}><Circle size={8} fill="currentColor" /></span></button><IconButton className="pwa-peer-action" type="button" onClick={onRename} aria-label={`Rename ${displayPeer(peer)}`} title="Rename pairing"><Pencil size={14} /></IconButton><IconButton className="pwa-peer-remove" type="button" onClick={onRemove} aria-label={`Remove ${displayPeer(peer)}`} title="Remove pairing"><Trash2 size={14} /></IconButton></div>;
 }
 
 export function EmptyWorkspace({ onPair }: { onPair: () => void }) {
