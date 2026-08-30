@@ -105,7 +105,25 @@ fi
 
 unset otp
 
-published_version="$(npm view "$package_name@$package_version" version --registry="$registry" 2>/dev/null || true)"
-[[ "$published_version" == "$package_version" ]] || fail "发布后无法确认 npm 版本：$package_name@$package_version"
+verification_attempts=12
+verification_delay_seconds=5
+published_version=""
 
-printf '发布成功：%s@%s\n' "$package_name" "$package_version"
+for ((attempt = 1; attempt <= verification_attempts; attempt++)); do
+  published_version="$(npm view "$package_name@$package_version" version --registry="$registry" --prefer-online 2>/dev/null || true)"
+  if [[ "$published_version" == "$package_version" ]]; then
+    printf '发布成功：%s@%s\n' "$package_name" "$package_version"
+    exit 0
+  fi
+  if (( attempt < verification_attempts )); then
+    printf 'npm registry 尚未确认 %s@%s（%d/%d），%d 秒后重试...\n' \
+      "$package_name" "$package_version" "$attempt" "$verification_attempts" "$verification_delay_seconds" >&2
+    sleep "$verification_delay_seconds"
+  fi
+done
+
+printf '警告：npm publish 已成功，但 registry 在约 60 秒内尚未确认 %s@%s。\n' \
+  "$package_name" "$package_version" >&2
+printf '稍后手动检查：npm view %s@%s version --prefer-online\n' \
+  "$package_name" "$package_version" >&2
+exit 0
