@@ -1,18 +1,9 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Select } from "@/components/ui";
-import { Activity } from "lucide-react";
-import { MessageComposer } from "@/components/pwa/message-composer";
-import { RenamePairingDialog } from "@/components/pwa/rename-pairing-dialog";
-import { ConfirmActionDialog } from "@/components/pwa/confirm-action-dialog";
+import { PwaAppView, type PwaAppViewActions, type PwaAppViewModel, type PwaAppViewRefs } from "@/components/pwa/pwa-app-view";
 import { COMPOSER_THINKING_LEVELS, type ComposerCommandAction } from "@/components/pwa/composer-command-menu";
-import { MessageList } from "@/components/pwa/message-list";
-import { describeStartupFailure, PairingDialog, StartupErrorView, StartupLoading, type StartupError } from "@/components/pwa/pwa-startup";
-import { MobileTopbarMenu } from "@/components/pwa/mobile-topbar-menu";
-import { DesktopTopbarActions, PwaMessageActions, PwaStatusToast, SessionSwitcherTrigger } from "@/components/pwa/pwa-app-actions";
-import { SessionSheet } from "@/components/pwa/session-sheet";
-import { SettingsPanel } from "@/components/pwa/settings-panel";
-import { ConnectionStatus, DesktopSidebar, EmptyWorkspace, displayPeer, type ConnectionViewState, type PairingPresence } from "@/components/pwa/workspace-view";
+import { describeStartupFailure, type StartupError } from "@/components/pwa/pwa-startup";
+import { displayPeer, type ConnectionViewState, type PairingPresence } from "@/components/pwa/workspace-view";
 import { createPairRequest, parsePairUri, relayMismatch } from "@/lib/remote-pi/pairing";
 import { PeerChannel } from "@/lib/remote-pi/peer-channel";
 import { RelayClient } from "@/lib/remote-pi/relay-client";
@@ -1536,46 +1527,88 @@ export function PwaApp() {
     if (!canCloseBackgroundOverlay(confirmOpenRef.current, confirmPendingRef.current)) return;
     setSettingsRequest(null);
   }, []);
-  if (startupState === "loading") return <StartupLoading />;
-  if (startupState === "error") return <StartupErrorView error={startupError} onRetry={() => window.location.reload()} />;
+  const viewModel: PwaAppViewModel = {
+    startup: { state: startupState, error: startupError },
+    status: { connection, retryAttempt, error, layoutRevision },
+    workspace: {
+      peers,
+      rooms,
+      activePeer,
+      activePeerId,
+      activeRoom,
+      activeRooms,
+      roomId,
+      pairingPresence,
+      lastSyncedLabel: formatSyncTime(lastSyncedAt),
+      lastSyncedDateTime: lastSyncedAt ? new Date(lastSyncedAt).toISOString() : undefined,
+    },
+    timeline: { items: timelineItems, nextBefore, loadingEarlier, followingOutput, unreadOutput },
+    composer: {
+      attachment,
+      canAttachImage,
+      sendingImage,
+      stopRequestId,
+      draft,
+      models,
+      currentModel,
+      activeThinking,
+      pendingAction: pendingAction?.action ?? null,
+    },
+    overlays: {
+      pairState,
+      sessionSheetRequest,
+      renameRequest,
+      confirmAction,
+      confirmPending,
+      confirmError,
+    },
+    settings: { request: settingsRequest, relayUrl, defaultRelayUrl: DEFAULT_RELAY },
+  };
+  const actions: PwaAppViewActions = {
+    startup: { retry: () => window.location.reload() },
+    topbar: { refresh: refreshPwaApp, openSessionSheet, openSettings },
+    workspace: {
+      startPairing: () => setPairState("scanning"),
+      selectPeer,
+      selectRoom,
+      openRenamePeer,
+      removePeer,
+      clearLocalData,
+    },
+    timeline: {
+      loadEarlier,
+      handleMessageListScroll,
+      retryUnknownMessage,
+      cancelQueuedMessage,
+      restartConnection: restartActiveConnection,
+      showLatest: () => { scrollToLatest(true); resumeFollowingOutput(); },
+    },
+    composer: {
+      setDraft,
+      sendMessage,
+      stopCurrentTask,
+      setImageAttachment,
+      clearAttachment: () => setAttachment(null),
+      startNewSession,
+      compactSession,
+      setCommandModel,
+      setCommandThinking,
+      refreshModels,
+    },
+    overlays: {
+      setPairState: (state) => setPairState(state),
+      pairFromQr,
+      closeSessionSheet,
+      savePeerNickname,
+      closeRenamePeer,
+      closeConfirmAction,
+      confirmRequestedAction,
+      restoreConfirmFocus,
+      dismissError: () => setError(null),
+    },
+    settings: { saveRelayUrl, closeSettings, resetLayout },
+  };
+  const refs: PwaAppViewRefs = { messageListRef, bottomSentinelRef };
 
-  return (
-    <div className="pwa-root" key={layoutRevision}>
-      <header className="pwa-topbar">
-        <div className="pwa-brand"><span className="pwa-brand-mark">π</span><span>Remote Pi</span><span className="pwa-brand-tag">BROWSER APP</span></div>
-        <div className="pwa-topbar-actions">
-          <SessionSwitcherTrigger label={activePeer ? `Session: ${displayPeer(activePeer)} / ${roomId}` : null} expanded={sessionSheetRequest !== null} onOpen={openSessionSheet} />
-          <ConnectionStatus state={connection} retryAttempt={retryAttempt} />
-          <DesktopTopbarActions onRefresh={refreshPwaApp} onToggleSettings={openSettings} />
-          <MobileTopbarMenu onRefresh={refreshPwaApp} onOpenSettings={openSettings} />
-        </div>
-      </header>
-      <div className="pwa-layout">
-        <DesktopSidebar peers={peers} activePeerId={activePeerId} pairingPresence={pairingPresence} onPair={() => setPairState("scanning")} onSelect={selectPeer} onRename={openRenamePeer} onRemove={(peer) => void removePeer(peer)} onClearData={clearLocalData} />
-        <main className="pwa-main">
-          {activePeer ? <>
-            <div className="pwa-chat-head"><div><span className="pwa-kicker">Active session</span><h2>{displayPeer(activePeer)}</h2><span className="pwa-chat-meta"><span className={connection === "online" ? "pwa-status-dot online" : "pwa-status-dot"} />{connection === "online" ? "Live" : "Local history"} <span className="pwa-separator">/</span> session <code>{roomId}</code> <span className="pwa-separator">/</span> last synced <time dateTime={lastSyncedAt ? new Date(lastSyncedAt).toISOString() : undefined}>{formatSyncTime(lastSyncedAt)}</time></span></div><div className="pwa-room-control"><Select id="room-id" label="Session" value={roomId} disabled={connection !== "online"} allowDeselect={false} data={[{ value: roomId, label: roomId }, ...activeRooms.filter((room) => room.roomId !== roomId).map((room) => ({ value: room.roomId, label: room.name || room.cwd || room.roomId }))]} onChange={(nextRoom) => { if (nextRoom !== null) selectRoom(nextRoom); }} comboboxProps={{ withinPortal: false }} /></div></div>
-            <MessageList items={timelineItems} hasEarlier={nextBefore !== null} loadingEarlier={loadingEarlier} onLoadEarlier={loadEarlier} listRef={messageListRef} bottomSentinelRef={bottomSentinelRef} onScroll={handleMessageListScroll} onRetryUnknown={retryUnknownMessage} onCancelQueued={cancelQueuedMessage} />
-            <div className="pwa-chat-footer">
-              <PwaMessageActions
-                show={(connection !== "no_network" && (connection === "retrying" || connection === "offline")) || !followingOutput || unreadOutput > 0}
-                showRetry={connection !== "no_network" && (connection === "retrying" || connection === "offline")}
-                showLatest={!followingOutput || unreadOutput > 0}
-                unreadOutput={unreadOutput}
-                onRetry={() => restartActiveConnection(true)}
-                onLatest={() => { scrollToLatest(true); resumeFollowingOutput(); }}
-              />
-              <MessageComposer attachment={attachment} canAttachImage={canAttachImage} sendingImage={sendingImage} isOnline={connection === "online"} isWorking={activeRoom?.working === true} stopping={stopRequestId !== null} draft={draft} onDraftChange={setDraft} onSend={sendMessage} onStop={stopCurrentTask} onSetAttachment={setImageAttachment} onClearAttachment={() => setAttachment(null)} commandModels={models} commandCurrentModel={currentModel} commandCurrentModelFallback={activeRoom?.model ?? null} commandThinking={activeThinking} commandPendingAction={pendingAction?.action ?? null} onNewSession={startNewSession} onCompactSession={compactSession} onSetModel={setCommandModel} onSetThinking={setCommandThinking} onCommandsOpen={refreshModels} />
-            </div>
-          </> : <EmptyWorkspace onPair={() => setPairState("scanning")} />}
-        </main>
-        {settingsRequest ? <SettingsPanel relayUrl={relayUrl} defaultRelayUrl={DEFAULT_RELAY} onSave={saveRelayUrl} onClose={closeSettings} onClearData={clearLocalData} onResetLayout={resetLayout} focusOrigin={settingsRequest.focusOrigin} focusFallbackSelectors={settingsRequest.focusFallbackSelectors} /> : null}
-      </div>
-      {sessionSheetRequest ? <SessionSheet peers={peers} rooms={rooms} activePeerId={activePeerId} activeRoomId={roomId} pairingPresence={pairingPresence} onSelectPeer={selectPeer} onSelectRoom={selectRoom} onPair={() => setPairState("scanning")} onRename={openRenamePeer} onRemove={(peer) => void removePeer(peer)} onClose={closeSessionSheet} focusOrigin={sessionSheetRequest.focusOrigin} /> : null}
-      {renameRequest ? <RenamePairingDialog peer={renameRequest.peer} onSave={(nickname) => savePeerNickname(renameRequest.peer, nickname)} onClose={closeRenamePeer} focusOrigin={renameRequest.focusOrigin} focusFallbackSelectors={renameRequest.focusFallbackSelectors} /> : null}
-      {pairState !== "idle" ? <div className="pwa-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && pairState === "scanning") setPairState("idle"); }} role="presentation">{pairState === "scanning" ? <PairingDialog onScan={pairFromQr} onClose={() => setPairState("idle")} /> : <div className="pwa-pairing-card"><Activity className="pwa-spin" /><span className="pwa-kicker">Pairing</span><h2>Connecting to your Pi</h2><p>Waiting for the Pi to confirm this browser.</p></div>}</div> : null}
-      <ConfirmActionDialog action={confirmAction?.kind === "remove-pairing" ? { kind: confirmAction.kind, label: confirmAction.label } : confirmAction} pending={confirmPending} error={confirmError} onConfirm={() => { void confirmRequestedAction(); }} onClose={closeConfirmAction} onExitTransitionEnd={restoreConfirmFocus} />
-      <PwaStatusToast message={error} onDismiss={() => setError(null)} />
-    </div>
-  );
+  return <PwaAppView viewModel={viewModel} actions={actions} refs={refs} />;
 }

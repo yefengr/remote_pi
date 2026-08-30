@@ -37,9 +37,9 @@ test("keeps a closed modal mounted so Mantine can observe the opened transition"
   assert.doesNotMatch(html, /role="dialog"/);
   assert.doesNotMatch(html, /pwa-confirm-dialog/);
 
-  const appSource = readFileSync(new URL("./pwa-app.tsx", import.meta.url), "utf8");
-  assert.match(appSource, /^\s*<ConfirmActionDialog action=/m);
-  assert.doesNotMatch(appSource, /\{\s*confirmAction\s*\?\s*<ConfirmActionDialog/);
+  const viewSource = readFileSync(new URL("./pwa-app-view.tsx", import.meta.url), "utf8");
+  assert.match(viewSource, /^\s*<ConfirmActionDialog action=/m);
+  assert.doesNotMatch(viewSource, /\{\s*overlays\.confirmAction\s*\?\s*<ConfirmActionDialog/);
 });
 
 test("uses focus fallbacks only when Mantine cannot keep an active element", () => {
