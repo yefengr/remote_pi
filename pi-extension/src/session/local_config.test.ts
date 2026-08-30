@@ -73,10 +73,9 @@ describe("loadLocalConfig — file vs REMOTE_PI_DIRECT_CONFIG", () => {
   });
 });
 
-describe("loadLocalConfig — workspace / worktree removed (plan 38)", () => {
-  // The fields were dropped: the mesh identity is `(cwd, nome)`, with `cwd`
-  // subsuming folder + worktree disambiguation. A stale key from an old config
-  // (or one a legacy client still injects) must be silently ignored on read.
+describe("loadLocalConfig — obsolete location fields are ignored", () => {
+  // Location fields are not part of the endpoint configuration. Stale keys from
+  // older config files must be ignored on read.
   let cwd: string;
 
   beforeEach(() => {

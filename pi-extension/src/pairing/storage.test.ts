@@ -367,7 +367,7 @@ describe("getOrCreateEd25519Keypair — paired devices block identity minting", 
 
   test("unreadable keyring + existing pairings → throws instead of minting (daemon case)", async () => {
     // systemd --user resolves a different secret-service store than the desktop
-    // session that paired; minting here makes SelfRevoke wipe peers.json.
+    // session that paired; this keeps the fixture scoped to the current device.
     seedPairedDevice();
     const backend = new InMemoryBackend();
     backend.failAll("read");

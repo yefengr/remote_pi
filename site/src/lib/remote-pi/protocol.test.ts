@@ -1,21 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { decodeChallenge, decodeRelayFrame, decodeServerMessage, encodeOuterEnvelope } from "./protocol";
+import { decodeChallenge, decodeRelayFrame } from "./protocol";
 
-test("decodes known server messages and ignores unknown types", () => {
-  const known = decodeServerMessage('{"type":"agent_chunk","in_reply_to":"m1","delta":"hello"}');
-  assert.deepEqual(known, { type: "agent_chunk", in_reply_to: "m1", delta: "hello" });
-  assert.equal(decodeServerMessage('{"type":"future_message","data":1}'), undefined);
-  assert.equal(decodeServerMessage("not-json"), undefined);
+test("decodes strict owner challenge and endpoint control frames", () => {
+  assert.deepEqual(decodeChallenge('{"type":"challenge","nonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}'), { type: "challenge", nonce: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" });
+  const frame = decodeRelayFrame({ type: "endpoints", device_id: "AQID", endpoints: [{ endpoint_id: "123e4567-e89b-42d3-a456-426614174001", runtime_instance_id: "123e4567-e89b-42d3-a456-426614174000", metadata: { kind: "daemon", pid: 1 } }] });
+  assert.equal(frame?.kind, "control");
+});
+test("rejects routes with legacy fields", () => {
+  assert.equal(decodeRelayFrame({ type: "route", purpose: "session", device_id: "device", endpoint_id: "123e4567-e89b-42d3-a456-426614174001", runtime_instance_id: "123e4567-e89b-42d3-a456-426614174000", peer: "owner", ct: "opaque" }), undefined);
 });
 
-test("decodes valid challenge and distinguishes relay frames", () => {
-  assert.deepEqual(decodeChallenge('{"type":"challenge","nonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}'), {
-    type: "challenge",
-    nonce: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-  });
-  assert.equal(decodeChallenge('{"type":"challenge","nonce":"!"}'), undefined);
-  const envelope = encodeOuterEnvelope("AQID", { type: "ping", id: "p1" }, "main");
-  const relayFrame = decodeRelayFrame(envelope);
-  assert.equal(relayFrame?.kind, "envelope");
+test("rejects unknown endpoint control and challenge fields", () => {
+  assert.equal(decodeRelayFrame({ type: "endpoint_ended", device_id: "device", endpoint_id: "123e4567-e89b-42d3-a456-426614174001", runtime_instance_id: "123e4567-e89b-42d3-a456-426614174000", extra: true }), undefined);
+  assert.equal(decodeChallenge('{"type":"challenge","nonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","extra":true}'), undefined);
 });

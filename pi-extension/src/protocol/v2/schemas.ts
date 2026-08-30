@@ -317,7 +317,7 @@ export type ClientFrame = z.infer<typeof ClientFrameSchema>;
 
 const pairOk = z.strictObject({
   ...frameBase, type: z.literal("pair_ok"), in_reply_to: id,
-  session_name: boundedText, session_started_at: timestamp, room_id: id,
+  session_name: boundedText, session_started_at: timestamp, endpoint_id: id,
   harness: harness.optional(), hostname: boundedText.optional(),
 });
 const pairError = z.strictObject({

@@ -166,7 +166,7 @@ export const pairOkFrameSchema = strictObject({
   in_reply_to: idSchema,
   session_name: textSchema,
   session_started_at: timestampSchema,
-  room_id: idSchema,
+  endpoint_id: idSchema,
   harness: harnessSchema.optional(),
   hostname: textSchema.optional(),
 });

@@ -4,15 +4,13 @@ import { page, userEvent } from "vitest/browser";
 import { RenamePairingDialog } from "./rename-pairing-dialog";
 import { renderPwa } from "@/test/browser/render";
 import { SessionRenameHarness } from "@/test/browser/fixtures/rename-pairing-dialog";
-import type { PwaPeerRecord } from "@/lib/pwa/db";
+import type { PwaDeviceRecord } from "@/lib/pwa/db";
 
-const peer: PwaPeerRecord = {
-  id: "peer:main",
-  remoteEpk: "e5FRoCabBqVX",
-  sessionName: "XCrawl#2",
+const device: PwaDeviceRecord = {
+  id: "device:alpha",
+  deviceId: "e5FRoCabBqVX",
   relayUrl: "https://relay.example.test",
   pairedAt: "2026-01-01T00:00:00.000Z",
-  roomId: "main",
   hostname: "office",
 };
 
@@ -39,7 +37,7 @@ function RenameHarness({ onSave, onDialogClose = () => {} }: RenameHarnessProps)
         form?.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
         form?.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
       }} />
-      {opened ? <RenamePairingDialog peer={peer} onSave={onSave} onClose={closeDialog} /> : null}
+      {opened ? <RenamePairingDialog device={device} onSave={onSave} onClose={closeDialog} /> : null}
     </>
   );
 }
@@ -163,9 +161,9 @@ test("ignores a pending save result after the parent unmounts the dialog", async
   expect(closeCalls).toBe(0);
 });
 
-test("returns Session Drawer rename flows to the persistent session switcher", async () => {
+test("returns Endpoint Drawer rename flows to the persistent endpoint switcher", async () => {
   const screen = await renderPwa(<SessionRenameHarness />);
-  const switcher = screen.getByRole("button", { name: "Open session switcher" });
+  const switcher = screen.getByRole("button", { name: "Open endpoint switcher" });
 
   const openFromDrawer = async () => {
     await switcher.click();

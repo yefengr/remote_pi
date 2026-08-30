@@ -1,77 +1,84 @@
-# Remote Pi — Pi Extension (Node + TypeScript)
+# Remote Pi — Pi Extension（Node + TypeScript）
 
-Extensão para o [Pi coding agent](https://github.com/earendil-works/pi) que
-adiciona o slash command `/remote-pi`. Embarca o SDK do Pi
-(`@earendil-works/pi-coding-agent`) e expõe via WebSocket pro relay.
+Remote Pi 的 Pi package：注册 `/remote-pi`，把当前 Pi 进程作为独立 endpoint 连接 Relay，并提供 Browser/PWA pairing、Protocol v2 timeline/actions 和可选 daemon supervisor。
 
-Faz parte da **mesh de agentes coding cross-PC** do Remote Pi: cada PC
-roda esta extensão (Node daemon) com uma Pi-key Ed25519 no keyring do
-sistema; o celular é autenticador inicial via QR; entre PCs irmãos do
-mesmo Owner, broker UDS local + relay forward Pi-to-Pi via WS roteiam
-envelopes com prefixo `<pc>:<peer>`.
+当前身份层级是：
 
-Protocolo, identidades, ACK, roteamento cross-PC e trust model: ver
-[`../PROTOCOL.md`](../PROTOCOL.md) (doc canônica do repo).
+```text
+device_id → endpoint_id → runtime_instance_id → session_id / history_generation
+```
+
+本项目不提供 Agent Mesh、本地 broker、Pi-to-Pi 通信、room routing、membership、mesh tools 或 MCP mesh server。协议、安全边界与跨端契约见 [`../PROTOCOL.md`](../PROTOCOL.md) 和 [`../.orchestration/contracts/`](../.orchestration/contracts/)。
 
 ## Stack
 
 - Node 20+ / TypeScript 6
-- **Module system**: ESM only (NodeNext). Imports com extensão `.js` mesmo em `.ts`
-- Package manager: **pnpm** (não usar npm/yarn)
-- Crypto: libsodium-wrappers (Curve25519 + ChaCha20-Poly1305)
-- Pi-secret storage: `@napi-rs/keyring` (Keychain macOS / libsecret Linux desktop / Credential Manager Windows). Headless Linux sem D-Bus cai pra `~/.pi/remote/identity.json` (`chmod 0600`) com warning — instale GNOME Keyring/KWallet pra hardening real.
+- ESM only（NodeNext）；TypeScript import 也必须带 `.js`
+- pnpm（不要使用 npm/yarn）
+- Pi SDK：`@earendil-works/pi-coding-agent`
+- Relay transport：`ws`
+- Host identity：`@napi-rs/keyring` + headless file fallback
+- Schema：TypeBox / Zod（沿现有模块边界）
 
-## Comandos
+## 常用命令
 
-- `pnpm install` — instala deps
-- `pnpm typecheck` — `tsc --noEmit`, deve passar zero erros
-- `pnpm build` — `tsc`, gera `dist/`
-- `pnpm dev` — `tsx src/index.ts`, executa direto sem build
+```bash
+pnpm install
+pnpm typecheck
+pnpm test
+pnpm build
+pnpm verify
+```
 
-## Configuração do relay
+`pnpm verify` 必须在 Extension 行为变更后通过。生产 TypeScript 文件不超过 600 行。
 
-Ordem de resolução (precedência):
+## Relay 配置
 
-1. `process.env.REMOTE_PI_RELAY` — escape hatch pra CI/ops
-2. `~/.pi/remote/config.json` (`{ "relay": "..." }`) — persistido via
-   `/remote-pi set-relay <url>`
-3. `kDefaultRelayUrl` (`https://relay-pi.yefengr.cn`) — produção
+优先级：
 
-Slash commands:
+1. `REMOTE_PI_RELAY`
+2. `~/.pi/remote/config.json`
+3. 项目默认 Relay URL
 
-- `/remote-pi set-relay <http://… | https://…>` — grava URL em
-  `~/.pi/remote/config.json`. Validação rejeita `ws://`, `wss://`,
-  string vazia e URLs malformadas (a extensão converte http(s)→ws(s)
-  internamente ao abrir o WebSocket).
-- `/remote-pi config` — mostra a URL efetiva atual + de qual fonte vem
-  (`env`/`config`/`default`).
+用户输入使用 `http://` 或 `https://`；Extension 打开 WebSocket 时转换为 `ws://` 或 `wss://`。
 
-`_cmdStart` chama `resolveRelayUrl()` e exibe o `source` no notify
-("Connecting to relay <url> (source: …)") pra QA validar.
+相关命令：
 
-## Dependências importantes
+- `/remote-pi set-relay <url>`
+- `/remote-pi config`
+- `/remote-pi pair`
+- `/remote-pi devices`
+- `/remote-pi revoke <shortid>`
 
-- `@earendil-works/pi-coding-agent` — SDK do Pi (`AgentSession`, `SessionManager`, `ModelRegistry`)
-- `ws` — WebSocket client
+## Endpoint 与 pairing 规则
 
-## Convenções
+- `device_id` 是 Host Ed25519 public key 的 canonical Base64 表示。
+- interactive Pi 每个进程生成 endpoint/runtime；daemon endpoint 使用 registry UUID，child 每次 spawn 生成新 runtime。
+- QR 必须包含 endpoint/runtime；不得恢复 room hint 或旧 QR fallback。
+- Owner→Host sender 只能使用 Relay 注入的 `source_owner_id`。
+- Pairing 成功或撤销后，必须同步 `endpoint_update.authorized_owner_ids`。
+- Relay 断线只进入 reconnecting/degraded，不通过重启 Pi 修复。
 
-- **Strict TS**: `"strict": true`, sem `any` exceto onde inevitável (use `unknown` + narrow)
-- **Imports**: `import { foo } from "./bar.js"` (extensão obrigatória em ESM)
-- **Top-level await** ok (ESM permite)
-- **Erros**: `class XxxError extends Error` para classes nomeadas, throw cedo no boundary
-- **Logging**: `console.log` ok no MVP; depois migrar pra `pino` ou similar
+## Daemon 规则
 
-## NÃO fazer
+- Registry v2 使用 canonical cwd、稳定 UUID、`desired_state` 和 `created_at`。
+- Supervisor 只恢复 `desired_state=running`，并清理 cwd 不存在的 stale entry。
+- Pi settings/package discovery 是 Remote Pi Extension 的唯一来源；child 不传 `-e`。
+- Spawn 前用 Pi SDK resource discovery preflight：Extension 缺失、重复或 diagnostics/config 错误进入 deterministic `blocked`。
+- Runtime ready 必须同时通过 Pi RPC `get_state` 和 Extension `runtime-ready`，并核对 control protocol、endpoint/runtime identity。
+- Cron 只能在 desired/readiness/health 门禁通过时发送；没有 wake 路径。
+- `unregister_cwd`/`remove-cwd` 必须幂等停止并删除 entry。
 
-- Não escrever CommonJS (`require`, `module.exports`)
-- Não comitar `dist/` (já no .gitignore raiz)
-- Não criptografar/descriptografar de forma custom — usar libsodium
-- Não introduzir dependência que não seja ESM-friendly
+## 编码约定
 
-## Modo orquestrado
+- Strict TypeScript；优先 `unknown` + narrow，不使用无约束 `any`。
+- ESM import：`import { foo } from "./bar.js"`。
+- Boundary 严格校验；未知字段、旧版本、错误 route purpose 和 stale runtime fail closed。
+- 确定性错误使用结构化 code/stage/retryable，不解析 stderr 推断状态。
+- 不记录 private key、pairing token、完整 `ct` 或消息正文。
+- 不自行实现 crypto primitive。
+- 不提交 `dist/`。
 
-Se receber um prompt começando com `[ORCH:<task-id>]`, leia
-`../.orchestration/INSTRUCTIONS.md` antes de qualquer outra ação. Esse marker
-indica que outro agente está coordenando o trabalho e tem regras específicas
-(onde escrever resultado, não comitar, etc).
+## 编排模式
+
+收到 `[ORCH:<task-id>]` 时，先完整阅读 `../.orchestration/INSTRUCTIONS.md`，遵守白名单、结果文件、验证和不提交约束。

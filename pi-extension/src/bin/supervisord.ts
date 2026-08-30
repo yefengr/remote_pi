@@ -10,7 +10,7 @@
  *
  * Once running, it:
  *   - Reads `~/.pi/remote/daemons.json`
- *   - Spawns `pi --mode rpc -e <remote-pi/dist/index.js>` per entry
+ *   - Spawns configured `pi --mode rpc` children per entry
  *   - Listens on `~/.pi/remote/supervisor.sock` for CLI control requests
  *   - Restarts crashed children with exponential backoff
  *
@@ -60,9 +60,8 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  // The supervisor needs to point each spawned Pi at the extension
-  // entry it's bundled with. We're at `dist/bin/supervisord.js` after
-  // build; the extension is the sibling `dist/index.js`.
+  // Retained only for Supervisor constructor compatibility. Pi discovers the
+  // configured extension itself; the child process never receives `-e`.
   const here = fileURLToPath(import.meta.url);
   const distRoot = dirname(dirname(here));  // dist/bin → dist
   const extensionPath = join(distRoot, "index.js");
@@ -70,7 +69,7 @@ async function main(): Promise<void> {
   const supervisor = new Supervisor({ extensionPath });
   await supervisor.start();
   process.stderr.write(
-    `[pi-supervisord] up — UDS: ~/.pi/remote/supervisor.sock, extension: ${extensionPath}\n`,
+    "[pi-supervisord] up — UDS: ~/.pi/remote/supervisor.sock\n",
   );
 
   const shutdown = async (signal: string) => {

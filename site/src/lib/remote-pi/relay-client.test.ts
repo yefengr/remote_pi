@@ -72,7 +72,7 @@ test("cleans up when hello send fails", async () => {
   await assert.rejects(connection, /send failed/);
   assert.equal(client.state, "closed");
   assert.equal(socket.closeCalls[0]?.code, 4002);
-  assert.equal(client.sendControl({ type: "rooms_check", peers: [] }), false);
+  assert.equal(client.sendControl({ type: "subscribe_endpoints", device_ids: [] }), false);
 });
 
 test("cleans up when an unauthenticated socket errors", async () => {

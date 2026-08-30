@@ -2,204 +2,107 @@ import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { addDaemon, listDaemons, migrateRegistryNames, removeDaemon } from "./registry.js";
-import { daemonIdForCwd } from "./id.js";
-import { defaultAgentName, type LocalConfig } from "../session/local_config.js";
-import { ipcAddress, usesNamedPipe } from "../session/ipc.js";
-import { EXIT_DAEMON_FRESH_SESSION, RpcChild, type RpcChildExitEvent, type RpcChildOptions } from "./rpc_child.js";
-import {
-  type ControlReply,
-  type ControlRequest,
-  type CronJobView,
-  type DaemonInfo,
-  encodeReply,
-  parseRequest,
-} from "./control_protocol.js";
 import { Cron } from "croner";
 import {
-  addJob as addCronJob,
-  getJob as getCronJob,
-  listJobs as listCronJobs,
-  nextRunFor,
-  recordRun,
-  removeJob as removeCronJob,
-  setJobEnabled,
-  validateSchedule,
-  type CronJob,
-  type NewJobInput,
+  addDaemon, findDaemonByCwd, listDaemons, removeDaemon, setDaemonDesiredState,
+  type DaemonEntry, type DesiredState,
+} from "./registry.js";
+import { defaultAgentName, type LocalConfig } from "../session/local_config.js";
+import { ipcAddress, usesNamedPipe } from "../session/ipc.js";
+import {
+  EXIT_DAEMON_FRESH_SESSION, RpcChild,
+  type RpcChildExitEvent, type RpcChildOptions, type RuntimeFailedEvent,
+} from "./rpc_child.js";
+import {
+  type ControlReply, type ControlRequest, type CronJobView, type DaemonInfo,
+  encodeReply, parseRequest,
+} from "./control_protocol.js";
+import {
+  addJob as addCronJob, getJob as getCronJob, listJobs as listCronJobs,
+  nextRunFor, recordRun, removeJob as removeCronJob, setJobEnabled, validateSchedule,
+  type CronJob, type NewJobInput,
 } from "./cron_registry.js";
 import { appendCronLog, readCronLog, type CronResult } from "./cron_log.js";
-
-/**
- * Central process that owns the daemon fleet (plan/26).
- *
- * Responsibilities:
- *   - Spawn one `pi --mode rpc` child per registry entry. Track them in
- *     `_children: Map<id, RpcChild>`.
- *   - Auto-restart crashed children with exponential backoff
- *     (1s, 5s, 30s, 5min). Give up after 4 attempts to avoid log spam
- *     when the agent is misconfigured.
- *   - Listen on `~/.pi/remote/supervisor.sock` for `ControlRequest`s from
- *     the `remote-pi` CLI. Each connection: 1 request → 1 reply → close.
- *   - Graceful shutdown on SIGTERM/SIGINT: stop all children + unlink
- *     the UDS file so a next supervisor can bind cleanly.
- *
- * The supervisor itself is the only long-running process the user
- * installs as a system service (plan/26 W3 will generate the unit/plist).
- * If it crashes, systemd/launchd restarts it; on restart it re-reads
- * the registry and re-spawns everything.
- */
+import { decideFireAction, infoFor, type FireAction, type DaemonStatusSnapshot } from "./status.js";
+import { runDaemonPreflight, type DaemonPreflightResult } from "./preflight.js";
+import { probeSupervisor } from "./supervisor-ipc.js";
 
 const SUPERVISOR_SOCK_NAME = "supervisor.sock";
-
-/** Backoff schedule for auto-restart after a crash. After exhausting, the
- *  child stays in `crashed` state until manual `restart_all` or fresh
- *  registry add. Keeps logs sane when the agent dies on every boot. */
-const RESTART_BACKOFFS_MS = [1_000, 5_000, 30_000, 5 * 60_000];
+const RESTART_BACKOFFS_MS = [1_000, 5_000, 30_000, 5 * 60_000], RESTART_STABILITY_MS = 30_000, RECONCILE_INTERVAL_MS = 15_000, MISSING_CWD_CONFIRMATIONS = 2;
 
 function supervisorSockPath(): string {
   const root = process.env["REMOTE_PI_HOME"] || homedir();
-  // POSIX → ~/.pi/remote/supervisor.sock; Windows → per-user named pipe (plan/40).
   return ipcAddress("supervisor", join(root, ".pi", "remote", SUPERVISOR_SOCK_NAME));
 }
 
-/** Thrown by `start()` when another live supervisor already holds the UDS.
- *  Prevents a second supervisor from orphaning the first's children. */
 export class SupervisorAlreadyRunningError extends Error {
   constructor(public readonly sockPath: string) {
-    super(
-      `Another pi-supervisord is already running (UDS held at ${sockPath}). ` +
-      "Refusing to start a second instance. Use `remote-pi daemon …` to control it, " +
-      "or stop the running one first.",
-    );
+    super(`Another pi-supervisord is already running (UDS held at ${sockPath}).`);
     this.name = "SupervisorAlreadyRunningError";
   }
 }
 
-/** Probes whether a live supervisor is accepting connections on `path`.
- *  Resolves true if the connect succeeds (a listener is there), false on
- *  ECONNREFUSED / ENOENT (stale socket file from a crashed supervisor). */
-function _probeSupervisor(path: string): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    const sock = createConnection({ path });
-    const done = (alive: boolean) => {
-      sock.removeAllListeners();
-      sock.destroy();
-      resolve(alive);
-    };
-    const timer = setTimeout(() => done(false), 1_000);
-    sock.once("connect", () => { clearTimeout(timer); done(true); });
-    sock.once("error", () => { clearTimeout(timer); done(false); });
-  });
-}
+export interface SupervisorOptions { extensionPath: string; piBin?: string; reconcileIntervalMs?: number; preflight?: (entry: Pick<DaemonEntry, "cwd">) => Promise<DaemonPreflightResult>; }
 
-export interface SupervisorOptions {
-  /** Absolute path to remote-pi's dist/index.js — passed as -e to each
-   *  spawned `pi`. Defaults to the location relative to where this file
-   *  is bundled (so the supervisor finds itself). */
-  extensionPath: string;
-  /** Override the `pi` binary path. Defaults to "pi" on PATH. */
-  piBin?: string;
-}
+export { decideFireAction, type FireAction } from "./status.js";
 
-/** Pure decision for `fireJob` (plan/39) — picks the action from the daemon's
- *  liveness/busy state + the job's flags. Tested in isolation for all 4 ramos. */
-export type FireAction = "send" | "wake_and_send" | "skip_down" | "skip_busy";
-export function decideFireAction(o: {
-  running: boolean;
-  busy: boolean;
-  wake: boolean;
-  skipIfBusy: boolean;
-}): FireAction {
-  if (!o.running) return o.wake ? "wake_and_send" : "skip_down";
-  if (o.skipIfBusy && o.busy) return "skip_busy";
-  return "send";
-}
+type SlotError = { code: string; message?: string; at: number; retryable: boolean; stage: string; };
 
-interface ChildSlot {
-  id: string;
-  cwd: string;
-  child: RpcChild;
-  restartTimer: ReturnType<typeof setTimeout> | null;
-  restartAttempt: number;
-}
+interface ChildSlot { entry: DaemonEntry; child: RpcChild; restartTimer: ReturnType<typeof setTimeout> | null; stabilityTimer: ReturnType<typeof setTimeout> | null; restartAttempt: number; nextRetryAt?: number; blocked: boolean; error?: SlotError; missingCwdObservations: number; reconcileInProgress: boolean; preflight: Promise<void> | null; }
 
 export class Supervisor {
   private server: Server | null = null;
   private readonly children = new Map<string, ChildSlot>();
-  /** Live croner schedules, keyed by cron job id (plan/39). */
   private readonly cronJobs = new Map<string, Cron>();
   private shuttingDown = false;
+  private reconcileTimer: ReturnType<typeof setInterval> | null = null;
+  private reconcileRunning = false;
+  private readonly preflightFor: (entry: Pick<DaemonEntry, "cwd">) => Promise<DaemonPreflightResult>;
 
-  constructor(private readonly opts: SupervisorOptions) {}
-
-  /** Bind the control UDS + spawn all registered daemons. */
-  async start(): Promise<void> {
-    this._mkdirParent();
-    // Backfill folder-derived names into legacy registry entries (pre-name
-    // field) so every daemon has a stable name to inject via env.
-    migrateRegistryNames();
-    await this._bindUds();
-    this._spawnAllFromRegistry();
-    // Cron (plan/39): schedule all enabled jobs, then run any missed catchup.
-    this._reconcileCron();
-    this._runCatchup();
+  constructor(private readonly opts: SupervisorOptions) {
+    this.preflightFor = opts.preflight ?? ((entry) => runDaemonPreflight({ cwd: entry.cwd }));
   }
 
-  /** Graceful shutdown: stop all children, close UDS. */
+  async start(): Promise<void> {
+    this.mkdirParent();
+    await this.bindUds();
+    await this.reconcileRegistryCwds();
+    this.spawnDesiredEntries();
+    this.reconcileCron();
+    this.runCatchup();
+    const interval = this.opts.reconcileIntervalMs ?? RECONCILE_INTERVAL_MS;
+    this.reconcileTimer = setInterval(() => { void this.reconcileRegistryCwds(); }, interval);
+    this.reconcileTimer.unref();
+  }
+
   async stop(): Promise<void> {
     this.shuttingDown = true;
-    // Stop all cron schedules (plan/39) so no fire races with teardown.
-    for (const c of this.cronJobs.values()) c.stop();
+    if (this.reconcileTimer) clearInterval(this.reconcileTimer);
+    this.reconcileTimer = null;
+    for (const cron of this.cronJobs.values()) cron.stop();
     this.cronJobs.clear();
-    // Cancel pending restart timers first so they don't race with stop().
-    for (const slot of this.children.values()) {
-      if (slot.restartTimer !== null) {
-        clearTimeout(slot.restartTimer);
-        slot.restartTimer = null;
-      }
-    }
-    await Promise.all([...this.children.values()].map((s) => s.child.stop()));
+    for (const slot of this.children.values()) this.cancelRetry(slot);
+    await Promise.all([...this.children.values()].map(async (slot) => slot.child.stop()));
     this.children.clear();
-    await new Promise<void>((resolve) => {
-      if (!this.server) return resolve();
-      this.server.close(() => resolve());
-    });
+    await new Promise<void>((resolve) => this.server ? this.server.close(() => resolve()) : resolve());
     this.server = null;
-    // Best-effort: clear the socket file so a next supervisor bind succeeds.
-    // Windows named pipes have no file (auto-removed on exit) → nothing to do.
     if (!usesNamedPipe()) {
-      try { unlinkSync(supervisorSockPath()); } catch { /* ignored */ }
+      try { unlinkSync(supervisorSockPath()); } catch { /* socket already absent */ }
     }
   }
 
-  // ── UDS binding ──────────────────────────────────────────────────────────
-
-  private _mkdirParent(): void {
-    // A named pipe has no parent directory to create (the addr is `\\.\pipe\…`).
-    if (usesNamedPipe()) return;
-    mkdirSync(dirname(supervisorSockPath()), { recursive: true });
+  private mkdirParent(): void {
+    if (!usesNamedPipe()) mkdirSync(dirname(supervisorSockPath()), { recursive: true });
   }
 
-  private async _bindUds(): Promise<void> {
+  private async bindUds(): Promise<void> {
     const path = supervisorSockPath();
-    const pipe = usesNamedPipe();
-    // Single-instance guard. PROBE first: a live supervisor answering the
-    // connect means we must NOT start a second one. Stealing the socket
-    // (unlink + bind) would orphan the running supervisor's children — they'd
-    // keep running, unreachable by the CLI. Only on POSIX, when the probe
-    // fails (stale socket from a crash), do we unlink + bind. On Windows there
-    // is no file: always probe, never unlink (the pipe self-cleans on exit).
-    if (pipe || existsSync(path)) {
-      const alive = await _probeSupervisor(path);
-      if (alive) {
-        throw new SupervisorAlreadyRunningError(path);
-      }
-      if (!pipe) {
-        try { unlinkSync(path); } catch { /* will throw on bind if still held */ }
-      }
+    const namedPipe = usesNamedPipe();
+    if (namedPipe || existsSync(path)) {
+      if (await probeSupervisor(path)) throw new SupervisorAlreadyRunningError(path);
+      if (!namedPipe) { try { unlinkSync(path); } catch { /* bind reports an actual race */ } }
     }
-    const server = createServer((socket) => this._onConnection(socket));
+    const server = createServer((socket) => this.onConnection(socket));
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(path, () => resolve());
@@ -207,431 +110,487 @@ export class Supervisor {
     this.server = server;
   }
 
-  private _onConnection(socket: Socket): void {
-    let buf = "";
+  private onConnection(socket: Socket): void {
+    let buffer = "";
     socket.setEncoding("utf8");
     socket.on("data", (chunk: string) => {
-      buf += chunk;
-      const nl = buf.indexOf("\n");
-      if (nl < 0) return;
-      const line = buf.slice(0, nl);
-      // Single request per connection; ignore anything past the newline.
-      void this._handleRequest(line)
-        .then((reply) => socket.end(encodeReply(reply)))
-        .catch((err) => socket.end(encodeReply<unknown>({ ok: false, error: String(err) })));
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      void this.handleRequest(buffer.slice(0, newline)).then(
+        (reply) => socket.end(encodeReply(reply)),
+        (error) => socket.end(encodeReply({ ok: false, error: String(error) })),
+      );
     });
-    socket.on("error", () => { /* client hung up; nothing to do */ });
+    socket.on("error", () => { /* callers can abandon a control operation */ });
   }
 
-  // ── Request dispatch ─────────────────────────────────────────────────────
-
-  private async _handleRequest(line: string): Promise<ControlReply<unknown>> {
-    let req: ControlRequest;
-    try { req = parseRequest(line); }
-    catch (e) { return { ok: false, error: (e as Error).message }; }
-
-    switch (req.op) {
-      case "list":         return { ok: true, data: { daemons: this._listInfo() } };
-      case "status":       return { ok: true, data: { daemons: this._listInfo() } };
-      case "start_all":    return this._opStartAll();
-      case "start":        return this._opStart(req.id);
-      case "stop_all":     return this._opStopAll();
-      case "stop":         return this._opStop(req.id);
-      case "restart_all":  return this._opRestartAll();
-      case "restart":      return this._opRestart(req.id);
-      case "send":         return this._opSend(req.id, req.text);
-      case "register":     return this._opRegister(req.cwd);
-      case "unregister":   return this._opUnregister(req.id);
-      case "cron_add":     return this._opCronAdd(req);
-      case "cron_list":    return this._opCronList();
-      case "cron_remove":  return this._opCronRemove(req.job_id);
-      case "cron_enable":  return this._opCronEnable(req.job_id, req.enabled);
-      case "cron_run":     return this._opCronRun(req.job_id);
-      case "cron_log":     return this._opCronLog(req.job_id, req.tail);
-      default: {
-        const unknown = (req as { op: string }).op;
-        return { ok: false, error: `unknown op: ${unknown}` };
-      }
+  private async handleRequest(line: string): Promise<ControlReply<unknown>> {
+    let request: ControlRequest;
+    try { request = parseRequest(line); }
+    catch (error) { return { ok: false, error: (error as Error).message }; }
+    await this.reconcileRegistryCwds();
+    switch (request.op) {
+      case "list": return { ok: true, data: { daemons: this.listInfo() } };
+      case "status": return { ok: true, data: { daemons: this.listInfo() } };
+      case "start_all": return this.startAll();
+      case "start": return this.startOne(request.id);
+      case "stop_all": return this.stopAll();
+      case "stop": return this.stopOne(request.id);
+      case "restart_all": return this.restartAll();
+      case "restart": return this.restartOne(request.id);
+      case "send": return this.send(request.id, request.text);
+      case "register": return this.register(request.cwd);
+      case "unregister": return this.unregister(request.id);
+      case "unregister_cwd": return this.unregisterCwd(request.cwd);
+      case "cron_add": return this.cronAdd(request);
+      case "cron_list": return { ok: true, data: { jobs: listCronJobs().map((job) => this.jobView(job)) } };
+      case "cron_remove": return this.cronRemove(request.job_id);
+      case "cron_enable": return this.cronEnable(request.job_id, request.enabled);
+      case "cron_run": return this.cronRun(request.job_id);
+      case "cron_log": return { ok: true, data: { entries: readCronLog({ jobId: request.job_id, tail: request.tail }) } };
+      default: return { ok: false, error: `unknown op: ${(request as { op: string }).op}` };
     }
   }
 
-  // ── Op handlers ──────────────────────────────────────────────────────────
-
-  private _listInfo(): DaemonInfo[] {
-    const registry = listDaemons();
-    return registry.map((entry) => {
-      const slot = this.children.get(entry.id);
-      const name = entry.name ?? defaultAgentName(entry.cwd);
-      const info: DaemonInfo = {
-        id: entry.id,
-        cwd: entry.cwd,
-        name,
-        state: slot?.child.state ?? "stopped",
-      };
-      if (slot) {
-        if (slot.child.pid !== undefined) info.pid = slot.child.pid;
-        if (slot.child.uptimeMs !== undefined) info.uptime_s = Math.floor(slot.child.uptimeMs / 1000);
-        info.restart_count = slot.child.restartCount;
-      }
-      return info;
-    });
+  private listInfo(): DaemonInfo[] {
+    return listDaemons().map((entry) => this.infoFor(entry));
   }
 
-  private _opStartAll(): ControlReply<unknown> {
+  private infoFor(entry: DaemonEntry): DaemonInfo {
+    const slot = this.children.get(entry.id);
+    const snapshot: DaemonStatusSnapshot = {
+      id: entry.id,
+      cwd: entry.cwd,
+      name: entry.name,
+      registration: existsSync(entry.cwd) ? "registered" : "missing",
+      desired: entry.desired_state,
+      process: slot?.child.processState ?? "absent",
+      runtime: slot?.child.runtimeState ?? "pending",
+      relay: slot?.child.relayState ?? "disconnected",
+      ...(slot?.child.runtimeInstanceId ? { runtimeInstanceId: slot.child.runtimeInstanceId } : {}),
+      ...(slot?.child.pid !== undefined ? { pid: slot.child.pid } : {}),
+      ...(slot?.child.startedAt !== undefined ? { startedAt: slot.child.startedAt } : {}),
+      ...(slot?.child.uptimeMs !== undefined ? { uptimeMs: slot.child.uptimeMs } : {}),
+      restartCount: slot?.child.restartCount ?? 0,
+      retrying: !!slot?.restartTimer,
+      ...(slot?.nextRetryAt ? { nextRetryAt: slot.nextRetryAt } : {}),
+      blocked: !!slot?.blocked || slot?.child.state === "blocked",
+      ...(slot?.error ? { error: slot.error } : {}),
+    };
+    return infoFor(snapshot);
+  }
+
+  private startAll(): ControlReply<unknown> {
     const started: string[] = [];
-    const already: string[] = [];
+    const alreadyRunning: string[] = [];
     for (const entry of listDaemons()) {
-      const slot = this.children.get(entry.id);
-      if (slot && slot.child.state === "running") {
-        already.push(entry.id);
-        continue;
-      }
-      this._spawnEntry(entry.id, entry.cwd);
-      started.push(entry.id);
+      const result = this.startEntry(entry);
+      (result ? alreadyRunning : started).push(entry.id);
     }
-    return { ok: true, data: { started, already_running: already } };
+    return { ok: true, data: { started, already_running: alreadyRunning } };
   }
 
-  /** Spawn a single registered daemon by id. Idempotent: a daemon already
-   *  running returns `started: false`. Unknown id → ok:false. This is what
-   *  `/remote-pi create` calls so a freshly-registered folder boots its Pi
-   *  immediately instead of waiting for the next supervisor restart. */
-  private _opStart(id: string): ControlReply<unknown> {
-    const entry = listDaemons().find((d) => d.id === id);
+  private startOne(id: string): ControlReply<unknown> {
+    const entry = listDaemons().find((item) => item.id === id);
     if (!entry) return { ok: false, error: `no daemon with id ${id}` };
-    const slot = this.children.get(id);
-    if (slot && slot.child.state === "running") {
-      return { ok: true, data: { id, state: slot.child.state, started: false } };
-    }
-    this._spawnEntry(entry.id, entry.cwd, entry.name);
-    const state = this.children.get(id)?.child.state ?? "starting";
-    return { ok: true, data: { id, state, started: true } };
+    const alreadyRunning = this.startEntry(entry);
+    const info = this.infoFor(setDaemonDesiredState(id, "running")!);
+    return { ok: true, data: { id, state: info.state, started: !alreadyRunning, desired_state: "running" } };
   }
 
-  private async _opStopAll(): Promise<ControlReply<unknown>> {
-    const stopped: string[] = [];
-    const already: string[] = [];
-    for (const [id, slot] of this.children) {
-      if (slot.child.state !== "running") {
-        already.push(id);
-        continue;
+  private startEntry(entry: DaemonEntry): boolean {
+    const updated = setDaemonDesiredState(entry.id, "running")!;
+    const slot = this.children.get(entry.id);
+    if (slot) slot.entry = updated;
+    if (slot && (slot.child.processState === "running" || slot.child.processState === "spawning") && !slot.blocked) return true;
+    if (slot) {
+      this.cancelRetry(slot);
+      slot.blocked = false;
+      slot.error = undefined;
+      slot.entry = updated;
+      if (slot.child.processState === "exited" || slot.child.pid === undefined) {
+        void this.preflightAndSpawn(slot);
+        return false;
       }
-      if (slot.restartTimer !== null) {
-        clearTimeout(slot.restartTimer);
-        slot.restartTimer = null;
-      }
-      await slot.child.stop();
-      stopped.push(id);
+      void slot.child.stop().then(() => this.preflightAndSpawn(slot));
+      return false;
     }
-    return { ok: true, data: { stopped, already_stopped: already } };
+    this.createSlot(updated);
+    return false;
   }
 
-  /** Stop a single registered daemon by id. Idempotent: a daemon that isn't
-   *  running returns `stopped: false`. Unknown id → ok:false. Mirrors the
-   *  per-id semantics of `_opStart`. Cancels any pending restart backoff so a
-   *  deliberate stop stays stopped. */
-  private async _opStop(id: string): Promise<ControlReply<unknown>> {
-    const entry = listDaemons().find((d) => d.id === id);
+  private async stopAll(): Promise<ControlReply<unknown>> {
+    const stopped: string[] = [], alreadyStopped: string[] = [];
+    for (const entry of listDaemons()) (await this.stopEntry(entry) ? stopped : alreadyStopped).push(entry.id);
+    return { ok: true, data: { stopped, already_stopped: alreadyStopped } };
+  }
+
+  private async stopOne(id: string): Promise<ControlReply<unknown>> {
+    const entry = listDaemons().find((item) => item.id === id);
     if (!entry) return { ok: false, error: `no daemon with id ${id}` };
-    const slot = this.children.get(id);
-    if (!slot || slot.child.state !== "running") {
-      return { ok: true, data: { id, state: slot?.child.state ?? "stopped", stopped: false } };
-    }
-    if (slot.restartTimer !== null) {
-      clearTimeout(slot.restartTimer);
-      slot.restartTimer = null;
-    }
+    const stopped = await this.stopEntry(entry);
+    const info = this.infoFor(setDaemonDesiredState(id, "stopped")!);
+    return { ok: true, data: { id, state: info.state, stopped, desired_state: "stopped" } };
+  }
+
+  private async stopEntry(entry: DaemonEntry): Promise<boolean> {
+    const updated = setDaemonDesiredState(entry.id, "stopped")!;
+    const slot = this.children.get(entry.id);
+    if (slot) slot.entry = updated;
+    if (!slot) return false;
+    this.cancelRetry(slot);
+    this.cancelStabilityReset(slot);
+    const wasLive = slot.child.processState === "running" || slot.child.processState === "spawning";
     await slot.child.stop();
-    return { ok: true, data: { id, state: slot.child.state, stopped: true } };
+    return wasLive;
   }
 
-  /** Restart a single registered daemon by id (stop-if-running, then spawn).
-   *  Unknown id → ok:false. Resets the crash backoff. */
-  private async _opRestart(id: string): Promise<ControlReply<unknown>> {
-    const entry = listDaemons().find((d) => d.id === id);
+  private async restartOne(id: string): Promise<ControlReply<unknown>> {
+    const entry = listDaemons().find((item) => item.id === id);
     if (!entry) return { ok: false, error: `no daemon with id ${id}` };
-    const slot = this.children.get(id);
-    if (slot && slot.child.state === "running") {
-      if (slot.restartTimer !== null) {
-        clearTimeout(slot.restartTimer);
-        slot.restartTimer = null;
-      }
-      await slot.child.stop();
-    }
-    this._spawnEntry(entry.id, entry.cwd, entry.name);
-    const state = this.children.get(id)?.child.state ?? "starting";
-    return { ok: true, data: { id, state, restarted: true } };
+    await this.restartEntry(entry);
+    const info = this.infoFor(setDaemonDesiredState(id, "running")!);
+    return { ok: true, data: { id, state: info.state, restarted: true, desired_state: "running" } };
   }
 
-  private async _opRestartAll(): Promise<ControlReply<unknown>> {
-    const stopReply = await this._opStopAll();
-    if (!stopReply.ok) return stopReply;
-    const startReply = this._opStartAll();
-    if (!startReply.ok) return startReply;
-    const restarted = (startReply.data as { started: string[] }).started;
+  private async restartAll(): Promise<ControlReply<unknown>> {
+    const restarted: string[] = [];
+    for (const entry of listDaemons()) { await this.restartEntry(entry); restarted.push(entry.id); }
     return { ok: true, data: { restarted } };
   }
 
-  private _opSend(id: string, text: string): ControlReply<unknown> {
+  private async restartEntry(entry: DaemonEntry): Promise<void> {
+    const updated = setDaemonDesiredState(entry.id, "running")!;
+    const existing = this.children.get(entry.id);
+    if (existing) {
+      this.cancelRetry(existing);
+      this.cancelStabilityReset(existing);
+      existing.blocked = false;
+      existing.error = undefined;
+      await existing.child.stop();
+      this.children.delete(entry.id);
+    }
+    this.createSlot(updated);
+  }
+
+  private async send(id: string, text: string): Promise<ControlReply<unknown>> {
+    const entry = listDaemons().find((item) => item.id === id);
+    if (!entry) return { ok: false, error: `no daemon with id ${id}` };
+    if (!existsSync(entry.cwd)) {
+      return { ok: true, data: { id, accepted: false, delivered: false, code: "cwd_missing", error: "daemon cwd no longer exists" } };
+    }
+    const info = this.infoFor(entry);
+    if (info.desired !== "running" || info.runtime !== "ready") {
+      return { ok: true, data: { id, accepted: false, delivered: false, code: "runtime_not_ready", error: `daemon is ${info.health}` } };
+    }
     const slot = this.children.get(id);
-    if (!slot) return { ok: false, error: `daemon ${id} not running` };
-    if (slot.child.state !== "running") {
-      return { ok: false, error: `daemon ${id} state is ${slot.child.state}` };
-    }
-    const ok = slot.child.sendPrompt(text);
-    return { ok: true, data: { id, delivered: ok } };
+    if (!slot) return { ok: true, data: { id, accepted: false, delivered: false, code: "runtime_missing" } };
+    const acceptance = await slot.child.sendPrompt(text);
+    return { ok: true, data: {
+      id,
+      accepted: acceptance.accepted,
+      delivered: acceptance.accepted,
+      ...(acceptance.code ? { code: acceptance.code } : {}),
+      ...(acceptance.error ? { error: acceptance.error } : {}),
+    } };
   }
 
-  private _opRegister(rawCwd: string): ControlReply<unknown> {
+  private register(cwd: string): ControlReply<unknown> {
     try {
-      const { id, cwd } = addDaemon(rawCwd);
-      return { ok: true, data: { id, cwd } };
-    } catch (e) {
-      return { ok: false, error: (e as Error).message };
+      const entry = addDaemon(cwd);
+      this.startEntry(entry);
+      return { ok: true, data: { id: entry.id, cwd: entry.cwd, name: entry.name, desired_state: entry.desired_state } };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
     }
   }
 
-  private async _opUnregister(id: string): Promise<ControlReply<unknown>> {
-    // Stop the child first so we don't leave an orphan when the registry
-    // entry is gone.
+  private async unregister(id: string): Promise<ControlReply<unknown>> {
     const slot = this.children.get(id);
     if (slot) {
-      if (slot.restartTimer !== null) {
-        clearTimeout(slot.restartTimer);
-        slot.restartTimer = null;
-      }
+      this.cancelRetry(slot);
       await slot.child.stop();
       this.children.delete(id);
     }
-    try {
-      const result = removeDaemon(id);
-      return { ok: true, data: result };
-    } catch (e) {
-      return { ok: false, error: (e as Error).message };
-    }
+    try { return { ok: true, data: removeDaemon(id) }; }
+    catch (error) { return { ok: false, error: (error as Error).message }; }
   }
 
-  // ── Cron ops + engine (plan/39) ────────────────────────────────────────────
+  private async unregisterCwd(cwd: string): Promise<ControlReply<unknown>> {
+    const entry = findDaemonByCwd(cwd);
+    if (!entry) return { ok: true, data: { removed: false } };
+    return this.unregister(entry.id);
+  }
 
-  private _opCronAdd(req: Extract<ControlRequest, { op: "cron_add" }>): ControlReply<unknown> {
-    const v = validateSchedule(req.schedule, req.tz);
-    if (!v.ok) return { ok: false, error: v.error ?? "invalid schedule" };
-    const input: NewJobInput = { daemon_id: req.daemon_id, schedule: req.schedule, prompt: req.prompt };
-    if (req.tz !== undefined) input.tz = req.tz;
-    if (req.skip_if_busy !== undefined) input.skip_if_busy = req.skip_if_busy;
-    if (req.wake !== undefined) input.wake = req.wake;
-    if (req.catchup !== undefined) input.catchup = req.catchup;
+  private cronAdd(request: Extract<ControlRequest, { op: "cron_add" }>): ControlReply<unknown> {
+    const validation = validateSchedule(request.schedule, request.tz);
+    if (!validation.ok) return { ok: false, error: validation.error ?? "invalid schedule" };
+    const input: NewJobInput = { daemon_id: request.daemon_id, schedule: request.schedule, prompt: request.prompt };
+    if (request.tz !== undefined) input.tz = request.tz;
+    if (request.skip_if_busy !== undefined) input.skip_if_busy = request.skip_if_busy;
+    if (request.catchup !== undefined) input.catchup = request.catchup;
     const job = addCronJob(input);
-    this._scheduleCron(job);
-    return { ok: true, data: { job: this._jobView(job) } };
+    this.scheduleCron(job);
+    return { ok: true, data: { job: this.jobView(job) } };
   }
 
-  private _opCronList(): ControlReply<unknown> {
-    const jobs = listCronJobs().map((j) => this._jobView(j));
-    return { ok: true, data: { jobs } };
-  }
-
-  private _opCronRemove(jobId: string): ControlReply<unknown> {
+  private cronRemove(jobId: string): ControlReply<unknown> {
     const removed = removeCronJob(jobId);
-    this._stopCron(jobId);
+    this.stopCron(jobId);
     return { ok: true, data: { removed } };
   }
 
-  private _opCronEnable(jobId: string, enabled: boolean): ControlReply<unknown> {
+  private cronEnable(jobId: string, enabled: boolean): ControlReply<unknown> {
     const updated = setJobEnabled(jobId, enabled);
     if (updated) {
-      this._stopCron(jobId);
+      this.stopCron(jobId);
       const job = getCronJob(jobId);
-      if (enabled && job) this._scheduleCron(job);
+      if (enabled && job) this.scheduleCron(job);
     }
     return { ok: true, data: { job_id: jobId, enabled, updated } };
   }
 
-  private async _opCronRun(jobId: string): Promise<ControlReply<unknown>> {
+  private async cronRun(jobId: string): Promise<ControlReply<unknown>> {
     if (!getCronJob(jobId)) return { ok: false, error: `no cron job with id ${jobId}` };
-    const result = await this.fireJob(jobId, { manual: true });
-    return { ok: true, data: { job_id: jobId, result } };
+    return { ok: true, data: { job_id: jobId, result: await this.fireJob(jobId, { manual: true }) } };
   }
 
-  private _opCronLog(jobId: string | undefined, tail: number | undefined): ControlReply<unknown> {
-    const opts: { jobId?: string; tail?: number } = {};
-    if (jobId !== undefined) opts.jobId = jobId;
-    if (tail !== undefined) opts.tail = tail;
-    return { ok: true, data: { entries: readCronLog(opts) } };
-  }
-
-  private _jobView(job: CronJob): CronJobView {
+  private jobView(job: CronJob): CronJobView {
     const next = nextRunFor(job);
-    return { ...job, next_run: next ? next.toISOString() : null };
+    return { ...job, next_run: next?.toISOString() ?? null };
   }
 
-  /** Rebuild all live `Cron` schedules from the registry (enabled jobs only).
-   *  Called on start; mutations reconcile incrementally via _scheduleCron/_stopCron. */
-  private _reconcileCron(): void {
-    for (const c of this.cronJobs.values()) c.stop();
+  private reconcileCron(): void {
+    for (const cron of this.cronJobs.values()) cron.stop();
     this.cronJobs.clear();
-    for (const job of listCronJobs()) {
-      if (job.enabled) this._scheduleCron(job);
-    }
+    for (const job of listCronJobs()) if (job.enabled) this.scheduleCron(job);
   }
 
-  private _scheduleCron(job: CronJob): void {
-    this._stopCron(job.id);
+  private scheduleCron(job: CronJob): void {
+    this.stopCron(job.id);
     try {
-      const opts = job.tz ? { timezone: job.tz, name: job.id } : { name: job.id };
-      const cron = new Cron(job.schedule, opts, () => { void this.fireJob(job.id); });
-      this.cronJobs.set(job.id, cron);
-    } catch (e) {
-      process.stderr.write(`[remote-pi-supervisord] cron schedule failed for ${job.id}: ${String(e)}\n`);
+      const options = job.tz ? { timezone: job.tz, name: job.id } : { name: job.id };
+      this.cronJobs.set(job.id, new Cron(job.schedule, options, () => { void this.fireJob(job.id); }));
+    } catch (error) {
+      process.stderr.write(`[remote-pi-supervisord] cron schedule failed for ${job.id}: ${String(error)}\n`);
     }
   }
 
-  private _stopCron(jobId: string): void {
-    const c = this.cronJobs.get(jobId);
-    if (c) { c.stop(); this.cronJobs.delete(jobId); }
+  private stopCron(jobId: string): void {
+    const cron = this.cronJobs.get(jobId);
+    if (cron) { cron.stop(); this.cronJobs.delete(jobId); }
   }
 
-  /** Detail 2: on start, run a catchup job once if its previous scheduled run
-   *  was missed while the supervisor was down. Opt-in (`catchup`), at most 1×. */
-  private _runCatchup(): void {
+  private runCatchup(): void {
     for (const job of listCronJobs()) {
       if (!job.enabled || !job.catchup) continue;
       try {
         const cron = new Cron(job.schedule, job.tz ? { timezone: job.tz } : {});
-        const prev = cron.previousRun();
+        const previous = cron.previousRun();
         cron.stop();
-        if (!prev) continue;
-        const lastRunMs = job.last_run ? Date.parse(job.last_run) : 0;
-        if (prev.getTime() > lastRunMs) void this.fireJob(job.id, { manual: true });
-      } catch { /* skip a malformed schedule */ }
+        if (previous && previous.getTime() > (job.last_run ? Date.parse(job.last_run) : 0)) {
+          void this.fireJob(job.id, { manual: true });
+        }
+      } catch { /* schedule was checked when added; corrupt persisted data simply skips */ }
     }
   }
 
-  /**
-   * Fires a cron job: resolves the daemon, decides the action (decideFireAction),
-   * acts, and records the outcome — ALWAYS one `last_status` update + one JSONL
-   * line, for both fires and skips. Returns the result. `manual` bypasses the
-   * disabled-skip (used by `cron run` + catchup).
-   */
-  async fireJob(jobId: string, opts: { manual?: boolean } = {}): Promise<CronResult | "missing"> {
+  async fireJob(jobId: string, options: { manual?: boolean } = {}): Promise<CronResult | "missing"> {
     const job = getCronJob(jobId);
     if (!job) return "missing";
-
     let result: CronResult;
-    if (!job.enabled && !opts.manual) {
+    if (!job.enabled && !options.manual) {
       result = "skipped_disabled";
     } else {
-      const slot = this.children.get(job.daemon_id);
-      const running = !!slot && slot.child.state === "running";
-      let busy = false;
-      if (running && job.skip_if_busy) busy = await slot!.child.refreshBusy();
-      const action = decideFireAction({ running, busy, wake: job.wake, skipIfBusy: job.skip_if_busy });
-      if (action === "skip_down") {
-        result = "skipped_down";
-      } else if (action === "skip_busy") {
-        result = "skipped_busy";
-      } else if (action === "wake_and_send") {
-        const entry = listDaemons().find((d) => d.id === job.daemon_id);
-        if (!entry) {
-          result = "skipped_down";
-        } else {
-          this._spawnEntry(entry.id, entry.cwd, entry.name);
-          const woke = this.children.get(job.daemon_id);
-          result = woke && woke.child.sendPrompt(job.prompt) ? "woke_and_delivered" : "deliver_failed";
-        }
+      const entry = listDaemons().find((item) => item.id === job.daemon_id);
+      const cwdExists = !!entry && existsSync(entry.cwd);
+      const slot = cwdExists && entry ? this.children.get(entry.id) : undefined;
+      const info = cwdExists && entry ? this.infoFor(entry) : undefined;
+      const busy = !!slot && info?.runtime === "ready" && job.skip_if_busy ? await slot.child.refreshBusy() : false;
+      const action = decideFireAction({
+        exists: cwdExists,
+        desired: entry?.desired_state ?? "stopped",
+        runtime: info?.runtime ?? "pending",
+        health: info?.health ?? "failed",
+        busy,
+        skipIfBusy: job.skip_if_busy,
+        retrying: info?.retrying ?? false,
+      });
+      if (action === "send") {
+        result = slot && (await slot.child.sendPrompt(job.prompt)).accepted ? "accepted" : "rejected";
       } else {
-        result = slot!.child.sendPrompt(job.prompt) ? "delivered" : "deliver_failed";
+        result = this.cronResultFor(action);
       }
     }
-
     const at = new Date().toISOString();
     recordRun(job.id, at, result);
     appendCronLog({ job_id: job.id, daemon_id: job.daemon_id, schedule: job.schedule, result, prompt: job.prompt });
     return result;
   }
 
-  // ── Child lifecycle ──────────────────────────────────────────────────────
-
-  private _spawnAllFromRegistry(): void {
-    for (const entry of listDaemons()) {
-      this._spawnEntry(entry.id, entry.cwd, entry.name);
+  private cronResultFor(action: Exclude<FireAction, "send">): CronResult {
+    switch (action) {
+      case "skip_busy": return "skipped_busy";
+      case "skip_desired_stopped": return "skipped_desired_stopped";
+      case "skip_starting": return "skipped_starting";
+      case "skip_retrying": return "skipped_retrying";
+      case "skip_failed": return "skipped_failed";
+      case "skip_blocked": return "skipped_blocked";
+      case "skip_missing": return "skipped_missing";
     }
   }
 
-  private _spawnEntry(id: string, cwd: string, name?: string): void {
-    // Clean up any prior slot (e.g. crashed + waiting for backoff).
-    const existing = this.children.get(id);
-    if (existing) {
-      if (existing.restartTimer !== null) clearTimeout(existing.restartTimer);
-      // If somehow the child is still alive, stop it first so we don't
-      // leak. Fire-and-forget — caller doesn't await.
-      if (existing.child.state === "running") void existing.child.stop();
-    }
-
-    // Build the daemon's config and inject it via REMOTE_PI_DIRECT_CONFIG —
-    // no per-cwd config file needed. The daemon scopes by (cwd, name) like any
-    // agent (plan/38); relay on.
-    const config: LocalConfig = {
-      agent_name: name ?? defaultAgentName(cwd),
-      auto_start_relay: true,
-    };
-    const childOpts: RpcChildOptions = {
-      extensionPath: this.opts.extensionPath,
-      cwd,
-      config,
-    };
-    if (this.opts.piBin !== undefined) childOpts.piBin = this.opts.piBin;
-    const child = new RpcChild(childOpts);
-    const slot: ChildSlot = { id, cwd, child, restartTimer: null, restartAttempt: 0 };
-    this.children.set(id, slot);
-
-    child.on("exit", (evt: RpcChildExitEvent) => this._onChildExit(id, evt));
-    child.spawn();
+  private spawnDesiredEntries(): void {
+    for (const entry of listDaemons()) if (entry.desired_state === "running") this.createSlot(entry);
   }
 
-  private _onChildExit(id: string, evt: RpcChildExitEvent): void {
-    if (this.shuttingDown) return;
+  private createSlot(entry: DaemonEntry): void {
+    const config: LocalConfig = { agent_name: entry.name || defaultAgentName(entry.cwd), auto_start_relay: true };
+    const childOptions: RpcChildOptions = { endpointId: entry.id, extensionPath: this.opts.extensionPath, cwd: entry.cwd, config };
+    if (this.opts.piBin) childOptions.piBin = this.opts.piBin;
+    const child = new RpcChild(childOptions);
+    const slot: ChildSlot = {
+      entry,
+      child,
+      restartTimer: null,
+      stabilityTimer: null,
+      restartAttempt: 0,
+      blocked: false,
+      missingCwdObservations: 0,
+      reconcileInProgress: false,
+      preflight: null,
+    };
+    this.children.set(entry.id, slot);
+    child.on("exit", (event: RpcChildExitEvent) => this.onChildExit(entry.id, event));
+    child.on("runtime_ready", () => this.onRuntimeReady(entry.id));
+    child.on("runtime_failed", (event: RuntimeFailedEvent) => this.onRuntimeFailed(entry.id, event));
+    void this.preflightAndSpawn(slot);
+  }
+
+  private preflightAndSpawn(slot: ChildSlot): Promise<void> {
+    if (slot.preflight) return slot.preflight;
+    const run = async () => {
+      const result = await this.preflightFor(slot.entry);
+      if (this.children.get(slot.entry.id) !== slot || this.shuttingDown || slot.entry.desired_state !== "running") return;
+      if (!result.ok) {
+        slot.blocked = true;
+        slot.error = { code: result.code, message: result.message, at: Date.now(), retryable: false, stage: "preflight" };
+        return;
+      }
+      slot.blocked = false;
+      slot.error = undefined;
+      slot.child.spawn();
+    };
+    const pending = run().catch(() => {
+      if (this.children.get(slot.entry.id) !== slot || this.shuttingDown) return;
+      slot.blocked = true;
+      slot.error = { code: "preflight_failed", message: "Pi SDK resource discovery failed", at: Date.now(), retryable: false, stage: "preflight" };
+    });
+    let tracked: Promise<void>;
+    tracked = pending.finally(() => {
+      if (slot.preflight === tracked) slot.preflight = null;
+    });
+    slot.preflight = tracked;
+    return tracked;
+  }
+
+  private onRuntimeReady(id: string): void {
     const slot = this.children.get(id);
-    if (!slot) return;
+    if (!slot || this.shuttingDown || slot.entry.desired_state !== "running") return;
+    if (slot.stabilityTimer) clearTimeout(slot.stabilityTimer);
+    slot.stabilityTimer = setTimeout(() => {
+      slot.stabilityTimer = null;
+      if (this.children.get(id) === slot && slot.child.runtimeState === "ready" && !slot.blocked) slot.restartAttempt = 0;
+    }, RESTART_STABILITY_MS);
+    slot.stabilityTimer.unref();
+  }
 
-    if (!evt.isCrash) {
-      // Clean shutdown (e.g. via `stop_all`). Don't auto-restart.
+  private onRuntimeFailed(id: string, event: RuntimeFailedEvent): void {
+    const slot = this.children.get(id);
+    if (!slot || this.shuttingDown || slot.entry.desired_state === "stopped") return;
+    slot.error = { code: event.code, message: event.message, at: Date.now(), retryable: event.retryable, stage: event.stage ?? "runtime" };
+    if (!event.retryable) {
+      slot.blocked = true;
+      this.cancelRetry(slot);
+      this.cancelStabilityReset(slot);
+      void slot.child.stop();
       return;
     }
+    this.scheduleRetry(slot, "runtime failure");
+    void slot.child.stop();
+  }
 
-    if (evt.code === EXIT_DAEMON_FRESH_SESSION) {
-      // App-triggered daemon `/new`: this is an intentional recycle, not a
-      // crash. Restart immediately and don't burn the crash backoff budget.
+  private onChildExit(id: string, event: RpcChildExitEvent): void {
+    const slot = this.children.get(id);
+    if (!slot || this.shuttingDown || slot.entry.desired_state === "stopped" || slot.blocked) return;
+    this.cancelStabilityReset(slot);
+    if (event.code === EXIT_DAEMON_FRESH_SESSION) {
       slot.restartAttempt = 0;
       slot.child.noteRestart();
-      slot.child.spawn();
+      void this.preflightAndSpawn(slot);
       return;
     }
+    if (!event.isCrash) return;
+    slot.error ??= { code: "child_exited", message: `child exited (${String(event.code ?? event.signal)})`, at: Date.now(), retryable: true, stage: "process" };
+    this.scheduleRetry(slot, "child exit");
+  }
 
-    // Crash: schedule restart with backoff. After exhausting the schedule
-    // we give up and stay in `crashed`.
+  private scheduleRetry(slot: ChildSlot, _reason: string): void {
+    if (slot.restartTimer || slot.blocked || slot.entry.desired_state !== "running") return;
     if (slot.restartAttempt >= RESTART_BACKOFFS_MS.length) {
-      process.stderr.write(
-        `[remote-pi-supervisord] giving up restart for ${id} after ${slot.restartAttempt} attempts\n`,
-      );
+      slot.error = { code: "retry_exhausted", message: "transient restart budget exhausted", at: Date.now(), retryable: false, stage: "retry" };
       return;
     }
     const delay = RESTART_BACKOFFS_MS[slot.restartAttempt]!;
-    process.stderr.write(
-      `[remote-pi-supervisord] scheduling restart of ${id} in ${delay}ms (attempt ${slot.restartAttempt + 1})\n`,
-    );
+    slot.nextRetryAt = Date.now() + delay;
     slot.restartTimer = setTimeout(() => {
       slot.restartTimer = null;
+      slot.nextRetryAt = undefined;
+      if (this.shuttingDown || slot.blocked || slot.entry.desired_state !== "running") return;
       slot.restartAttempt += 1;
       slot.child.noteRestart();
-      slot.child.spawn();
+      void this.preflightAndSpawn(slot);
     }, delay);
+  }
+
+  private cancelRetry(slot: ChildSlot): void {
+    if (slot.restartTimer) clearTimeout(slot.restartTimer);
+    slot.restartTimer = null;
+    slot.nextRetryAt = undefined;
+  }
+
+  private cancelStabilityReset(slot: ChildSlot): void {
+    if (slot.stabilityTimer) clearTimeout(slot.stabilityTimer);
+    slot.stabilityTimer = null;
+  }
+
+  private async reconcileRegistryCwds(): Promise<void> {
+    if (this.reconcileRunning) return;
+    this.reconcileRunning = true;
+    try {
+      for (const entry of listDaemons()) {
+        const slot = this.children.get(entry.id);
+        if (existsSync(entry.cwd)) {
+          if (slot) slot.missingCwdObservations = 0;
+          continue;
+        }
+        if (!slot) {
+          removeDaemon(entry.id);
+          continue;
+        }
+        slot.missingCwdObservations += 1;
+        if (slot.missingCwdObservations < MISSING_CWD_CONFIRMATIONS || slot.reconcileInProgress) continue;
+        slot.reconcileInProgress = true;
+        this.cancelRetry(slot);
+        await slot.child.stop();
+        this.children.delete(entry.id);
+        removeDaemon(entry.id);
+      }
+    } finally {
+      this.reconcileRunning = false;
+    }
   }
 }
 
-/** Test helper: derive id from cwd without going through the registry. */
-export function _idForCwdForTest(cwd: string): string { return daemonIdForCwd(cwd); }
-
-/** Exported for the bin/supervisord entry + tests to know where the
- *  supervisor will bind. */
 export function getSupervisorSockPath(): string { return supervisorSockPath(); }

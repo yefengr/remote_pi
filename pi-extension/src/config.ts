@@ -10,7 +10,7 @@ const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
  * to ws(s):// happens at the transport layer (see `toWebSocketUrl`). The
  * community relay's reverse proxy maps `:443 → :3000` (the WS port), so the
  * URL has no explicit port and the WebSocket upgrade rides on the same TLS
- * connection as the HTTPS endpoints used by the mesh client.
+ * connection as the HTTPS endpoint used by the Relay client.
  */
 const kLegacyDefaultRelayUrl = "https://relay-rp1.jacobmoura.work";
 export const kDefaultRelayUrl = "https://relay-pi.yefengr.cn";
@@ -88,7 +88,7 @@ export function isWebSocketScheme(url: string): boolean {
 /**
  * Converts an http(s):// URL to the corresponding ws(s):// form. Used by
  * the transport layer right before opening the WebSocket — config storage
- * and the mesh HTTP client both stay on http(s)://.
+ * and the Relay client both stay on http(s)://.
  *
  *   https://host  → wss://host
  *   http://host   → ws://host

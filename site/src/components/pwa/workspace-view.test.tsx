@@ -1,43 +1,40 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { DesktopSidebar, displayPeer, EmptyWorkspace } from "./workspace-view";
+import { DesktopSidebar, displayDevice, EmptyWorkspace } from "./workspace-view";
 import { PwaUiProvider } from "./pwa-ui-provider";
-import type { PwaPeerRecord } from "@/lib/pwa/db";
+import type { PwaDeviceRecord } from "@/lib/pwa/db";
 
-function peer(overrides: Partial<PwaPeerRecord> = {}): PwaPeerRecord {
+function device(overrides: Partial<PwaDeviceRecord> = {}): PwaDeviceRecord {
   return {
-    id: "peer:main",
-    remoteEpk: "e5FRoCabBqVX",
-    sessionName: "XCrawl#2",
+    id: "device:main",
+    deviceId: "e5FRoCabBqVX",
     relayUrl: "https://relay.example.test",
     pairedAt: "2026-01-01T00:00:00.000Z",
-    roomId: "main",
     ...overrides,
   };
 }
 
 test("pairing display name prefers local nickname, then host, then stable key", () => {
-  assert.equal(displayPeer(peer({ nickname: "Office Mac", hostname: "office" })), "Office Mac");
-  assert.equal(displayPeer(peer({ hostname: "office" })), "Pi on office");
-  assert.equal(displayPeer(peer()), "Remote Pi · e5FRoCab");
-  assert.notEqual(displayPeer(peer()), "XCrawl#2");
+  assert.equal(displayDevice(device({ nickname: "Office Mac", hostname: "office" })), "Office Mac");
+  assert.equal(displayDevice(device({ hostname: "office" })), "Pi on office");
+  assert.equal(displayDevice(device()), "Remote Pi · e5FRoCab");
 });
 
 test("pairing card keeps current selection separate from online status", () => {
   const html = renderToStaticMarkup(
     <PwaUiProvider>
       <DesktopSidebar
-        peers={[peer({ nickname: "Office Mac" })]}
-        activePeerId="peer:main"
-        pairingPresence={{ "peer:main": { status: "offline", onlineSessions: 0, totalSessions: 1 } }}
+        devices={[device({ nickname: "Office Mac" })]}
+        activeDeviceId="device:main"
+        pairingPresence={{ "device:main": { status: "offline", onlineEndpoints: 0, totalEndpoints: 1 } }}
         onPair={() => {}}
         onSelect={() => {}}
         onRename={() => {}}
         onRemove={() => {}}
         onClearData={async () => {}}
       />
-    </PwaUiProvider>,
+    </PwaUiProvider>
   );
   const renameAction = html.match(/<button[^>]*aria-label="Rename Office Mac"[^>]*>/)?.[0] ?? "";
   const removeAction = html.match(/<button[^>]*aria-label="Remove Office Mac"[^>]*>/)?.[0] ?? "";
@@ -46,7 +43,7 @@ test("pairing card keeps current selection separate from online status", () => {
   assert.match(html, /OFFLINE/);
   assert.match(html, /CURRENT/);
   assert.match(html, /pwa-badge/);
-  assert.match(html, /Pairing records/);
+  assert.match(html, /Paired devices/);
   assert.match(renameAction, /pwa-icon-button/);
   assert.match(renameAction, /title="Rename pairing"/);
   assert.match(removeAction, /pwa-icon-button/);
@@ -59,8 +56,8 @@ test("pairing card keeps current selection separate from online status", () => {
 test("uses Mantine actions for pairing entry points", () => {
   const sidebarHtml = renderToStaticMarkup(
     <PwaUiProvider>
-      <DesktopSidebar peers={[]} activePeerId={null} onPair={() => {}} onSelect={() => {}} onRename={() => {}} onRemove={() => {}} onClearData={async () => {}} />
-    </PwaUiProvider>,
+      <DesktopSidebar devices={[]} activeDeviceId={null} onPair={() => {}} onSelect={() => {}} onRename={() => {}} onRemove={() => {}} onClearData={async () => {}} />
+    </PwaUiProvider>
   );
   const emptyWorkspaceHtml = renderToStaticMarkup(<PwaUiProvider><EmptyWorkspace onPair={() => {}} /></PwaUiProvider>);
   const roundAction = sidebarHtml.match(/<button[^>]*aria-label="Pair a Pi"[^>]*>/)?.[0] ?? "";

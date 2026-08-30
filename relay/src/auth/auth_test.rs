@@ -52,6 +52,23 @@ fn hello_rejects_malformed_or_wrong_length_keys() {
 
 /// Valid key pair but signature covers wrong bytes → InvalidSig.
 #[test]
+fn auth_rejects_unknown_fields() {
+    let (nonce, _) = gen_nonce();
+    let sk = SigningKey::generate(&mut rand::thread_rng());
+    let sig = sk.sign(&nonce);
+    let line = serde_json::json!({
+        "type": "auth",
+        "sig": B64.encode(sig.to_bytes()),
+        "extra": true,
+    })
+    .to_string();
+    assert!(matches!(
+        verify_auth(&nonce, &sk.verifying_key(), &line),
+        Err(AuthError::Json(_))
+    ));
+}
+
+#[test]
 fn sig_invalida() {
     let (nonce, _) = gen_nonce();
     let sk = SigningKey::generate(&mut rand::thread_rng());

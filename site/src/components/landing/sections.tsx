@@ -48,10 +48,10 @@ const PILLARS: Pillar[] = [
   },
   {
     icon: <IconMesh />,
-    tag: "03 / mesh",
-    title: "Every machine, one network.",
+    tag: "03 / endpoints",
+    title: "Every paired machine, clearly separated.",
     proof:
-      "Agents across PCs and servers join one mesh under a single key, reachable from your browser PWA.",
+      "Pair each computer independently, then choose its live Pi endpoints from the same browser PWA.",
     link: "See the protocol",
     href: PROTOCOL_URL,
   },

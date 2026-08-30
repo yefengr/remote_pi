@@ -18,7 +18,6 @@
 // pi-ask doesn't exist, so this bridge is strictly opt-in.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { PlainPeerChannel } from "./transport/peer_channel.js";
 import type {
   AskAnswerWire,
   AskEnrichmentWire,
@@ -27,8 +26,8 @@ import type {
   AskQuestionWireType,
   AskResponseEnrichmentWire,
   ExtensionUiResponseWire,
-  ServerMessage,
 } from "./protocol/types.js";
+import type { ServerFrame } from "./protocol/v2/index.js";
 
 const PI_ASK_STARTED = "@eko24ive/pi-ask:started";
 const PI_ASK_COMPLETED = "@eko24ive/pi-ask:completed";
@@ -65,7 +64,7 @@ export interface ExtensionUiBridge {
    * hole — the common real-world case is the agent asking while the PWA is
    * closed.
    */
-  pendingRequests(): ServerMessage[];
+  pendingRequests(): ServerFrame[];
   /** Drop all subscriptions + state (best-effort teardown). */
   dispose(): void;
 }
@@ -77,7 +76,7 @@ export interface ExtensionUiBridge {
  */
 export function createExtensionUiBridge(
   pi: ExtensionAPI,
-  broadcast: (msg: ServerMessage) => void,
+  broadcast: (msg: ServerFrame) => void,
 ): ExtensionUiBridge | null {
   const eventsRaw = (pi as { events?: EventBus }).events;
   if (
@@ -120,7 +119,9 @@ export function createExtensionUiBridge(
         // flow_id and pi-ask's flow may still be pending on the desktop);
         // degraded clients at least get closure.
         broadcast({
+          protocol_version: 2,
           type: "extension_ui_request",
+          target_channel_id: flowId,
           id: flowId,
           method: "notify",
           message:
@@ -156,7 +157,9 @@ export function createExtensionUiBridge(
     // whose id matches an open interactive request as "that flow resolved —
     // dismiss it". Covers the non-submitting owner in a multi-owner setup.
     broadcast({
+      protocol_version: 2,
       type: "extension_ui_request",
+      target_channel_id: flowId,
       id: flowId,
       method: "notify",
       message: "Clarification resolved.",
@@ -198,7 +201,9 @@ export function createExtensionUiBridge(
           : undefined;
     if (!flowId) return;
     broadcast({
+      protocol_version: 2,
       type: "extension_ui_request",
+      target_channel_id: flowId,
       id: flowId,
       method: "notify",
       message,
@@ -287,7 +292,7 @@ export function createExtensionUiBridge(
     // Insertion order = the order the flows opened, so a client replaying more
     // than one renders them oldest-first. pi-ask resolves one flow at a time in
     // practice, so this is a defensive detail rather than a live case.
-    pendingRequests: () => [...activeFlows.values()].map(requestForFlow),
+    pendingRequests: (): ServerFrame[] => [...activeFlows.values()].map(requestForFlow),
     dispose() {
       unsubStarted();
       unsubCompleted();
@@ -300,7 +305,7 @@ export function createExtensionUiBridge(
 }
 
 /** Build the single extension_ui_request that represents a whole ask flow. */
-function requestForFlow(flow: ActiveFlow): ServerMessage {
+function requestForFlow(flow: ActiveFlow): Extract<ServerFrame, { type: "extension_ui_request" }> {
   const first = flow.questions[0];
   const title = flow.title ?? first?.prompt ?? "Clarification";
   const options = first ? first.options.map((o) => o.label) : [];
@@ -315,7 +320,9 @@ function requestForFlow(flow: ActiveFlow): ServerMessage {
   // `input` — a strict client renders a text field instead of an empty select.
   if (options.length === 0) {
     return {
+      protocol_version: 2,
       type: "extension_ui_request",
+      target_channel_id: flow.flowId,
       // One request per flow → reuse the flowId as the correlation id. The
       // app's response carries the same id (and ask.flow_id) for routing.
       id: flow.flowId,
@@ -326,7 +333,9 @@ function requestForFlow(flow: ActiveFlow): ServerMessage {
     };
   }
   return {
+    protocol_version: 2,
     type: "extension_ui_request",
+    target_channel_id: flow.flowId,
     // One request per flow → reuse the flowId as the correlation id. The app's
     // response carries the same id (and ask.flow_id) so the bridge can route.
     id: flow.flowId,

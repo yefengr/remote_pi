@@ -5,7 +5,8 @@ import { ConfirmActionDialog, type ConfirmActionDialogAction } from "@/component
 import { SessionSheet } from "@/components/pwa/session-sheet";
 import { SettingsPanel } from "@/components/pwa/settings-panel";
 import { canCloseBackgroundOverlay, pickConfirmationFocusFallback } from "@/components/pwa/pwa-app";
-import type { PwaPeerRecord, PwaRoomRecord } from "@/lib/pwa/db";
+import { displayDevice } from "@/components/pwa/workspace-view";
+import type { PwaDeviceRecord, PwaEndpointRecord } from "@/lib/pwa/db";
 
 export function SettingsConfirmHarness() {
   const [settingsOpen, setSettingsOpen] = useState(true);
@@ -21,62 +22,57 @@ export function SettingsConfirmHarness() {
   const closeSettings = () => {
     if (canCloseBackgroundOverlay(confirmOpenRef.current, false)) setSettingsOpen(false);
   };
-  const closeConfirm = () => {
-    setConfirmAction(null);
-  };
-  const completeConfirmExit = () => {
-    confirmOpenRef.current = false;
-    setConfirmTransition("exited");
-  };
-
   return (
     <>
       <span data-testid="settings-confirm-transition" data-state={confirmTransition} hidden />
       {settingsOpen ? <SettingsPanel relayUrl="https://relay.example.test" defaultRelayUrl="https://relay.default.test" onSave={async () => {}} onClose={closeSettings} onClearData={async () => requestClear()} onResetLayout={() => {}} /> : null}
-      <ConfirmActionDialog action={confirmAction} pending={false} onConfirm={() => {}} onClose={closeConfirm} onExitTransitionEnd={completeConfirmExit} />
+      <ConfirmActionDialog
+        action={confirmAction}
+        pending={false}
+        onConfirm={() => {}}
+        onClose={() => setConfirmAction(null)}
+        onExitTransitionEnd={() => { confirmOpenRef.current = false; setConfirmTransition("exited"); }}
+      />
     </>
   );
 }
 
-const sessionPeer: PwaPeerRecord = {
-  id: "peer:main",
-  remoteEpk: "e5FRoCabBqVX",
-  sessionName: "XCrawl#2",
+const sessionDevice: PwaDeviceRecord = {
+  id: "device:office",
+  deviceId: "device-office-key",
   relayUrl: "https://relay.example.test",
   pairedAt: "2026-01-01T00:00:00.000Z",
-  roomId: "main",
+  hostname: "office",
 };
-const sessionRooms: PwaRoomRecord[] = [
-  { id: "peer:main", peerEpk: sessionPeer.remoteEpk, roomId: "main", cwd: "/work/remote-pi", online: true, updatedAt: 1 },
+const sessionEndpoints: PwaEndpointRecord[] = [
+  { id: "endpoint:daemon", deviceId: sessionDevice.deviceId, endpointId: "endpoint-daemon", runtimeInstanceId: "runtime-daemon", kind: "daemon", name: "Office daemon", cwd: "/work/remote-pi", online: true, updatedAt: 1 },
+  { id: "endpoint:interactive", deviceId: sessionDevice.deviceId, endpointId: "endpoint-interactive", runtimeInstanceId: "runtime-interactive", kind: "interactive", name: "Office interactive", cwd: "/work/remote-pi", online: false, updatedAt: 2 },
 ];
 
 export function SessionConfirmHarness() {
   const [sheetOpen, setSheetOpen] = useState(true);
-  const [peers, setPeers] = useState<PwaPeerRecord[]>([sessionPeer]);
+  const [devices, setDevices] = useState<PwaDeviceRecord[]>([sessionDevice]);
   const [confirmAction, setConfirmAction] = useState<ConfirmActionDialogAction | null>(null);
   const [confirmTransition, setConfirmTransition] = useState<"idle" | "opening" | "exited">("idle");
   const confirmOpenRef = useRef(false);
   const confirmFocusOriginRef = useRef<HTMLElement | null>(null);
   const confirmFallbackSelectors = [
-    'button[aria-label="Close sessions"]',
+    'button[aria-label="Close endpoints"]',
     ".pwa-session-sheet .pwa-sheet-peer-select",
-    'button[aria-label="Open session switcher"]',
+    'button[aria-label="Open endpoint switcher"]',
   ];
 
-  const requestRemove = (peer: PwaPeerRecord) => {
+  const requestRemove = (device: PwaDeviceRecord) => {
     confirmOpenRef.current = true;
     setConfirmTransition("opening");
     confirmFocusOriginRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setConfirmAction({ kind: "remove-pairing", label: `${peer.sessionName} / ${peer.roomId}` });
+    setConfirmAction({ kind: "remove-pairing", label: displayDevice(device) });
   };
   const closeSheet = () => {
     if (canCloseBackgroundOverlay(confirmOpenRef.current, false)) setSheetOpen(false);
   };
-  const closeConfirm = () => {
-    setConfirmAction(null);
-  };
   const confirmRemove = () => {
-    setPeers([]);
+    setDevices([]);
     setConfirmAction(null);
   };
   const restoreFocus = () => {
@@ -100,8 +96,8 @@ export function SessionConfirmHarness() {
   return (
     <>
       <span data-testid="session-confirm-transition" data-state={confirmTransition} hidden />
-      {sheetOpen ? <SessionSheet peers={peers} rooms={sessionRooms} activePeerId={sessionPeer.id} activeRoomId="main" onSelectPeer={() => {}} onSelectRoom={() => {}} onPair={() => {}} onRename={() => {}} onRemove={requestRemove} onClose={closeSheet} /> : null}
-      <ConfirmActionDialog action={confirmAction} pending={false} onConfirm={confirmRemove} onClose={closeConfirm} onExitTransitionEnd={restoreFocus} />
+      {sheetOpen ? <SessionSheet devices={devices} endpoints={sessionEndpoints} activeDeviceId={sessionDevice.id} activeEndpointId="endpoint-daemon" pairingPresence={{ [sessionDevice.id]: { status: "partial", onlineEndpoints: 1, totalEndpoints: 2 } }} onSelectDevice={() => {}} onSelectEndpoint={() => {}} onPair={() => {}} onRename={() => {}} onRemove={requestRemove} onClose={closeSheet} /> : null}
+      <ConfirmActionDialog action={confirmAction} pending={false} onConfirm={confirmRemove} onClose={() => setConfirmAction(null)} onExitTransitionEnd={restoreFocus} />
     </>
   );
 }

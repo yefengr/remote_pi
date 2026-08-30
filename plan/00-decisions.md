@@ -4,6 +4,10 @@ Este arquivo é um **registro** (não um plano executável). Lista decisões fec
 
 Numeração `00-` é proposital: este arquivo carrega antes dos planos numerados quando alguém faz `ls plan/`.
 
+## Override vigente — Plan 69
+
+A partir de 2026-08-29, [Plan 69](69-remove-agent-mesh-and-rework-daemon.md) substitui as decisões históricas abaixo sobre daemon residente, rooms, mesh local/cross-PC e Owner membership. A implementação vigente remove Agent Mesh completo, usa `device_id → endpoint_id → runtime_instance_id → session_id/history_generation`, faz pairing independente por computador e mantém apenas Relay endpoint discovery/routing entre Owner e Host. Não há migração de room/mesh/IndexedDB/protocolo antigo, nem fallback de compatibilidade. Este bloco é o índice da decisão atual; as entradas históricas permanecem para auditoria.
+
 ---
 
 ## Origin / posicionamento

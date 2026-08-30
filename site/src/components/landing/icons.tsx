@@ -67,7 +67,7 @@ export function IconAlwaysOn() {
   );
 }
 
-/* pillar 3 — one mesh: connected nodes */
+/* pillar 3 — paired endpoints */
 export function IconMesh() {
   return (
     <Ic>

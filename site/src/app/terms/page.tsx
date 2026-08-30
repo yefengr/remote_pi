@@ -72,9 +72,8 @@ export default function TermsPage() {
             Codex, or similar) from the paired browser PWA.
           </li>
           <li>
-            A local multi-agent messaging mesh on the Pi (UDS broker) that lets
-            multiple agents exchange messages while the browser PWA controls
-            their paired Pi sessions.
+            Multiple independent Pi endpoints on each paired computer, with
+            explicit daemon registration and browser-controlled sessions.
           </li>
           <li>
             An optional public relay service that forwards messages between the

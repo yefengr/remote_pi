@@ -34,9 +34,9 @@ const highlights = [
       "Open the browser PWA and pair once with a QR. Send prompts, switch models, start a fresh session, or compact context from any modern browser.",
   },
   {
-    title: "A mesh when you need it",
+    title: "Independent endpoints",
     description:
-      "Agents reach each other on one machine over a local socket, or across PCs through the relay. One Owner key, one mesh, no central server.",
+      "Pair each computer separately, then choose among its live Pi endpoints. Sessions stay isolated and route only between your browser and the selected Pi.",
   },
   {
     title: "Open source, self-hostable",

@@ -5,8 +5,7 @@
 <h1 align="center">Remote Pi</h1>
 
 <p align="center">
-  Control your <a href="https://github.com/earendil-works/pi">Pi coding agent</a> from a browser.
-  Open the Remote Pi PWA, pair with a one-time QR code, and chat with your local agent — even when you're away from your computer.
+  Control Pi coding-agent endpoints from a browser. Pair the PWA with a one-time QR code, choose an endpoint card, and keep working from anywhere.
 </p>
 
 ---
@@ -17,103 +16,93 @@
 - **Package documentation** — <https://pi.dev/packages/remote-pi?name=remote-pi>
 - **GitHub** — <https://github.com/jacobaraujo7/remote_pi>
 
-### Browser app
-
-Open the [Remote Pi PWA](https://remote-pi.jacobmoura.work/app) in a modern browser. It can be installed as a standalone app and keeps pairing records in the browser profile.
-
-## What's in this repo
+## What is in this repository
 
 | Package | Stack | Role |
 |---|---|---|
-| [`pi-extension/`](./pi-extension) | Node + TypeScript | Pi extension exposing `/remote-pi`, Daemon, and Agent Mesh |
-| [`relay/`](./relay) | Rust + Tokio | WebSocket routing, Rooms, and signed mesh membership storage |
-| [`site/`](./site) | NextJS | Landing page, docs, legal pages, and PWA |
+| [`pi-extension/`](./pi-extension) | Node + TypeScript | Pi extension, endpoint pairing, and daemon supervisor CLI |
+| [`relay/`](./relay) | Rust + Tokio | WebSocket relay with an in-memory endpoint registry |
+| [`site/`](./site) | NextJS | Landing pages, documentation, legal pages, and browser PWA |
 
 ## Architecture
 
-```
-Browser PWA ──wss──► Relay (Rust) ◄──wss── Pi extension (Node)
-                                              │                 │
-                                   Rooms + cross-PC mesh   Pi process
-                                                                │
-                                                         UDS broker
-                                                                │
-                                                        Other agents
+```text
+Browser PWA ──wss──► Relay ──wss──► Pi endpoint
+                                      │
+                                 Pi runtime/session
 ```
 
-- **Pairing** via short-lived QR code; the PWA stores its Owner identity and pairing records in the browser profile, while the extension persists host state in `~/.pi/remote/`
-- **Ed25519 authentication** — the Relay handshake proves possession of the connection key; PWA↔Pi pairing is enforced by the endpoints. For Pi↔Pi routing, the current Relay permits a route when a correctly signed Owner blob lists both Pi keys; that check does not prove the Owner paired with or controls either Pi
-- **TLS protects traffic in transit**, but current payloads are not E2E; see [`relay/README.md`](./relay/README.md) for the exact trust boundary
+Remote Pi identifies a reachable process as:
 
-## Local agent mesh
-
-When multiple Pi agents run on the same machine, they discover each other through
-a **Unix Domain Socket broker** managed by the extension. One agent wins the
-leader election and binds the socket; the others connect as clients. For targets
-on that same machine, agents use the opaque addresses returned by `list_peers` —
-no relay, no network, no extra config.
-
-Three LLM-facing tools are exposed in the Pi chat:
-
-- `list_peers` — lists local and cross-PC addresses available to the agent
-- `agent_send` — sends a unicast message and waits for a delivery ACK. Compatible ACK values are `received`, `busy`, `denied`, and `timeout`; current brokers return `received`, `denied`, or `timeout`, while `busy` only indicates a dropped message from an old broker leader that must be restarted before resending. Broadcast is `sent` with no ACK. Asynchronous content replies use `re`
-- `agent_request` — request/response with timeout, available only as deprecated legacy behavior
-
-This lets you set up local multi-agent workflows (e.g. a `backend` agent asks a
-`frontend` agent for help) entirely on your machine, in parallel with PWA remote
-control.
-
-## Relay
-
-A free community relay is available at:
-
-```
-wss://relay-rp1.jacobmoura.work
+```text
+device → endpoint → runtime → session / history generation
 ```
 
-It's enough to get started, but the relay operator can see the content of your
-messages and is a single point of trust for routing. **For sensitive work, we
-strongly recommend running your own relay** — it's a single Docker command and
-the only thing your traffic ever touches is your own infrastructure.
+- A **device** is one computer identity.
+- An **endpoint** is a stable interactive or daemon target on that device. The same working directory may have multiple endpoints.
+- A **runtime** is one process instance. Restarting a daemon preserves its endpoint and creates a new runtime.
+- A browser card selects an endpoint; its timeline is scoped to its session and history generation. Remote Pi does not provide a historical Pi-session browser or a resume list.
 
-Full security trade-offs and the self-hosting guide live in
-**[`relay/README.md`](./relay/README.md)**.
+The Relay authenticates connections and keeps its endpoint registry only in memory. It forwards opaque `ct` payloads and enforces the device ACL supplied by pairing; it does not persist message traffic or endpoint records. TLS protects the transport. Run a relay you trust for sensitive work; see [`relay/README.md`](./relay/README.md).
+
+## Pairing and browser control
+
+Open the [Remote Pi PWA](https://remote-pi.jacobmoura.work/app) in a modern browser. It can be installed as a standalone app and keeps local workspace data in that browser profile.
+
+Pair each computer separately:
+
+1. Install the extension in a project where Pi runs.
+2. Run `/remote-pi`, then `/remote-pi pair`.
+3. Scan the endpoint- and runtime-aware QR with the PWA.
+
+The PWA can hold multiple device records and multiple endpoint cards per device. Use `/remote-pi devices` to inspect local pairings and `/remote-pi revoke <shortid>` to revoke one device pairing on that computer.
 
 ## Getting started
-
-Install the Pi extension in any project where Pi runs:
 
 ```bash
 pi install npm:@yefengr/remote-pi
 ```
 
-Then in the Pi chat, run:
+Then, in Pi:
 
-```
+```text
 /remote-pi
+/remote-pi pair
 ```
 
-The setup wizard walks you through agent name, session name, and relay choice,
-then prints a QR code. Open the [Remote Pi PWA](https://remote-pi.jacobmoura.work/app),
-scan it, and you're paired.
+The first command creates the local endpoint configuration and connects it to the configured Relay. The second prints a one-time pairing QR. Open the PWA, scan it, select the new endpoint card, and send a prompt.
 
-### Recommended companion: `@eko24ive/pi-ask`
+The browser can also request compact context, create a new session, change model, and change thinking level. Pi settings remain the source of truth for extension loading and model configuration.
+
+### Optional companion: `@eko24ive/pi-ask`
 
 ```bash
 pi install npm:@eko24ive/pi-ask
 ```
 
-With pi-ask installed, the agent's `ask_user` clarification prompts (structured
-questions with options, multi-select, and previews) render in the PWA — answer
-from your browser and the flow resolves on the desktop. Without it, the agent
-simply asks in plain chat text (also answerable from the browser, just
-unstructured). Remote Pi works either way; pi-ask is optional.
+With pi-ask installed, structured `ask_user` prompts render in the PWA. Without it, ordinary text prompts continue to work.
+
+## Daemon mode
+
+Daemon mode is an explicit opt-in. Install the supervisor once per computer, then register only folders that should be managed:
+
+```bash
+npm install -g @yefengr/remote-pi
+remote-pi install
+remote-pi create ~/Projects/backend
+remote-pi daemon status
+```
+
+The registry is version 2 and persists each daemon's desired state (`running` or `stopped`). On startup the supervisor restores only registrations whose desired state is `running`; stopped registrations stay stopped. A missing working directory is reconciled as stale rather than spawned.
+
+Status reports registration, desired lifecycle, OS process, runtime readiness, Relay state, and derived health separately. A Relay reconnect makes an otherwise ready daemon degraded; it does not restart Pi. Deterministic configuration or startup failures are shown as blocked errors instead of being retried forever.
+
+Use `remote-pi remove-cwd <cwd>` for idempotent cwd-based unregistration, including external worktree cleanup integrations. See [`pi-extension/docs/daemon.md`](./pi-extension/docs/daemon.md) for operations and troubleshooting.
 
 ## Status
 
-The MVP is functional. Planning notes and roadmap live in [`plan/`](./plan).
+The project is actively evolving. Current architecture plans live in [`plan/`](./plan).
 
 ## License
 
-License is per-package — see each subproject's `LICENSE` file (the `pi-extension`
-is MIT). A repository-wide license decision is pending.
+License is per package — see each subproject's `LICENSE` file. The pi-extension is MIT.

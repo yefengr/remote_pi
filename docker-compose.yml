@@ -10,11 +10,7 @@ services:
 
     environment:
       REMOTEPI_RELAY_PORT: "3000"
-      REMOTEPI_MESH_DB_PATH: /data/mesh.db
       RUST_LOG: info
-
-    volumes:
-      - remote-pi-data:/data
 
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/health"]
@@ -67,6 +63,3 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 3
-
-volumes:
-  remote-pi-data:

@@ -1,34 +1,53 @@
-/**
- * CLI ↔ supervisor IPC contract for `~/.pi/remote/supervisor.sock`.
- *
- * Framing: one JSON object per line, newline-terminated. The CLI sends a
- * single `ControlRequest`, the supervisor sends a single `ControlReply`,
- * both close the connection. No multiplexing, no streaming — each command
- * is a short round-trip.
- *
- * Plan/26 W2. The Pi RPC protocol (`pi --mode rpc`) used by the daemon
- * children themselves is a separate contract — see
- * `node_modules/@earendil-works/pi-coding-agent/dist/modes/rpc/rpc-types.d.ts`.
- * This file is strictly the supervisor's own control plane.
- */
-
 import type { CronJob } from "./cron_registry.js";
 import type { CronLogEntry } from "./cron_log.js";
 
-/** Per-daemon runtime state observable through the supervisor. */
-export type DaemonState = "running" | "stopped" | "starting" | "crashed";
+/** Legacy CLI summary; new callers should use the orthogonal fields on DaemonInfo. */
+export type DaemonState = "stopped" | "starting" | "running" | "crashed" | "blocked";
+export type RegistrationState = "registered" | "missing";
+export type DesiredState = "running" | "stopped";
+export type ProcessState = "absent" | "spawning" | "running" | "exited";
+export type RuntimeState = "pending" | "ready" | "failed";
+export type RelayState = "disconnected" | "connecting" | "connected" | "reconnecting";
+export type HealthState = "stopped" | "starting" | "healthy" | "degraded" | "failed" | "blocked";
 
+/**
+ * Status output keeps registration, desired lifecycle, OS process, RPC runtime,
+ * relay connectivity and derived health separate. `id` / `state` are retained
+ * only for the current CLI consumers while they are migrated.
+ */
 export interface DaemonInfo {
-  id: string;            // sha256(cwd)[0..8] — see daemon/id.ts
-  cwd: string;           // absolute realpath
-  name: string;          // from <cwd>/.pi/remote-pi/config.json agent_name
+  daemon_id: string;
+  /** Compatibility alias for daemon_id. */
+  id: string;
+  endpoint_id: string;
+  runtime_instance_id?: string;
+  registration: RegistrationState;
+  desired: DesiredState;
+  process: ProcessState;
+  runtime: RuntimeState;
+  relay: RelayState;
+  health: HealthState;
+  /** Compatibility summary; never use it to infer health. */
   state: DaemonState;
-  pid?: number;          // current process pid, when running
-  uptime_s?: number;     // since last successful spawn, when running
-  restart_count?: number;
+  cwd: string;
+  name: string;
+  kind: "daemon";
+  pid?: number;
+  started_at?: number;
+  uptime?: number;
+  /** Compatibility alias for uptime (seconds). */
+  uptime_s?: number;
+  restart_count: number;
+  startup_stage: string;
+  last_error_code?: string;
+  last_error_message?: string;
+  last_error_at?: number;
+  retrying: boolean;
+  next_retry_at?: number;
+  /** Compatibility alias for relay. */
+  relay_state: RelayState;
 }
 
-/** Requests sent CLI → supervisor. */
 export type ControlRequest =
   | { op: "list" }
   | { op: "status" }
@@ -41,36 +60,31 @@ export type ControlRequest =
   | { op: "send"; id: string; text: string }
   | { op: "register"; cwd: string }
   | { op: "unregister"; id: string }
-  // ── cron (plan/39) ──
-  | { op: "cron_add"; daemon_id: string; schedule: string; prompt: string; tz?: string; skip_if_busy?: boolean; wake?: boolean; catchup?: boolean }
+  | { op: "unregister_cwd"; cwd: string }
+  | { op: "cron_add"; daemon_id: string; schedule: string; prompt: string; tz?: string; skip_if_busy?: boolean; catchup?: boolean }
   | { op: "cron_list" }
   | { op: "cron_remove"; job_id: string }
   | { op: "cron_enable"; job_id: string; enabled: boolean }
   | { op: "cron_run"; job_id: string }
   | { op: "cron_log"; job_id?: string; tail?: number };
 
-/** Replies sent supervisor → CLI. Tagged by `ok` boolean. */
 export type ControlReply<T = unknown> =
   | { ok: true; data?: T }
   | { ok: false; error: string };
 
-/**
- * Response shapes per op. Keep in sync with the supervisor handlers in
- * `daemon/supervisor.ts`. Used for typed client calls.
- */
 export interface ControlReplyShapes {
   list: { daemons: DaemonInfo[] };
   status: { daemons: DaemonInfo[] };
   start_all: { started: string[]; already_running: string[] };
-  start: { id: string; state: DaemonState; started: boolean };
+  start: { id: string; state: DaemonState; started: boolean; desired_state: DesiredState };
   stop_all: { stopped: string[]; already_stopped: string[] };
-  stop: { id: string; state: DaemonState; stopped: boolean };
+  stop: { id: string; state: DaemonState; stopped: boolean; desired_state: DesiredState };
   restart_all: { restarted: string[] };
-  restart: { id: string; state: DaemonState; restarted: boolean };
-  send: { id: string; delivered: boolean };
-  register: { id: string; cwd: string };
+  restart: { id: string; state: DaemonState; restarted: boolean; desired_state: DesiredState };
+  send: { id: string; accepted: boolean; delivered: boolean; code?: string; error?: string };
+  register: { id: string; cwd: string; name: string; desired_state: DesiredState };
   unregister: { removed: boolean; cwd?: string };
-  // ── cron (plan/39) ──
+  unregister_cwd: { removed: boolean; cwd?: string };
   cron_add: { job: CronJobView };
   cron_list: { jobs: CronJobView[] };
   cron_remove: { removed: boolean };
@@ -79,14 +93,9 @@ export interface ControlReplyShapes {
   cron_log: { entries: CronLogEntry[] };
 }
 
-/** A cron job plus its computed `next_run` (ISO), for `cron list`. */
 export type CronJobView = CronJob & { next_run?: string | null };
-
-/** Convenience for typed `Client.request<...>("op")` calls. */
 export type ControlReplyFor<Op extends ControlRequest["op"]> =
   Op extends keyof ControlReplyShapes ? ControlReplyShapes[Op] : never;
-
-// ── Serialization helpers ────────────────────────────────────────────────────
 
 const TRAILING_NEWLINE = "\n";
 
@@ -98,36 +107,27 @@ export function encodeReply<T>(reply: ControlReply<T>): string {
   return JSON.stringify(reply) + TRAILING_NEWLINE;
 }
 
-/**
- * Parses a single JSON line into a request. Throws on malformed input —
- * the supervisor catches and replies `{ok:false, error}` so the client
- * gets a clean error rather than an unframed disconnect.
- */
 export function parseRequest(line: string): ControlRequest {
   let obj: unknown;
   try { obj = JSON.parse(line); }
-  catch (e) { throw new Error(`malformed control request: ${(e as Error).message}`); }
-  if (!obj || typeof obj !== "object") {
+  catch (error) { throw new Error(`malformed control request: ${(error as Error).message}`); }
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) {
     throw new Error("control request must be a JSON object");
   }
-  const op = (obj as { op?: unknown }).op;
-  if (typeof op !== "string") {
+  if (typeof (obj as { op?: unknown }).op !== "string") {
     throw new Error("control request missing string `op` field");
   }
-  // We don't validate every field shape here — supervisor handlers do it
-  // per-op since the error messages are more specific that way.
   return obj as ControlRequest;
 }
 
 export function parseReply(line: string): ControlReply<unknown> {
   let obj: unknown;
   try { obj = JSON.parse(line); }
-  catch (e) { throw new Error(`malformed control reply: ${(e as Error).message}`); }
-  if (!obj || typeof obj !== "object") {
+  catch (error) { throw new Error(`malformed control reply: ${(error as Error).message}`); }
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) {
     throw new Error("control reply must be a JSON object");
   }
-  const ok = (obj as { ok?: unknown }).ok;
-  if (typeof ok !== "boolean") {
+  if (typeof (obj as { ok?: unknown }).ok !== "boolean") {
     throw new Error("control reply missing boolean `ok` field");
   }
   return obj as ControlReply<unknown>;

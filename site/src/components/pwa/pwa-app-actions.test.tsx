@@ -8,7 +8,7 @@ function renderActions(unreadOutput = 3): string {
   return renderToStaticMarkup(
     <PwaUiProvider>
       <div className="pwa-root">
-        <SessionSwitcherTrigger label="Session: Office Pi / main" expanded onOpen={() => {}} />
+        <SessionSwitcherTrigger label="Endpoint: Office Pi / interactive" expanded onOpen={() => {}} />
         <DesktopTopbarActions onRefresh={() => {}} onToggleSettings={() => {}} />
         <PwaMessageActions show showRetry showLatest unreadOutput={unreadOutput} onRetry={() => {}} onLatest={() => {}} />
         <PwaStatusToast message="Relay is not connected." onDismiss={() => {}} />
@@ -17,16 +17,16 @@ function renderActions(unreadOutput = 3): string {
   );
 }
 
-test("renders Mantine actions with the preserved session, desktop, message, and toast semantics", () => {
+test("renders Mantine actions with the preserved endpoint, desktop, message, and toast semantics", () => {
   const html = renderActions();
 
   assert.match(html, /pwa-button/);
   assert.match(html, /pwa-icon-button/);
   assert.match(html, /class="[^"]*pwa-session-trigger[^"]*"/);
-  assert.match(html, /aria-label="Open session switcher"/);
+  assert.match(html, /aria-label="Open endpoint switcher"/);
   assert.match(html, /aria-haspopup="dialog"/);
   assert.match(html, /aria-expanded="true"/);
-  assert.match(html, /Session: Office Pi \/ main/);
+  assert.match(html, /Endpoint: Office Pi \/ interactive/);
   assert.match(html, /aria-label="Refresh app"/);
   assert.match(html, /title="Refresh app"/);
   assert.match(html, /aria-label="Open settings"/);

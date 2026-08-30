@@ -12,7 +12,7 @@ import {
 
 const GITHUB_URL = "https://github.com/jacobaraujo7/remote_pi";
 
-/* ---------- living mesh background ---------- */
+/* ---------- connected endpoint background ---------- */
 function HeroMesh() {
   // node positions in a 1000x700 viewBox
   const nodes = [
@@ -73,12 +73,12 @@ type ChatItem =
   | { type: "md"; text: string };
 
 const CHAT_ITEMS: ChatItem[] = [
-  { type: "user", text: "hello" },
-  { type: "tool", kind: "READ", cmd: "$ path=~/.pi/skills/agent-network/SKILL.md" },
-  { type: "tool", kind: "BASH", cmd: '$ find ~/.pi -name "pair*" -o -name "join*" | head -20' },
+  { type: "user", text: "check the current endpoint" },
+  { type: "tool", kind: "READ", cmd: "$ path=src/app/page.tsx" },
+  { type: "tool", kind: "BASH", cmd: "$ pnpm test:legacy" },
   {
     type: "md",
-    text: "This is a Pi Agent Network pairing code. `Frontend` is asking to connect to this machine — processing the link now.",
+    text: "The `Frontend` endpoint is healthy. Its tests pass and the browser timeline is synchronized.",
   },
 ];
 
@@ -183,7 +183,7 @@ function PwaHero() {
   return (
     <div className="phone-stage">
       <div className="float-chip c1">
-        <span className="led" /> 4 agents · 1 mesh
+        <span className="led" /> 4 endpoints · 2 devices
       </div>
       <div className="float-chip c3">
         <span className="led" /> daemon · answers at 3am
@@ -251,8 +251,8 @@ export function Hero() {
               in your <span className="pocket">pocket.</span>
             </h1>
             <p className="hero-sub">
-              Open the browser PWA and pair it once — then drive any agent, keep
-              a fleet running 24/7, and link every machine into one mesh.
+              Open the browser PWA, pair each computer once, then drive any
+              endpoint and keep selected folders running 24/7.
             </p>
             <div className="hero-cta">
               <a className="btn btn-primary" href="#install">

@@ -76,7 +76,7 @@ export default function OpengraphImage() {
               lineHeight: 1.4,
             }}
           >
-            Browser PWA · always-on 24/7 · one mesh, any machine
+            Browser PWA · always-on 24/7 · any paired machine
           </div>
         </div>
       </div>

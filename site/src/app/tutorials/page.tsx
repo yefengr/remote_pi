@@ -1,76 +1,39 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { IconArrow, IconStar } from "@/components/landing/icons";
+import { IconArrow } from "@/components/landing/icons";
 import { RevealController } from "@/components/landing/reveal-controller";
 
 export const metadata: Metadata = {
   title: "Tutorials",
-  description:
-    "Hands-on guides for Remote Pi: get started with the browser PWA, run a local mesh, route across PCs, and keep an agent alive 24/7.",
+  description: "Hands-on guides for pairing the Remote Pi browser PWA and running managed Pi endpoints.",
 };
 
-type Step = {
-  n?: string;
-  star?: boolean;
-  tag: string;
-  title: string;
-  href: string;
-  desc: string;
-};
+type Step = { n: string; tag: string; title: string; href: string; desc: string };
 
 const STEPS: Step[] = [
   {
     n: "1",
-    tag: "01 / 04",
+    tag: "01 / 02",
     title: "Getting started",
     href: "/tutorials/getting-started",
-    desc: "Install Remote Pi, open the browser PWA, pair it, and drive your first agent.",
+    desc: "Install Remote Pi, pair the browser PWA with an endpoint, and send your first prompt.",
   },
   {
     n: "2",
-    tag: "02 / 04",
-    title: "Local mesh",
-    href: "/tutorials/mesh-local",
-    desc: "Let two agents on the same machine discover each other and trade messages.",
-  },
-  {
-    n: "3",
-    tag: "03 / 04",
-    title: "Remote mesh",
-    href: "/tutorials/mesh-remote",
-    desc: "Route messages between agents on different PCs through the relay.",
-  },
-  {
-    n: "4",
-    tag: "04 / 04",
+    tag: "02 / 02",
     title: "Daemon mode",
     href: "/tutorials/daemon",
-    desc: "Keep an agent alive 24/7 with the supervisor, then manage the fleet.",
+    desc: "Opt into the supervisor, manage desired lifecycle, and audit scheduled prompts.",
   },
 ];
 
-const EXTRAS: Step[] = [
-  {
-    star: true,
-    tag: "extra",
-    title: "Claude in the mesh",
-    href: "/tutorials/claude-mesh",
-    desc: "Put Claude Code on the agent mesh next to Pi — advanced, terminal-only (not in the browser PWA yet).",
-  },
-];
-
-function StepCard({ s }: { s: Step }) {
+function StepCard({ step }: { step: Step }) {
   return (
-    <Link className="step-card reveal" href={s.href}>
-      <div className="sc-top">
-        <span className="sc-num">{s.star ? <IconStar /> : s.n}</span>
-        <span className="sc-tag">{s.tag}</span>
-      </div>
-      <h3>{s.title}</h3>
-      <p>{s.desc}</p>
-      <span className="sc-link">
-        Open tutorial <IconArrow />
-      </span>
+    <Link className="step-card reveal" href={step.href}>
+      <div className="sc-top"><span className="sc-num">{step.n}</span><span className="sc-tag">{step.tag}</span></div>
+      <h3>{step.title}</h3>
+      <p>{step.desc}</p>
+      <span className="sc-link">Open tutorial <IconArrow /></span>
     </Link>
   );
 }
@@ -84,25 +47,11 @@ export default function TutorialsIndexPage() {
             <span className="eyebrow">Tutorials</span>
             <h1>Learn Remote Pi by doing.</h1>
             <p className="lede">
-              Four hands-on guides, in order. Start with the app, then add
-              agents, cross-PC routing, and a 24/7 supervisor as you need them.
-              For the <em>why</em> behind it,{" "}
-              <Link href="/why">read Why Pi</Link>; for exact flags and config,
-              the <Link href="/docs">reference docs</Link>.
+              Start by pairing a browser with a Pi endpoint. Add the explicit supervisor opt-in only when an endpoint should outlive its terminal. For command details and configuration, read the <Link href="/docs">reference docs</Link>.
             </p>
           </header>
-
           <div className="card-list">
-            {STEPS.map((s) => (
-              <StepCard key={s.href} s={s} />
-            ))}
-          </div>
-
-          <div className="group-label reveal">Extras</div>
-          <div className="card-list">
-            {EXTRAS.map((s) => (
-              <StepCard key={s.href} s={s} />
-            ))}
+            {STEPS.map((step) => <StepCard key={step.href} step={step} />)}
           </div>
         </div>
       </div>

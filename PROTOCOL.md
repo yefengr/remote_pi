@@ -1,510 +1,232 @@
 # Remote Pi — Protocol & Security
 
-Documentação canônica do protocolo Remote Pi e do modelo de proteção.
-Atualizada em 2026-08-25.
+本文描述 Remote Pi 当前生产协议、身份模型和安全边界。Protocol v2 是 Relay、Pi Extension 与 Browser/PWA 的唯一受支持协议；没有 v1 fallback、旧 room 路由、Agent Mesh、Pi-to-Pi 转发、membership storage 或旧本地数据迁移。
 
-> **Protocol v2 是当前唯一 App↔Extension inner 协议。** 所有 inner frame 必须携带 `protocol_version: 2`；缺失、v1、未知版本、未完成 `session_hello` 的业务帧均拒绝。禁止 v1 fallback、双读双写和自动降级。Relay 继续只解析 outer envelope，保持 inner payload 透明。
->
-> 阶段 1 的隔离 schema 与严格 codec 位于：
-> - Extension：`pi-extension/src/protocol/v2/`
-> - Site：`site/src/lib/remote-pi/protocol-v2/`
->
-> 当前生产路由仍处于 v1 代码基线；阶段 2-4 会在同一协议切换窗口接入 v2，期间不得把旧生产类型当作 v2 兼容层。
+跨端 strict schema 真源：
 
----
+- [`.orchestration/contracts/protocol.md`](.orchestration/contracts/protocol.md)
+- [`.orchestration/contracts/pairing.md`](.orchestration/contracts/pairing.md)
+- [`.orchestration/contracts/fixtures/v2/manifest.json`](.orchestration/contracts/fixtures/v2/manifest.json)
 
-## Protocol v2 — 当前真源
+历史 `plan/` 文档只用于审计过去决策，不是当前协议真源。
 
-### Inner frame 规则
-
-- JSON UTF-8 inner frame 最大 `2 MiB`；未完成逻辑窗口最大 `32 MiB`；单 fragment 解码后最大 `50 KiB`。
-- ID 最大 256 字符；普通字符串最大 1 MiB；数组最大 4096 项；时间戳必须是非负有限数。
-- 所有对象 strict，拒绝未知字段；`JsonValue` 只允许可递归 JSON 值。
-- `TimelineEvent` 同时用于实时正式事件与历史 `session_history_chunk.events`，不允许 `unknown` payload 或半成品事件。
-- `timeline_partial` 只用于实时可变状态，采用扁平形状，绝不进入 marker、SessionManager 或 Dexie。
-- 正式 user event 满足 `event_id === message_id`；tool 的 `complete/error/interrupted` 字段互斥；image 的 `data` 与 `omitted` 字段互斥。
-
-### 路由类别
-
-- PWA request：`protocol_version`、`channel_id`、`history_generation`。
-- Extension direct response：`protocol_version`、`target_channel_id`；ready 后业务响应另带 `session_id`、`history_generation`。
-- Owner broadcast：`protocol_version`、`session_id`、`history_generation`，禁止 `target_channel_id`。
-- 每次 Relay 连接生成临时 `channel_id`；`channel_id`、`client_request_id`、`sender_ref` 不进入 marker 或正式历史。
-- pairing 阶段使用 `pair_request/pair_ok/pair_error`；ready 前的唯一业务握手是 `session_hello`，成功后才允许 ready 业务帧。
-
-### 当前 v2 帧目录
-
-PWA → Extension：`pair_request`、`session_hello`、`user_message`、`user_message_observed`、`session_sync`、`queued_message_set`、`queued_message_clear`、`approve_tool`、`cancel`、`ping`、`session_new`、`session_compact`、`model_set`、`thinking_set`、`list_models`、`extension_ui_response`。
-
-Extension → PWA：`pair_ok`、`pair_error`、`session_ready`、`user_message_started`、`user_message_status`、`timeline_event`、`timeline_partial`、`timeline_event_fragment`、`session_history_chunk`、`protocol_error`、`reset`、`pong`、`cancelled`、`action_ok`、`action_error`、`models_list`、`queued_message_state`、`extension_ui_request`、`bye`。
-
-`approve_tool` 暂保留为严格 v2 输入帧，以便现有入口在正式切换时明确拒绝/忽略策略；它不重新启用生产 approval gate。
-
----
-
-## v1 历史基线（不再是当前生产协议）
-
-以下章节记录旧版 Relay、配对和 inner frame 形状，供迁移审计使用；不得据此实现新的 v2 consumer。所有涉及“无版本字段”、旧 `session_history`、旧 `id` 复用、旧 queue 语义或 v1 inner frame 的描述均是历史基线。
-
-## Visão de 30 segundos
-
-- **Mesh de agentes coding** rodando em múltiplos PCs do mesmo usuário
-- **Cada PC** roda o `pi-extension` (Node.js daemon) com **uma Pi-key** Ed25519 no Keychain do sistema (macOS/Linux/Windows)
-- **Browser PWA** é o **autenticador inicial** (estilo WhatsApp Web QR) — depois do pareamento, PCs operam autonomamente entre si
-- **Owner-key** Ed25519 vive no IndexedDB do perfil do navegador; cada perfil mantém sua própria identidade e pareamentos
-- **Relay** WebSocket roteia e armazena/verifica `mesh_versions` assinadas pelo Owner; autoriza co-membership direta
-- **Cross-PC routing** por Pi-key canônica no Relay; a Extension `0.6` mantém por uma release o prefixo wire legado para interoperar com Extensions antigas, sem substituir aliases receiver-local públicos
-
----
-
-## Identidades
-
-| Chave | Algoritmo | Onde mora | Quem cria | Quem usa |
-|---|---|---|---|---|
-| **Owner-key** | Ed25519 | IndexedDB do perfil do navegador | Browser PWA no 1º boot | Assina `mesh_versions`, prova autoridade pra parear/revogar PCs |
-| **Pi-key** | Ed25519 | `@napi-rs/keyring` no PC (Keychain macOS / libsecret Linux / Credential Manager Windows). Fallback `~/.pi/remote/identity.json` (`0600`) com warning em sistemas headless | pi-extension no 1º boot | Autentica a conexão WS no relay e fornece a identidade técnica canônica usada no `from_pc` autenticado e no roteamento por `to_pc`; não assina envelopes cross-PC individuais |
-
-**Identidade técnica** de cada Pi/PC é a chave pública Ed25519 bruta de 32 bytes. Nas fronteiras do protocolo, Pi-key e Owner-key usam Base64 RFC 4648 padrão **com padding** como representação canônica; entradas URL-safe ou sem padding podem ser aceitas apenas para normalização. Nicknames e aliases locais efetivos nunca substituem essa identidade técnica.
-
-**Constraint fixada**: "1 Pi-key por PC; troca de hardware = re-pareamento". Não há migração de Pi-key entre máquinas. Cada perfil de navegador possui sua própria Owner-key e pode parear novamente outros PCs.
-
----
-
-## Camadas do protocolo
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  Agent layer       Pi coding agent (futuro: Claude Code, OpenCode)  │
-├─────────────────────────────────────────────────────────────────────┤
-│  Envelope          {from, to, id, re, body}  — JSONL 5 campos       │
-├─────────────────────────────────────────────────────────────────────┤
-│  Routing           Local UDS broker  /  Cross-PC via relay forward  │
-│                    Público [<alias-local-do-receptor>:]<cwd>@<agent>│
-│                    Local <cwd>@<agent>; `broker` reservado          │
-├─────────────────────────────────────────────────────────────────────┤
-│  ACK protocol      received | busy | denied | timeout               │
-│                    Broker/BrokerRemote gera ACK sem LLM             │
-├─────────────────────────────────────────────────────────────────────┤
-│  Transport         UDS (local)  /  WebSocket sobre TLS (relay)      │
-├─────────────────────────────────────────────────────────────────────┤
-│  Trust             Ed25519 challenge-response                       │
-│                    Owner-sig em mesh_versions                       │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Envelope
-
-Formato único pra todo o sistema. Funciona local (UDS) e cross-PC (relay forward).
+## 1. 系统边界
 
 ```text
-{
-  "from": "<sender-name>",
-  "to": "<recipient-name>" | ["<r1>", "<r2>"] | "broadcast",
-  "id": "<UUID v7 normal gerado pela Extension>",
-  "re": "<id-of-message-being-replied-to>" | null,
-  "body": <any JSON>
-}
+Browser/PWA Owner ── WebSocket/TLS ── Relay ── WebSocket/TLS ── Pi Extension endpoint
+                                                                    │
+                                                               Pi runtime/session
 ```
 
-Naming:
-- **Local**: `<cwd>@<agent>`; `broker` é um endereço local reservado.
-- **Endereço público**: `[<alias-local-do-receptor>:]<cwd>@<agent>`; o alias é apresentação/roteamento local ao receptor, não identidade estável nem alegação do remetente.
-- Cada byte UTF-8 fora de `[A-Za-z0-9._-]` no nickname vira `%HH` literal em maiúsculas. Assim `:`, `%`, `~`, espaços, controles e Unicode nunca aparecem crus; `~<prefixo-base64url-da-chave>` é reservado para resolver colisões.
-- Para cada chave canônica, coletam-se candidatos de nickname não vazios das contribuições Owner diretas e escolhe-se o menor já codificado em ASCII; em empate, vence o menor UTF-8 bruto. Ausente/vazio usa `pc-<prefixo-base64url-da-chave-canônica>` com prefixo inicial de 8 caracteres. Reservam-se todas as bases e, em colisões, cada candidato recebe `~<prefixo-da-chave-base64url>`, expandido adaptativamente dos 8 caracteres até a chave completa de 43 caracteres para não colidir; assim chave→alias e alias→chave são bijetivos.
-- Ao enviar, um alias remoto conhecido vence primeiro. A exceção é um endereço Windows de drive absoluto (`C:\...@agent`) exatamente registrado, que permanece local; outros endereços locais exatos são fallback quando não resolvem para alias remoto. O alias remoto resolve para a Pi-key canônica e o `to_pc` canônico é o alvo técnico.
-- Durante a compatibilidade de uma release da Extension `0.6`, o prefixo cross-PC no wire é o nickname assinado bruto selecionado deterministicamente ou, sem nickname, os primeiros 8 caracteres da Pi-key canônica Base64 padrão com padding. Esse label legado nunca vira identidade, autorização ou endereço público.
-- Ao receber pelo relay, o broker renderiza `envelope.from` com seu próprio alias local para `from_pc` e remove apenas o prefixo de apresentação/compatibilidade de destino: o relay já entregou ao PC autenticado selecionado por `to_pc`. ACKs retornam ao `from` wire exato recebido.
+- **Browser/PWA** 保存 Owner identity、每台电脑的 pairing、endpoint metadata 和 timeline。
+- **Relay** 验证连接身份，在内存中维护 endpoint registry 与当前 ACL，并转发 opaque `ct`。
+- **Pi Extension** 保存 Host identity 与本机 Owner ACL，提供 pairing、Protocol v2 session channel 和 daemon runtime signals。
+- **Daemon supervisor** 管理显式注册的 Pi child，不属于 Relay，也不接受 Cron 绕过生命周期门禁。
 
-UUID v7 garante ordenação temporal sem coordenação para envelopes normais gerados pela Extension.
+Endpoint 之间不能发现或互发消息。一个 Owner 可以独立配对多台电脑，并在同一 PWA 中选择各设备的多个 endpoint。
 
----
+## 2. 身份与生命周期
 
-## ACK protocol
-
-Em unicast, cada chamada de `agent_send` aguarda um ACK rápido (default 5s) gerado pelo `Broker` local ou pelo `BrokerRemote` receptor após a entrega — não pelo LLM. Custo: microsegundos local, milissegundos cross-PC. Os resultados públicos atuais de unicast são `received | denied | timeout`; broadcast é enviado como `sent`, sem ACK.
-
-| Status compatível de ACK | Significado |
-|---|---|
-| `received` | Peer online aceitou/recebeu a mensagem, inclusive durante um turn; ela será processada no turno atual ou seguinte. |
-| `busy` | Compatibilidade defensiva com um broker líder antigo: a mensagem foi descartada. Não é comportamento atual; reinicie/substitua o líder antigo antes de reenviar. |
-| `denied` | Peer recusou; abandona. |
-| `timeout` | ACK não chegou em 5s; silêncio genuíno não tem reason. |
-
-Os motivos fechados do relay são `offline`, `not_authorized` e `bad_envelope`: `offline → timeout`; `not_authorized | bad_envelope → denied`. O resultado carrega reason/error explícito (`transport_error: <reason>`) quando o relay confiável o informou.
-
-**Reply de conteúdo** é assíncrona: peer responde com **outro send normal** carregando `re: <send-id-original>`. Sender vê a reply na inbox no próximo turn. `agent_request` continua disponível apenas como comportamento legado/deprecado; o fluxo preferido é `agent_send` + reply assíncrona.
-
----
-
-## Cross-PC routing
-
-Hoje cross-PC é mediado pelo relay (não P2P direto — fica pra futuro).
-
-A Extension `0.6` inclui por uma release um label wire legado para a janela
-mixed-version. Nova↔antiga funciona quando os dois lados selecionam o mesmo
-nickname assinado, único e sem `:`, ou quando nenhum tem nickname e ambos usam o
-prefixo de 8 caracteres da chave Base64 padrão canônica. Nicknames com delimitador
-ou colisão e visões divergentes de nickname não são cobertos; o receptor antigo
-pode descartá-los silenciosamente. Por isso todos os participantes Extension/MCP
-devem ser atualizados na mesma janela de manutenção, não gradualmente.
-
-### Frame wire WS (Pi-A → Relay)
-
-```jsonc
-{
-  "type": "pi_envelope",
-  "to_pc": "<Pi-B-key Base64 RFC 4648 padrão com padding>",
-  "envelope": {
-    "from": "<label-wire-legado-de-A>:/Users/alice/projeto@frontend",
-    "to": "<label-wire-legado-de-B>:/home/bob/projeto@backend",
-    // demais campos do envelope
-  }
-}
+```text
+device_id
+  └─ endpoint_id
+       ├─ runtime_instance_id
+       └─ session_id + history_generation
 ```
 
-### Frame entregue pelo relay (Relay → Pi-B)
-
-```jsonc
-{
-  "type": "pi_envelope_in",
-  "from_pc": "<Pi-A-key canônica Base64 RFC 4648 padrão com padding, autenticada>",
-  "envelope": { /* envelope encaminhado */ }
-}
-```
-
-### Autorização e anti-spoof
-
-Antes de consultar presença do destino, o Relay permite `A → B` somente se encontrar **um** blob corretamente assinado por um Owner que liste diretamente ambas as Pi-keys. Essa checagem valida assinatura e conteúdo, mas não prova que o Owner pareou ou controla qualquer Pi. Não há fechamento transitivo: `{A,B}` e `{B,C}` não autoriza `A → C`. Um membro malformado invalida toda a contribuição daquele Owner. O cache por remetente é limitado a 1.024 entradas; grants positivos expiram em até 60 segundos e misses negativos em 1 segundo.
-
-No receptor, `from_pc` canônico e autenticado é a única identidade técnica: ele deve pertencer ao snapshot de irmãos diretos, ou o frame é rejeitado. O receptor substitui o prefixo de `envelope.from` pelo seu alias local para essa chave e remove só o prefixo de apresentação/compatibilidade de `envelope.to`, pois `to_pc` já selecionou o destino técnico. Texto de nickname/prefixo enviado pelo remetente nunca é identidade nem regra anti-spoof.
-
-### Erros de transporte com proveniência confiável
-
-O relay envia erros como o seguinte `pi_envelope_in` reservado:
-
-```jsonc
-{
-  "type": "pi_envelope_in",
-  "from_pc": "_relay",
-  "envelope": {
-    "from": "_relay",
-    "to": "<endereço original não vazio ou _unknown>",
-    "id": "<UUID válido para o parser da Extension; atualmente UUIDv4>",
-    "re": "<UUID original válido ou null>",
-    "body": {
-      "type": "transport_error",
-      "reason": "offline | not_authorized | bad_envelope"
-    }
-  }
-}
-```
-
-Somente esse outer autenticado, com essa gramática interna exata, reason fechado e correlação UUID válida, pode virar localmente `from: "broker"` e liquidar uma operação pendente. Um erro confiável é consumido internamente no máximo uma vez. Frames outer privilegiados `_relay` malformados são descartados. Já conteúdo com forma `transport_error` de um peer comum — inclusive texto `_relay` — continua conteúdo comum de inbox/handler, mas nunca liquida pending maps nem ganha proveniência `broker`.
-
-### Compatibilidade e rollout
-
-Implante o Relay `0.3` primeiro: uma Extension antiga pode consumir os erros UUID do Relay novo. Depois coordene a atualização para Extension `0.6` e minimize o período com Extensions antigas e novas, pois a interoperabilidade de wire labels mistos fora dos casos limitados descritos acima permanece adiada. A Extension `0.6` aceita o ID legado lowercase de 32 hex apenas no caminho autenticado e fechado de erro `_relay`, para Relay antigo ou rollback do Relay; esse shim não é o motivo de Relay-first ser seguro. Envelopes comuns continuam exigindo UUID.
-
----
-
-## Mesh membership
-
-`mesh_versions` é o "cartório" assinado pelo Owner.
-
-### Estrutura
-
-Blob canônico decodificado e assinado pelo Owner:
-
-```json
-{
-  "version": 7,
-  "issued_at": 1780000000000,
-  "owner_pk": "<Owner-key Base64 padrão com padding, 32B>",
-  "members": [
-    { "remote_epk": "<Pi-key Base64 padrão com padding, 32B>", "relay_url": "wss://...", "paired_at": "2026-05-22T...", "nickname": "casa" },
-    { "remote_epk": "<Pi-key Base64 padrão com padding, 32B>", "relay_url": "wss://...", "paired_at": "2026-05-23T...", "nickname": null }
-  ]
-}
-```
-
-O envelope wire/storage carrega esse JSON canônico como `blob` Base64 e sua assinatura Ed25519 como `sig` Base64:
-
-```json
-{
-  "blob": "<Base64 padrão do JSON canônico acima>",
-  "sig": "<Base64 padrão da assinatura Ed25519 do blob por owner_sk>"
-}
-```
-
-`nickname` pode faltar, ser `null` ou string. Apenas contribuições Owner válidas que contêm diretamente a Pi local podem adicionar irmãos; histórico, transitividade e nickname não concedem confiança.
-
-### Storage
-
-Relay armazena o blob inteiro em SQLite, indexado por `owner_pk_hash`: SHA-256 em hexadecimal minúsculo dos 32 bytes brutos decodificados da Owner-key.
-
-- **POST /mesh/<hash>**: cliente publica nova versão (relay verifica assinatura + version monotônica)
-- **GET /mesh/<hash>**: cliente lê última versão; valida assinatura localmente
-
-LWW (last-write-wins) em conflito concorrente. Anti-rollback via version monotônica.
-
-### Self-revoke
-
-Pi-extension faz polling periódico. Se sua Pi-pubkey saiu de `members`, faz self-revoke (sai do mesh) graciosamente.
-
-Detalhes em `plan/24-mesh-membership.md`.
-
----
-
-## PWA actions
-
-Vocabulário curado de ações tipadas que o browser PWA invoca sobre a sessão do Pi pareado. **Não é** um picker genérico de slash commands — cada ação tem payload estruturado e mapeia pra uma API pública do SDK. Pi-extension lida; PWA não parseia nada.
-
-| Action | ClientMessage | SDK call no pi-extension |
+| 字段 | 含义 | 生命周期 |
 |---|---|---|
-| Compact context | `session_compact` | `ctx.compact()` |
-| New session | `session_new` | `ctx.newSession()` |
-| Set model | `model_set {provider, model_id}` | `ModelRegistry.find(...)` + `pi.setModel(model)` |
-| Set thinking | `thinking_set {level}` | `pi.setThinkingLevel(level)` |
-| List models | `list_models` | `ModelRegistry.getAvailable()` |
+| `owner_id` | PWA Owner 的 canonical Ed25519 公钥 | 当前浏览器 identity 存在期间稳定 |
+| `device_id` | Host 电脑的 canonical Ed25519 公钥 | 当前 Host identity 存在期间稳定 |
+| `endpoint_id` | 一个可路由 Pi 入口的 opaque UUID | daemon 跨 child 重启稳定；interactive Pi 每个进程生成 |
+| `runtime_instance_id` | endpoint 当前 OS 进程实例 UUID | 每次 spawn 生成 |
+| `session_id` | Pi SessionManager 会话 | `/new`、恢复或分支替换时可变化 |
+| `history_generation` | 当前权威时间线代次 | session/branch 变化时更新 |
+| `channel_id` | Owner 进入 endpoint 后的临时响应通道 | 当前实时 binding |
 
-### Wire — exemplos
+`cwd`、名称、PID、model、thinking 和 working 都是 metadata，不是身份。同一 cwd 可以有多个 endpoint。`/new` 不创建新 endpoint 或 runtime，只更新 session/generation。
 
-```json
-// Request
-{ "type": "session_compact", "id": "<uuid>" }
+持久 timeline key 是：
 
-// Success reply
-{ "type": "action_ok", "in_reply_to": "<uuid>", "action": "session_compact" }
-
-// Failure reply
-{ "type": "action_error", "in_reply_to": "<uuid>", "action": "session_compact",
-  "error": "compact unavailable (no active session ctx)" }
+```text
+device_id + endpoint_id + session_id + history_generation
 ```
 
-```json
-// Model list request → reply
-{ "type": "list_models", "id": "<uuid>" }
-{
-  "type": "models_list",
-  "in_reply_to": "<uuid>",
-  "models": [
-    { "id": "claude-opus-4-7", "name": "Claude Opus 4.7", "provider": "anthropic",
-      "reasoning": true, "context_window": 200000 }
-  ],
-  "current": { "id": "claude-opus-4-7", "name": "Claude Opus 4.7", "...": "..." }
-}
-```
+`runtime_instance_id` 只用于实时 stale gate，不进入持久 timeline key。Remote Pi 当前不提供历史 Pi session 列表、远程 resume 或历史会话切换。
 
-### Thinking levels (enum fixo)
+## 3. Relay outer protocol
 
-```
-"off" | "minimal" | "low" | "medium" | "high" | "xhigh"
-```
+所有连接先发送 role-aware `hello`，再完成 Ed25519 challenge-response。Host hello 包含 device、endpoint、runtime、metadata 和 `authorized_owner_ids`；Owner hello 只包含 Owner 公钥。认证身份必须等于 hello 中的 canonical 公钥。
 
-`"xhigh"` só é honrado em famílias de modelo específicas (Anthropic 4.x reasoning, OpenAI o-series). Pi cai pra um nível vizinho quando não suporta — sem erro.
-
-### Side-effects
-
-Os replies (`action_ok` / `models_list`) só confirmam dispatch. Efeitos visíveis chegam pelos canais normais:
-- Compact concluído → `agent_chunk`/`agent_done` no chat
-- Modelo trocado → evento `model_select` broadcast pra todos os owners conectados
-- Nova sessão → `pair_ok` (ou equivalente) com novo `session_started_at`
-
-### Por que ações tipadas em vez de picker genérico
-
-O SDK `@mariozechner/pi-coding-agent` não expõe API genérica de invocação dos slash commands builtin (`/compact`, `/model`, `/fork`, `/copy`, etc.) — apenas alguns têm equivalente em `ExtensionContextActions`. Tentar espelhar o picker do TUI exigiria mirror manual da lista builtin + matriz de invocabilidade + UX de chip canonizado, com vários comandos sendo só hint informativo. Vocabulário tipado é mais simples, mais honesto, e cobre 100% das ações que fazem sentido no browser. Padrão validado pelo adapter `pi-telegram` (mesmo abordagem: vocabulário curado, sem picker genérico).
-
-Detalhes em `plan/28-pi-commands.md`.
-
----
-
-## Imagens (plan/30)
-
-`user_message` aceita um anexo de imagem inline (uma por mensagem hoje),
-opcional e retrocompatível — mensagem só-texto não muda no fio. A primeira versão
-PWA também usa o mesmo caminho para imagens que aguardam a fila do Pi.
-
-### Wire
-ClientMessage `user_message` ganha `images?`:
+业务 outer frame：
 
 ```jsonc
-{ "type": "user_message", "id": "msg-1", "text": "o que é isto?",
-  "images": [{ "data": "<base64>", "mime": "image/jpeg" }] }
-```
-
-`WireImage = { data: string /* base64 */, mime: string }`. O echo ServerMessage
-`user_message` (broadcast a todos os owners) também carrega `images`, pra cada
-device renderizar o mesmo balão.
-
-### Mapeamento pro modelo
-O Pi monta o content multimodal do SDK na ordem **imagem(ns) → texto**:
-`[{ type:"image", data, mimeType: mime }, { type:"text", text }]` →
-`sendUserMessage(content)`. `mime` (wire) vira `mimeType` (SDK). Sem `images` →
-`sendUserMessage(text)` (string), idêntico ao anterior.
-
-### Capacidade do modelo
-`WireModel` (em `models_list` / `current`) ganha `vision: boolean`, derivado de
-`Model.input.includes("image")`. O PWA desabilita o anexo quando o modelo ativo
-tem `vision:false`.
-
-### Transporte
-A imagem vai **inline** na `user_message` (base64), dentro do `ct` atual: no caminho PWA↔Pi ele pode ser encaminhado sem parse, mas é Base64 de JSON em claro, não ciphertext/E2E, e o operador do relay pode lê-lo. Custo: double-base64 (~+77%),
-aceito nesta fatia por usar imagem comprimida com orçamento dinâmico dentro do
-limite de frame `2 MiB`. Histórico/`session_sync` trafega os bytes (decisão #8).
-Canal binário e fragmentação de upload ficam para uma trilha futura.
-
----
-
-## Mensagem enfileirada durante turn ativo
-
-Fila curta **Pi-side, em memória**, de propriedade do PWA: enquanto há turn
-ativo, o browser pode guardar próximos prompts textuais de follow-up. A
-Pi-extension drena um item quando o turn atual acaba. Não é fila offline do
-relay; restart perde o estado.
-
-### Wire
-
-```jsonc
-// PWA → Pi-extension
-{ "type": "queued_message_set", "id": "msg-2", "text": "próximo prompt", "images": [{ "data": "<base64>", "mime": "image/jpeg" }] }
-{ "type": "queued_message_clear", "id": "clear-1", "target_id": "msg-2" }
-{ "type": "queued_message_clear", "id": "clear-all" }
-
-// Pi-extension → PWA(s), legacy envelope
 {
-  "type": "queued_message_state",
-  "id": "msg-2",
-  "text": "próximo prompt",
-  "items": [
-    { "id": "msg-2", "text": "próximo prompt", "images": [{ "data": "<base64>", "mime": "image/jpeg" }], "sender_ref": "owner", "editable": true, "created_at": 1782250000000 }
-  ]
-}
-// Protocol v2 state is chunked; every frame is <= 2 MiB.
-{
-  "protocol_version": 2,
-  "type": "queued_message_state",
-  "session_id": "S1", "history_generation": "G1",
-  "snapshot_id": "SNAP1", "chunk_index": 0, "final": true,
-  "items": [{ "id": "msg-2", "text": "próximo prompt", "images": [{ "data": "<base64>", "mime": "image/jpeg" }], "sender_ref": "owner", "editable": true, "created_at": 1782250000000 }]
+  "type": "route",
+  "purpose": "pairing | session",
+  "device_id": "<device_id>",
+  "endpoint_id": "<UUID>",
+  "runtime_instance_id": "<UUID>",
+  "target_owner_id": "<Host→Owner 必填>",
+  "source_owner_id": "<Relay 注入到 Owner→Host>",
+  "ct": "<opaque string>"
 }
 ```
 
-### Semântica
+方向规则：
 
-- `queued_message_set`: cria/substitui uma pendência PWA-owned. `id` vira o
-  id do `user_message` drenado; a pendência pode carregar uma imagem.
-- `queued_message_clear.target_id`: cancela um item. Sem `target_id`, cancela
-  todos os itens PWA-owned (compat com o antigo clear de slot único).
-- Enquanto o Pi está ocupado, cada mudança broadcasta o estado para todos os
-  owners conectados. No Protocol v2, `queued_message_state` usa
-  `snapshot_id`/`chunk_index`/`final`; uma fila grande pode ocupar vários frames,
-  todos abaixo do limite de `2 MiB`.
-- Se `queued_message_set` chega quando o Pi já está idle, a extensão drena
-  imediatamente como `user_message` normal e broadcasta estado vazio, para não
-  deixar item preso esperando um turn futuro.
-- Drain: quando `currentTurnId == null`, `working != true` e não há compaction
-  ativa, remove um item, broadcasta `queued_message_state`, faz handoff para o
-  SDK, e só então ecoa `user_message` normal para todos os owners.
-- `session_sync`: o estado atual da fila é enviado quando o canal v2 é
-  estabelecido, antes do histórico.
-- `images` são preservadas no `user_message`, no estado da fila e no histórico;
-  a UI do PWA limita a uma imagem por mensagem.
-- Filas internas do Pi/TUI não são expostas/editáveis neste MVP: a extension API
-  não fornece ids estáveis nem mutação segura dessa fila.
-- Relay inalterado; não há E2E e o operador do relay pode ler o conteúdo atual.
+- Owner→Host 禁止携带 `target_owner_id` 或 `source_owner_id`；Relay 鉴权后注入可信 `source_owner_id`。
+- Host→Owner 必须携带 `target_owner_id`，禁止携带 `source_owner_id`。
+- `purpose=pairing` 仅允许 `pair_request/pair_ok/pair_error`。
+- 其他 Protocol v2 frame 只能使用 `purpose=session`，并且必须命中 Host 当前 ACL。
+- Relay 不解析、解码、记录或持久化 `ct`。
+- 相同 `(device_id, endpoint_id)` 只有一个权威 runtime；新 runtime 原子接管后，旧连接和迟到 route 都 stale。
 
----
+Owner 使用 `subscribe_endpoints` 订阅已配对 device。Relay 以 `endpoints`、`endpoint_announced`、`endpoint_updated`、`endpoint_ended` 返回当前可见 endpoint。Host 用 `endpoint_update` 更新 metadata 与 `authorized_owner_ids`。
 
-## Pareamento
+## 4. Pairing 与撤销
 
-QR code mostra Pi-pubkey + room hint + token de uso único.
+QR：
 
-1. PWA escaneia QR, conecta no relay como peer do perfil do navegador
-2. PWA envia `pair_request` autenticado com a **Owner-key** (prova autoridade)
-3. Pi-extension valida a sessão autenticada e adiciona o Owner na sua `peers.json` local
-4. PWA adiciona Pi-pubkey no seu `mesh_versions` local + publica versão nova no relay
-5. Pi-extension passa a aceitar mensagens daquele Owner
+```text
+remotepi://pair?t=<token>&epk=<device_id>&n=<display_name>&ep=<endpoint_id>&rt=<runtime_instance_id>
+```
 
-Múltiplos Owners podem parear o mesmo PC (concomitância — `peers.json` aceita N entries).
+`ep` 和 `rt` 必填。未配对 Owner 不依赖 ACL 受限的 endpoint discovery，而是直接向 QR 指定的 endpoint/runtime 发送 `purpose=pairing` route。Relay 注入的 `source_owner_id` 是 Extension 唯一可信的待配对 Owner 身份。
 
-Detalhes em `plan/04-pairing.md`.
+Pairing token 是短期、单次使用 token。成功后 Extension：
 
----
+1. 将 Owner 写入本机 `~/.pi/remote/peers.json`；
+2. 发送 `endpoint_update.authorized_owner_ids`；
+3. 返回 `pair_ok`；
+4. PWA 保存 device-scoped pairing，再订阅该 device 的 endpoint。
 
-## Modelo de proteção (Trust Model)
+每台电脑独立 pairing 和 revoke。撤销一个 device 上的 Owner 后，Extension 删除本地 ACL、关闭对应 binding、更新 Relay ACL；其他电脑上的 pairing 不受影响。没有跨设备 membership 传播。
 
-### O que está protegido
+完整规则见 [pairing contract](.orchestration/contracts/pairing.md)。
 
-- **Pareamento autenticado**: pair_request assinado pela Owner-sk; spoofing requer Owner-sk
-- **WS pro relay sobre TLS**: ninguém na rota (ISP, NAT, MITM clássico) vê o tráfego em claro
-- **Cross-PC checagem assinada**: o Relay só encaminha quando encontra um blob corretamente assinado que liste diretamente ambas as Pi-keys, sem transitividade. Isso não prova pareamento ou controle pelo Owner
-- **Anti-spoof entre Pis**: broker aceita somente `from_pc` canônico autenticado que exista entre irmãos diretos e renderiza seu alias local
-- **Anti-rollback de membership em processo**: versão monotônica + assinatura rejeita regressão durante a vida da instância. O floor da Extension reinicia com o processo; `issued_at` é informativo e memberships não expiram. Persistência anti-rollback entre reinícios não é implementada
-- **Pi-secret protegida**: Keychain do sistema (macOS Keychain / libsecret Linux desktop / Credential Manager Windows). Atacante precisa contexto do user logado E unlock do Keychain
-- **Owner-secret protegida**: seed permanece no IndexedDB do perfil do navegador; limpar os dados do site remove a identidade e exige novo pareamento
+## 5. Protocol v2 inner frames
 
-### O que NÃO está protegido (declarado honestamente)
+所有 inner frame 都是 strict JSON object，必须携带：
 
-- **Relay vê plaintext do conteúdo atual**. TLS protege o trânsito, mas PWA↔Pi usa `ct` como Base64 de JSON em claro (pode ser encaminhado sem parse, não é ciphertext), e conteúdo Pi↔Pi, controle/routing/erros e membership assinada são parseados em memória pelo relay conforme necessário. Operador vê quem manda para quem e o conteúdo. Mitigação: **self-hosting** do relay (open source)
-- **Não há E2E** entre PWA e pi-extension nem entre Pis cross-PC. **Não afirmamos E2E em copy nenhuma do produto**
-- **Headless Linux** (Docker, VPS sem D-Bus session): Pi-key cai pra arquivo `0600` em disco com warning loud. Atacante com acesso ao user pode ler. Recomenda-se GNOME Keyring / KWallet pra hardening real
-- **Backup encriptado completo** (Time Machine, iCloud Drive criptografado etc) pode carregar a Keychain. Atacante precisa do user passphrase do backup
-- **Clone detection ainda não implementado**: 2 PCs com mesma Pi-key (via cópia de arquivo headless ou comprometimento) podem coexistir no relay sem alerta. Em roadmap (plan/27 Wave E3)
+```json
+{ "protocol_version": 2, "type": "..." }
+```
 
-### Threat model resumido
+缺少版本、未知版本、未知字段、错误方向、错误 route purpose 或 ready 前发送业务 frame 都 fail closed。配对后，PWA 必须先发送 `session_hello`；收到 `session_ready` 后才能发送 ready-only 业务 frame。
 
-| Adversário | Capacidade | Protegido? |
-|---|---|---|
-| Network passive | Sniff TLS | ✅ Sim (cipher TLS) |
-| Network active (MITM) | Sniff + inject | ✅ Sim (TLS + Ed25519 pairing) |
-| Operador do relay público | Lê tudo que passa, persiste | ⚠️ Parcial (mitigação: self-host) |
-| Outro user no PC do alvo | Lê filesystem do alvo | ✅ Sim (Keychain user-bound) |
-| Atacante com root no PC do alvo | Memory dump, processo injection | ❌ Não (modelo de threat aceitável: root = jogo perdido) |
-| Atacante com backup do disco | Restaura disco em outro Mac | ✅ Sim em macOS com FileVault on (recomendado) |
-| Atacante que rouba só `peers.json` | Vê metadata pública (Owner-pubkeys + nicks) | Privacy issue, não impersonation |
+主要边界：
 
----
+- 单 frame JSON UTF-8 最大 `2 MiB`；单 history chunk 最大 `512 KiB`。
+- 单 fragment 解码后最大 `50 KiB`；未完成逻辑窗口最大 `32 MiB`。
+- ID 最大 256 字符；普通字符串最大 `1 MiB`；数组最大 4096 项。
+- `TimelineEvent` 同时用于实时正式事件与历史事件。
+- `timeline_partial` 只用于实时可变状态，不进入 marker、SessionManager 或 IndexedDB。
+- `runtime_instance_id` 只参与实时 route stale gate；timeline 由 session/generation 定位。
 
-## Failure modes
+PWA→Extension frame 包括 pairing、session hello/sync、prompt、queue、cancel、typed actions、model/thinking、ping 和 Extension UI response。Extension→PWA frame 包括 pairing result、session ready、timeline/history、queue state、typed action result、model list、pong、reset、protocol error、Extension UI request 和 bye。精确字段及错误码以 strict contract/fixtures 为准。
 
-| Falha | Comportamento |
+### Timeline 与图片
+
+- 正式 user event 满足 `event_id === message_id`。
+- tool 的 `complete/error/interrupted` 状态互斥。
+- image 的 inline `data` 与 `omitted=true` 互斥。
+- 图片作为受尺寸限制的 Base64 inline block 进入 Protocol v2 frame；没有独立对象存储或 binary upload channel。
+- PWA-owned follow-up queue 位于 Pi Extension 进程内存；Relay 不提供 offline queue，进程重启会丢失未发送 queue state。
+
+### Typed actions
+
+PWA 只调用冻结的 typed action：`session_new`、`session_compact`、`model_set`、`thinking_set`、`list_models` 和 `cancel`。它不是任意 slash-command 执行器。Action response 只确认 dispatch；正式可见结果继续通过 timeline/session frame 同步。
+
+## 6. Daemon lifecycle contract
+
+Daemon registry v2 位于 `~/.pi/remote/daemons.json`。每条记录包含稳定 UUID `endpoint_id`、canonical cwd、名称、`desired_state` 和创建时间。旧或错误 schema 会报错，不会静默覆盖。
+
+状态维度互相独立：
+
+| 维度 | 示例 |
 |---|---|
-| Relay desconecta | pi-extension reconnect com backoff; agentes locais continuam falando entre si via UDS broker |
-| Pi-B offline durante envio cross-PC | Sender recebe `timeout` com `transport_error: offline` imediatamente. Sem queue offline no relay |
-| Nenhum blob corretamente assinado lista Pi-A e Pi-B diretamente | Sender recebe `denied` com `transport_error: not_authorized`; a checagem ocorre antes de presença |
-| Owner revoga Pi-A da mesh | Pi-A detecta na próxima poll de mesh_versions, faz self-revoke, sai gracefully |
-| WS Pi reconecta frequente (NAT timeout) | Relay dedupa peer_online emit (transição offline→online apenas); cliente dedupa snapshots idênticos |
-| Relay crash | Tudo cross-PC para; agentes locais continuam funcionando (UDS) |
+| registration | `registered | missing` |
+| desired | `running | stopped` |
+| process | `absent | spawning | running | exited` |
+| runtime | `pending | ready | failed` |
+| relay | `disconnected | reconnecting | connected` |
+| health | `stopped | starting | healthy | degraded | failed | blocked` |
 
----
+健康不能由 PID 或 child 存活推导。Runtime ready 必须同时满足：
 
-## Roadmap arquitetural (público)
+1. Pi RPC `get_state` 成功；
+2. Extension 发出结构化 `runtime-ready`；
+3. `control_protocol_version == 2`；
+4. Extension 上报 endpoint/runtime 与 supervisor 注入值一致。
 
-Curto prazo:
-- Wave E2: `chmod 0o600` em `peers.json` + atomic write
-- Wave E3: detecção de clone server-side (alerta quando 2 WS mesma Pi-pubkey de IPs diferentes)
+Supervisor 在 spawn 前使用 Pi SDK resource discovery 做 preflight。Remote Pi Extension 缺失、重复，或 Pi extension/settings diagnostics 为确定性错误时进入 `blocked`，不 spawn child，也不解析 stderr 猜测原因。身份、协议、Extension readiness 和 runtime identity 的确定性错误同样进入 `blocked`。
 
-Médio prazo:
-- **Wrappers de harness** (`remote-pi claude`, `remote-pi opencode`): outros agentes coding plugam no broker UDS local via wrapper, ganham mesh sem reimplementar protocolo
-- E2E cifragem do payload (Curve25519 + ChaCha20-Poly1305 entre PWA ↔ Pi; opcional cross-PC)
+Relay 断线只使 endpoint `degraded/reconnecting`；Extension 后台重连，不通过重启 Pi 修复网络。Transient process/runtime failure 使用有限 restart budget。
 
-Longo prazo:
-- PC-to-PC direto via WebRTC/QUIC (relay vira fallback)
-- HW-bound Pi-key opcional via Secure Enclave (Apple Silicon) / TPM (Linux/Windows)
+`start/stop` 持久化 `desired_state`；Supervisor 只恢复 `desired_state=running`。不存在的 cwd 会被运行期 reconcile 注销。`unregister_cwd`/`daemon remove-cwd` 是幂等删除入口。
 
----
+Cron 不拥有 daemon 生命周期。它只能在 `desired=running`、runtime ready 且 health 允许时发送，否则记录 skip；没有 `wake`、`wake_and_send` 或 `--wake`。
 
-## Implementações de referência
+## 7. 存储与隐私
 
-- **Relay** (Rust, axum): [`relay/src/`](relay/src/)
-- **Pi-extension** (Node/TS): [`pi-extension/src/`](pi-extension/src/)
-- **Browser PWA** (Next/TS): [`site/src/app/app/`](site/src/app/app/)
-- **Planos arquiteturais**: [`plan/`](plan/) (especialmente `plan/03-protocol.md`, `plan/23-owner-key-sync.md`, `plan/24-mesh-membership.md`, `plan/25-pc-mesh-bootstrap.md`)
+### Pi Extension / Host
 
----
+- Host Ed25519 key 优先存入平台 keyring。
+- Headless/degraded fallback 是 `~/.pi/remote/identity.json`，目录权限 `0700`、文件权限 `0600`。
+- 如果已有 pairing 但原 identity 不可读，Extension 不得静默生成新 identity；应进入确定性 blocked failure。
+- `peers.json` 保存当前设备的 Owner public key、显示名和 paired time。
+- `daemons.json`、Cron registry/log 和 Pi session 文件属于本机状态。
 
-## Reportar problemas de segurança
+### Browser/PWA
 
-[Definir canal] — por enquanto, abra issue marcando como `security` ou contate maintainers diretamente.
+IndexedDB 保存 Owner private identity、device pairing、endpoint metadata 和 timeline。清理浏览器站点数据会删除 Owner identity 和本地 timeline，需要重新 pairing。PWA 不持久化 runtime presence，runtime 只来自当前 Relay session。
+
+### Relay
+
+Relay 当前没有数据库或持久 volume。Registry、连接、ACL 和 subscription 全在内存中；Relay 重启后 Host/Owner 自动重连并重建状态。Relay 不保存 pairing history、endpoint inventory、message queue 或 traffic payload。
+
+## 8. Trust model
+
+### 已提供的保护
+
+- TLS 保护浏览器、Relay 与 Host 之间的传输。
+- Ed25519 challenge-response 证明连接持有对应 Owner/Host private key。
+- Relay 根据连接角色、endpoint/runtime 和 Host ACL 强制 route 方向。
+- Owner→Host 的 `source_owner_id` 由 Relay 注入，Owner 不能自报可信 sender。
+- Runtime takeover 与 strict endpoint/runtime gate 阻止旧进程污染新 runtime。
+- Pairing token 单次使用，且 pairing route 不能承载 session frame。
+- Host/Owner private key 不进入 route metadata、日志或 QR；QR 只含 Host public key 与短期 token。
+
+### 不提供的保护
+
+- 当前没有应用层端到端加密。`ct` 是 Base64 编码的 Protocol v2 JSON，不是 ciphertext。
+- 正常实现不会解析 `ct`，但控制 Relay executable 或 TLS endpoint 的运营方有能力观察流量。敏感工作应 self-host Relay。
+- Relay 可观察连接 IP、public identifiers、endpoint/runtime metadata、timing 和 transport sizes。
+- 获得浏览器 profile/IndexedDB、Host keyring/file identity 或进程权限的攻击者可能冒充对应身份。
+- root、进程注入、已解锁用户会话和被攻陷的终端不在防护范围内。
+- Relay 是实时路由可用性的单点；其宕机不会停止本地 Pi，但会中断远程控制。
+
+## 9. Failure behavior
+
+| 故障 | 行为 |
+|---|---|
+| Relay 断线 | Extension/PWA 后台重连；daemon 保持运行，health 为 degraded |
+| Relay 重启 | 内存 registry 清空；连接重建后 Host 重新 announce，Owner 重新 subscribe |
+| Endpoint runtime 重启 | endpoint ID 保持，runtime ID 更新；旧 route 被拒绝 |
+| QR runtime 已 stale | Pairing route 被拒绝；用户生成/扫描新 QR |
+| Owner 未授权 session route | Relay 拒绝转发，不泄露 endpoint snapshot |
+| Extension 缺失/重复或 diagnostics 失败 | Supervisor preflight 标记 blocked，不 spawn child |
+| RPC ready 但 Extension 未 ready | Readiness timeout/blocked，不能报告健康 running |
+| Relay 断线但 Pi runtime ready | health degraded，不消耗 process restart budget |
+| Daemon cwd 删除 | Supervisor reconcile 停止并注销 entry |
+| Cron 命中 stopped/blocked/not-ready daemon | 记录 skip，不启动 daemon |
+
+## 10. 参考实现与报告
+
+- Relay：[`relay/src/`](relay/src/)
+- Pi Extension：[`pi-extension/src/`](pi-extension/src/)
+- Browser/PWA：[`site/src/`](site/src/)
+- Daemon 运维：[`pi-extension/docs/daemon.md`](pi-extension/docs/daemon.md)
+
+安全问题请通过仓库维护者公布的私密渠道报告；若当前没有私密渠道，创建 issue 时不要附带 secret、private key、token、Cookie 或可利用 payload。

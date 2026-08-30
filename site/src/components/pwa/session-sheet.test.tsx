@@ -3,46 +3,45 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { SessionSheet } from "./session-sheet";
 import { PwaUiProvider } from "./pwa-ui-provider";
-import type { PwaPeerRecord, PwaRoomRecord } from "@/lib/pwa/db";
+import type { PwaDeviceRecord, PwaEndpointRecord } from "@/lib/pwa/db";
 
-const peer: PwaPeerRecord = {
-  id: "peer:main",
-  remoteEpk: "e5FRoCabBqVX",
-  sessionName: "XCrawl#2",
+const device: PwaDeviceRecord = {
+  id: "device:main",
+  deviceId: "e5FRoCabBqVX",
   relayUrl: "https://relay.example.test",
   pairedAt: "2026-01-01T00:00:00.000Z",
-  roomId: "main",
+  hostname: "office",
 };
 
-const sessions: PwaRoomRecord[] = [
-  { id: "peer:main", peerEpk: peer.remoteEpk, roomId: "main", cwd: "/work/remote-pi", online: true, updatedAt: 1 },
-  { id: "peer:old", peerEpk: peer.remoteEpk, roomId: "old", cwd: "/work/old", online: false, updatedAt: 2 },
-  { id: "peer:checking", peerEpk: peer.remoteEpk, roomId: "checking", cwd: "/work/checking", updatedAt: 3 },
+const endpoints: PwaEndpointRecord[] = [
+  { id: "endpoint-main", deviceId: device.deviceId, endpointId: "main", runtimeInstanceId: "runtime-main", kind: "daemon", cwd: "/work/remote-pi", online: true, updatedAt: 1 },
+  { id: "endpoint-old", deviceId: device.deviceId, endpointId: "old", runtimeInstanceId: "runtime-old", kind: "interactive", cwd: "/work/old", online: false, updatedAt: 2 },
+  { id: "endpoint-checking", deviceId: device.deviceId, endpointId: "checking", runtimeInstanceId: "runtime-checking", kind: "daemon", cwd: "/work/checking", updatedAt: 3 },
 ];
 
-test("labels rooms as sessions and keeps offline history read-only", () => {
+test("labels endpoints and keeps offline history read-only", () => {
   const html = renderToStaticMarkup(
     <PwaUiProvider>
       <SessionSheet
-        peers={[peer]}
-        rooms={sessions}
-        activePeerId={peer.id}
-        activeRoomId="main"
-        pairingPresence={{ [peer.id]: { status: "partial", onlineSessions: 1, totalSessions: 2 } }}
-        onSelectPeer={() => {}}
-        onSelectRoom={() => {}}
+        devices={[device]}
+        endpoints={endpoints}
+        activeDeviceId={device.id}
+        activeEndpointId="main"
+        pairingPresence={{ [device.id]: { status: "partial", onlineEndpoints: 1, totalEndpoints: 2 } }}
+        onSelectDevice={() => {}}
+        onSelectEndpoint={() => {}}
         onPair={() => {}}
         onRename={() => {}}
         onRemove={() => {}}
         onClose={() => {}}
         withinPortal={false}
       />
-    </PwaUiProvider>,
+    </PwaUiProvider>
   );
 
   const pairButton = html.match(/<button[^>]*>.*?Pair a Pi.*?<\/button>/)?.[0] ?? "";
-  const renameAction = html.match(/<button[^>]*aria-label="Rename Remote Pi · e5FRoCab"[^>]*>/)?.[0] ?? "";
-  const deleteAction = html.match(/<button[^>]*aria-label="Delete Remote Pi · e5FRoCab"[^>]*>/)?.[0] ?? "";
+  const renameAction = html.match(/<button[^>]*aria-label="Rename Pi on office"[^>]*>/)?.[0] ?? "";
+  const deleteAction = html.match(/<button[^>]*aria-label="Delete Pi on office"[^>]*>/)?.[0] ?? "";
 
   assert.match(html, /mantine-Drawer-root/);
   assert.match(html, /pwa-badge/);
@@ -53,8 +52,8 @@ test("labels rooms as sessions and keeps offline history read-only", () => {
   assert.match(deleteAction, /pwa-icon-button/);
   assert.match(deleteAction, /title="Delete pairing"/);
   assert.match(html, /role="dialog"/);
-  assert.match(html, /Pairing records/);
-  assert.match(html, /Sessions in/);
+  assert.match(html, /Paired devices/);
+  assert.match(html, /Endpoints on Pi on office/);
   assert.match(html, /CURRENT/);
   assert.match(html, /ONLINE/);
   assert.match(html, /OFFLINE/);

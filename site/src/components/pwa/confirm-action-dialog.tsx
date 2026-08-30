@@ -31,7 +31,7 @@ function dialogCopy(action: ConfirmActionDialogAction): DialogCopy {
     case "new-session":
       return {
         title: "Start a fresh session?",
-        description: "All Owners in this Session will switch to a fresh session.",
+        description: "All Owners on this endpoint will switch to a fresh session.",
         confirmLabel: "Start fresh session",
         pendingLabel: "Starting fresh session…",
         confirmTone: "primary",
@@ -39,7 +39,7 @@ function dialogCopy(action: ConfirmActionDialogAction): DialogCopy {
     case "remove-pairing":
       return {
         title: `Delete pairing for ${action.label}?`,
-        description: "This removes this Pi/session pairing from this browser.",
+        description: "This removes this device pairing, its endpoints, and local history from this browser.",
         confirmLabel: "Delete pairing",
         pendingLabel: "Deleting pairing…",
         confirmTone: "danger",

@@ -1,11 +1,9 @@
 # cmux / claude
 .fresh/
 .*
-# but DO track CI workflows (the `.*` rule above would otherwise ignore .github/)
+# Track CI and shared orchestration contracts despite the `.*` rule above.
 !.github/
-
-# orchestration: results são efêmeros (logs de execução de cada task);
-# INSTRUCTIONS.md e contracts/ ficam versionados (contrato compartilhado).
+!.orchestration/
 .orchestration/results/*
 !.orchestration/results/.gitkeep
 

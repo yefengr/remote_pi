@@ -1,719 +1,548 @@
-use std::collections::HashMap;
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicU64, Ordering},
-};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
 
 use axum::extract::ws::Message;
 use tokio::sync::mpsc;
+use tracing::warn;
 
-use crate::metrics::FirehoseMetrics;
-use crate::presence::PresenceManager;
-use crate::rooms::{RoomManager, RoomMeta, RoomMetaPatch};
+use crate::protocol::outer::{
+    EndpointInfo, EndpointUpdate, HostHello, RouteFrame, RoutePurpose, endpoint_announced_line,
+    endpoint_ended_line, endpoint_updated_line, endpoints_line,
+};
 
-type RoomKey = (String, String); // (peer_id, room_id)
-type ConnEntry = (u64, RoomMeta, mpsc::UnboundedSender<Message>);
+type EndpointKey = (String, String);
+type Outbound = mpsc::UnboundedSender<Message>;
 
-/// Maps `(peer_id, room_id)` pairs to a *list* of live connections.
-///
-/// Plan 23 (Wave 2C) relaxed the "one connection per (peer, room)" invariant:
-/// the registry now accepts N simultaneous connections at the same key —
-/// representing N devices of the same human Owner (shared Ed25519 key
-/// sincronizada via iCloud Keychain / Block Store). Each device authenticates
-/// independently via challenge-response, so admission is still controlled by
-/// possession of the private key.
-///
-/// When another peer forwards a message to `(owner_pk, room_id)`, every live
-/// conn in the corresponding `Vec` receives a copy. The originating connection
-/// skips itself via `from_conn_id`, so a multi-device app sees outgoing
-/// messages only on the device that sent them.
-///
-/// Lifecycle events:
-/// - `room_announced` fires once, when the *first* conn opens a room.
-/// - `room_ended` fires once, when the *last* conn at a room disconnects.
-/// - `peer_online` fires only on a real **offline → online** transition: when
-///   the peer had **zero** live conns immediately before this register. A
-///   second/third conn from the same peer is silently absorbed (no extra
-///   `peer_online` for subscribers). The historic "ALWAYS fires" defense
-///   against zombie conns was retired here because (a) clients now dedupe
-///   client-side anyway and (b) it was generating a firehose of identical
-///   frames whenever multiple Owner devices reconnected.
-///
-///   Zombie reasoning: if a phantom conn is still in the map, `was_offline ==
-///   false` and we skip the emit — subscribers already think the peer is
-///   online (which is still effectively true at the public protocol level).
-///   When the zombie is finally cleaned, `unregister` only fires
-///   `peer_offline` if the **whole** peer is gone — never wrongly while a
-///   real conn is alive.
-/// - `peer_offline` fires only when the peer transitions from N → 0 total
-///   connections (asymmetric still: online and offline both gated by real
-///   state changes, but the offline edge is the authoritative one).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouteOutcome {
+    Delivered,
+    Unauthorized,
+    Stale,
+    Unavailable,
+}
+
 #[derive(Debug)]
+struct HostConnection {
+    conn_id: u64,
+    runtime_instance_id: String,
+    metadata: crate::protocol::outer::EndpointMetadata,
+    authorized_owner_ids: HashSet<String>,
+    tx: Outbound,
+}
+
+#[derive(Debug)]
+struct OwnerConnection {
+    tx: Outbound,
+    subscribed_device_ids: HashSet<String>,
+}
+
+#[derive(Debug, Default)]
+struct RegistryInner {
+    endpoints: HashMap<EndpointKey, HostConnection>,
+    owners: HashMap<String, HashMap<u64, OwnerConnection>>,
+}
+
+/// In-memory routing authority for endpoint connections.
+///
+/// A `(device_id, endpoint_id)` has one live runtime. Registering another
+/// runtime under the same key atomically replaces the previous connection;
+/// stale handlers cannot route or publish updates after that replacement.
+#[derive(Debug, Default)]
 pub struct PeerRegistry {
-    next_conn: AtomicU64,
-    senders: Mutex<HashMap<RoomKey, Vec<ConnEntry>>>,
-    presence: Arc<PresenceManager>,
-    rooms: Arc<RoomManager>,
-    metrics: Arc<FirehoseMetrics>,
+    next_conn_id: AtomicU64,
+    inner: Mutex<RegistryInner>,
 }
 
 impl PeerRegistry {
-    pub fn new(
-        presence: Arc<PresenceManager>,
-        rooms: Arc<RoomManager>,
-        metrics: Arc<FirehoseMetrics>,
-    ) -> Self {
-        Self {
-            next_conn: AtomicU64::new(0),
-            senders: Mutex::new(HashMap::new()),
-            presence,
-            rooms,
-            metrics,
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Registers a new connection at `(peer_id, room_meta.room_id)`.
-    ///
-    /// Multiple connections may coexist at the same key — each gets a unique
-    /// `conn_id`. `room_announced` fires only on the **first** conn at the
-    /// room (to avoid spamming metadata churn). `peer_online` fires only
-    /// when `was_offline_before == true` — i.e. on a real offline→online
-    /// transition, not on every register. See struct-level docs.
-    pub async fn register(
-        &self,
-        peer_id: String,
-        room_meta: RoomMeta,
-        tx: mpsc::UnboundedSender<Message>,
-    ) -> u64 {
-        let room_id = room_meta.room_id.clone();
-        let key = (peer_id.clone(), room_id.clone());
-
-        let conn_id = self.next_conn.fetch_add(1, Ordering::Relaxed);
-
-        // Compute both flags **before** the insert so they reflect the prior
-        // state of the registry.
-        let (was_offline_before, is_first_in_room) = {
-            let mut lock = self.senders.lock().unwrap();
-            let was_offline_before = !lock.keys().any(|(p, _)| p == &peer_id);
-            let is_first_in_room = !lock.contains_key(&key);
-            lock.entry(key)
-                .or_default()
-                .push((conn_id, room_meta.clone(), tx));
-            (was_offline_before, is_first_in_room)
+    pub fn register_host(&self, hello: HostHello, tx: Outbound) -> u64 {
+        let conn_id = self.next_conn_id.fetch_add(1, Ordering::Relaxed);
+        let key = (hello.device_id, hello.endpoint_id);
+        let host = HostConnection {
+            conn_id,
+            runtime_instance_id: hello.runtime_instance_id,
+            metadata: hello.metadata,
+            authorized_owner_ids: hello.authorized_owner_ids,
+            tx,
         };
 
-        // room_announced fires once per (peer, room) lifecycle.
-        if is_first_in_room {
-            let room_subs = self.rooms.subscribers_of(&peer_id).await;
-            if !room_subs.is_empty() {
-                let mut announced =
-                    serde_json::to_value(&room_meta).expect("RoomMeta serialization is infallible");
-                announced["type"] = "room_announced".into();
-                announced["peer"] = peer_id.as_str().into();
-                let msg = announced.to_string();
-                for sub in &room_subs {
-                    self.forward_to_all_rooms_of(sub, Message::Text(msg.clone()));
-                }
-            }
-        }
-
-        // peer_online fires only on a real offline → online transition.
-        // Re-registers from a peer that already had a live conn produce no
-        // new push to subscribers — they already think it's online.
-        let pres_subs = self.presence.subscribers_of(&peer_id).await;
-        let sub_count = pres_subs.len() as u64;
-        if sub_count > 0 {
-            if was_offline_before {
-                let msg = serde_json::json!({"type": "peer_online", "peer": peer_id}).to_string();
-                for sub in pres_subs {
-                    self.forward_to_all_rooms_of(&sub, Message::Text(msg.clone()));
-                }
-                self.metrics.inc_peer_online_emitted(sub_count);
-            } else {
-                self.metrics.inc_peer_online_suppressed(sub_count);
-            }
-        }
-
+        let notifications = {
+            let mut inner = self.lock();
+            let previous = inner.endpoints.insert(key.clone(), host);
+            let current = inner.endpoints.get(&key);
+            Self::visibility_delta(&inner, &key, previous.as_ref(), current)
+        };
+        send_notifications(notifications);
         conn_id
     }
 
-    /// Immediately pushes a `peer_online` to `subscriber` for every peer in
-    /// `peers` that is currently online. Called by the handler right after
-    /// `subscribe_presence` to bridge the gap when a peer subscribed *after*
-    /// its target was already connected.
-    pub fn backfill_presence(&self, subscriber: &str, peers: &[String]) {
-        for peer in peers {
-            if self.is_online(peer) {
-                let msg = serde_json::json!({"type": "peer_online", "peer": peer}).to_string();
-                self.forward_to_all_rooms_of(subscriber, Message::Text(msg));
-            }
-        }
+    pub fn register_owner(&self, owner_id: String, tx: Outbound) -> u64 {
+        let conn_id = self.next_conn_id.fetch_add(1, Ordering::Relaxed);
+        self.lock().owners.entry(owner_id).or_default().insert(
+            conn_id,
+            OwnerConnection {
+                tx,
+                subscribed_device_ids: HashSet::new(),
+            },
+        );
+        conn_id
     }
 
-    /// Removes the connection identified by `conn_id` from the `Vec` at
-    /// `(peer_id, room_id)`. When the `Vec` empties, the entry is removed and
-    /// `room_ended` is broadcast; when the peer has no remaining rooms,
-    /// `peer_offline` is also broadcast.
-    ///
-    /// Stale `conn_id`s (already removed, or never registered there) are no-ops.
-    pub async fn unregister(&self, peer_id: &str, room_id: &str, conn_id: u64) {
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
-
-        let (room_emptied, peer_offlined) = {
-            let mut lock = self.senders.lock().unwrap();
-            let key = (peer_id.to_string(), room_id.to_string());
-            let mut room_emptied = false;
-            if let Some(v) = lock.get_mut(&key) {
-                let before = v.len();
-                v.retain(|(cid, _, _)| *cid != conn_id);
-                let removed_something = v.len() != before;
-                if v.is_empty() {
-                    lock.remove(&key);
-                    room_emptied = removed_something;
-                }
+    pub fn unregister_host(&self, device_id: &str, endpoint_id: &str, conn_id: u64) {
+        let key = (device_id.to_owned(), endpoint_id.to_owned());
+        let notifications = {
+            let mut inner = self.lock();
+            let is_current = inner
+                .endpoints
+                .get(&key)
+                .is_some_and(|host| host.conn_id == conn_id);
+            if !is_current {
+                return;
             }
-            let peer_offlined = room_emptied && !lock.keys().any(|(p, _)| p == peer_id);
-            (room_emptied, peer_offlined)
+            let previous = inner.endpoints.remove(&key);
+            Self::visibility_delta(&inner, &key, previous.as_ref(), None)
         };
+        send_notifications(notifications);
+    }
 
-        if room_emptied {
-            let room_subs = self.rooms.subscribers_of(peer_id).await;
-            if !room_subs.is_empty() {
-                let msg = serde_json::json!({
-                    "type": "room_ended",
-                    "peer": peer_id,
-                    "room_id": room_id,
-                    "since_ts": now_ms,
-                })
-                .to_string();
-                for sub in &room_subs {
-                    self.forward_to_all_rooms_of(sub, Message::Text(msg.clone()));
-                }
+    pub fn unregister_owner(&self, owner_id: &str, conn_id: u64) {
+        let mut inner = self.lock();
+        let should_remove_owner = match inner.owners.get_mut(owner_id) {
+            Some(connections) => {
+                connections.remove(&conn_id);
+                connections.is_empty()
             }
-        }
-
-        if peer_offlined {
-            let pres_subs = self.presence.subscribers_of(peer_id).await;
-            if !pres_subs.is_empty() {
-                let msg = serde_json::json!({
-                    "type": "peer_offline",
-                    "peer": peer_id,
-                    "since_ts": now_ms,
-                })
-                .to_string();
-                for sub in pres_subs {
-                    self.forward_to_all_rooms_of(&sub, Message::Text(msg.clone()));
-                }
-            }
-            self.presence.record_offline(peer_id, now_ms).await;
-            self.presence.unsubscribe_all(peer_id).await;
+            None => false,
+        };
+        if should_remove_owner {
+            inner.owners.remove(owner_id);
         }
     }
 
-    /// Returns `true` if `peer_id` has at least one live connection.
-    pub fn is_online(&self, peer_id: &str) -> bool {
-        let lock = self.senders.lock().unwrap();
-        lock.keys().any(|(p, _)| p == peer_id)
-    }
-
-    /// Returns one `RoomMeta` per distinct room of `peer_id`.
-    /// Multiple conns at the same room collapse to a single entry (using
-    /// the most recently registered meta for stability).
-    pub fn rooms_of(&self, peer_id: &str) -> Vec<RoomMeta> {
-        let lock = self.senders.lock().unwrap();
-        let mut by_room: HashMap<String, RoomMeta> = HashMap::new();
-        for ((p, _), v) in lock.iter() {
-            if p == peer_id
-                && let Some((_, meta, _)) = v.last()
-            {
-                by_room.insert(meta.room_id.clone(), meta.clone());
-            }
-        }
-        by_room.into_values().collect()
-    }
-
-    /// Broadcasts `msg` to every live connection at `(dest_peer, dest_room)`
-    /// **except** the one whose conn_id equals `from_conn_id` (skip-sender).
-    ///
-    /// Returns `true` if at least one recipient received the message.
-    /// Pass any `from_conn_id` that is not part of the destination `Vec`
-    /// (e.g. the sender's own conn_id from another room) to deliver to all.
-    /// Never inspects message content.
-    pub fn forward(
+    pub fn subscribe_endpoints(
         &self,
-        dest_peer: &str,
-        dest_room: &str,
-        msg: Message,
-        from_conn_id: u64,
+        owner_id: &str,
+        conn_id: u64,
+        device_ids: Vec<String>,
     ) -> bool {
-        let lock = self.senders.lock().unwrap();
-        let key = (dest_peer.to_string(), dest_room.to_string());
-        let Some(v) = lock.get(&key) else {
-            return false;
-        };
-        let mut delivered = false;
-        for (cid, _, tx) in v.iter() {
-            if *cid == from_conn_id {
-                continue;
-            }
-            if tx.send(msg.clone()).is_ok() {
-                delivered = true;
-            }
-        }
-        delivered
-    }
-
-    /// Applies `patch` to every live conn at `(peer_id, room_id)` and
-    /// broadcasts `room_meta_updated` to room subscribers. Returns `false`
-    /// when no entries exist for the pair (so the handler can log and drop).
-    ///
-    /// Patch semantics: only fields explicitly present in `patch` are written
-    /// (see [`RoomMetaPatch`]). The broadcast carries the **post-patch**
-    /// full state of the mutable fields — subscribers replace their cached
-    /// `meta` wholesale instead of merging field-by-field. Nullable fields
-    /// that are still `None` after the patch are omitted from `meta` (matching
-    /// the `skip_serializing_if` convention used for `RoomMeta` itself); the
-    /// non-nullable `working` bool is always present in the broadcast.
-    ///
-    /// An empty patch (no fields present) still returns `true` if the
-    /// `(peer, room)` pair exists, but skips the broadcast — nothing changed.
-    pub async fn update_room_meta(
-        &self,
-        peer_id: &str,
-        room_id: &str,
-        patch: RoomMetaPatch,
-    ) -> bool {
-        let (current_model, current_thinking, current_working) = {
-            let mut lock = self.senders.lock().unwrap();
-            let key = (peer_id.to_string(), room_id.to_string());
-            match lock.get_mut(&key) {
-                Some(v) if !v.is_empty() => {
-                    for (_, meta, _) in v.iter_mut() {
-                        if let Some(ref m) = patch.model {
-                            meta.model = m.clone();
-                        }
-                        if let Some(ref t) = patch.thinking {
-                            meta.thinking = t.clone();
-                        }
-                        if let Some(w) = patch.working {
-                            meta.working = w;
-                        }
-                    }
-                    // All conns at this key carry the same post-patch state
-                    // now; read the first as the canonical snapshot.
-                    let head = v.first().expect("v is non-empty");
-                    (
-                        head.1.model.clone(),
-                        head.1.thinking.clone(),
-                        head.1.working,
-                    )
-                }
-                _ => return false,
-            }
+        let mut inner = self.lock();
+        let device_ids: HashSet<String> = device_ids.into_iter().collect();
+        let tx = {
+            let Some(connections) = inner.owners.get_mut(owner_id) else {
+                return false;
+            };
+            let Some(owner) = connections.get_mut(&conn_id) else {
+                return false;
+            };
+            owner.subscribed_device_ids = device_ids.clone();
+            owner.tx.clone()
         };
 
-        // Empty patch → state didn't change, suppress broadcast.
-        if patch.is_empty() {
-            return true;
+        let snapshots = device_ids.into_iter().filter_map(|device_id| {
+            let endpoints = inner
+                .endpoints
+                .iter()
+                .filter(|((registered_device_id, _), host)| {
+                    registered_device_id == &device_id
+                        && host.authorized_owner_ids.contains(owner_id)
+                })
+                .map(|((_, registered_endpoint_id), host)| {
+                    endpoint_info(host, registered_endpoint_id)
+                })
+                .collect();
+            endpoints_line(&device_id, endpoints)
+        });
+        for snapshot in snapshots {
+            let _ = tx.send(Message::Text(snapshot));
         }
-
-        let room_subs = self.rooms.subscribers_of(peer_id).await;
-        if !room_subs.is_empty() {
-            let mut meta_obj = serde_json::Map::new();
-            if let Some(m) = &current_model {
-                meta_obj.insert("model".to_string(), serde_json::Value::String(m.clone()));
-            }
-            if let Some(t) = &current_thinking {
-                meta_obj.insert("thinking".to_string(), serde_json::Value::String(t.clone()));
-            }
-            // `working` is always present (non-nullable bool), so it always
-            // rides along in the broadcast — subscribers can rely on it.
-            meta_obj.insert(
-                "working".to_string(),
-                serde_json::Value::Bool(current_working),
-            );
-            let msg = serde_json::json!({
-                "type": "room_meta_updated",
-                "peer": peer_id,
-                "room_id": room_id,
-                "meta": serde_json::Value::Object(meta_obj),
-            })
-            .to_string();
-            for sub in &room_subs {
-                self.forward_to_all_rooms_of(sub, Message::Text(msg.clone()));
-            }
-        }
-
         true
     }
 
-    /// Sends `msg` to every live connection of `peer_id` across all rooms.
-    /// Used for control-frame pushes (`peer_online`/`peer_offline`,
-    /// `room_announced`/`room_ended`, `room_meta_updated`) where the
-    /// subscriber's room isn't known in advance.
-    fn forward_to_all_rooms_of(&self, peer_id: &str, msg: Message) {
-        let lock = self.senders.lock().unwrap();
-        for ((p, _), v) in lock.iter() {
-            if p == peer_id {
-                for (_, _, tx) in v.iter() {
-                    let _ = tx.send(msg.clone());
-                }
+    pub fn update_host(
+        &self,
+        device_id: &str,
+        endpoint_id: &str,
+        conn_id: u64,
+        update: EndpointUpdate,
+    ) -> bool {
+        let key = (device_id.to_owned(), endpoint_id.to_owned());
+        let notifications = {
+            let mut inner = self.lock();
+            let previous = match inner.endpoints.get(&key) {
+                Some(host) if host.conn_id == conn_id => HostSnapshot::from(host),
+                _ => return false,
+            };
+            let Some(host) = inner.endpoints.get_mut(&key) else {
+                return false;
+            };
+            if let Some(metadata) = update.metadata {
+                host.metadata = metadata;
             }
+            if let Some(authorized_owner_ids) = update.authorized_owner_ids {
+                host.authorized_owner_ids = authorized_owner_ids;
+            }
+            let current = inner.endpoints.get(&key);
+            Self::visibility_delta_from_snapshot(&inner, &key, Some(&previous), current)
+        };
+        send_notifications(notifications);
+        true
+    }
+
+    pub fn is_active_host(&self, device_id: &str, endpoint_id: &str, conn_id: u64) -> bool {
+        self.lock()
+            .endpoints
+            .get(&(device_id.to_owned(), endpoint_id.to_owned()))
+            .is_some_and(|host| host.conn_id == conn_id)
+    }
+
+    pub fn route_from_owner(
+        &self,
+        owner_id: &str,
+        conn_id: u64,
+        route: RouteFrame,
+    ) -> RouteOutcome {
+        if route.target_owner_id.is_some() || route.source_owner_id.is_some() {
+            return RouteOutcome::Unauthorized;
+        }
+
+        let inner = self.lock();
+        if !inner
+            .owners
+            .get(owner_id)
+            .is_some_and(|connections| connections.contains_key(&conn_id))
+        {
+            return RouteOutcome::Stale;
+        }
+        let key = (route.device_id.clone(), route.endpoint_id.clone());
+        let Some(host) = inner.endpoints.get(&key) else {
+            return RouteOutcome::Unavailable;
+        };
+        if host.runtime_instance_id != route.runtime_instance_id {
+            return RouteOutcome::Stale;
+        }
+        if route.purpose == RoutePurpose::Session && !host.authorized_owner_ids.contains(owner_id) {
+            return RouteOutcome::Unauthorized;
+        }
+        let mut forwarded = route;
+        forwarded.source_owner_id = Some(owner_id.to_owned());
+        let Some(line) = serialize_route(&forwarded) else {
+            return RouteOutcome::Unavailable;
+        };
+        if host.tx.send(Message::Text(line)).is_ok() {
+            RouteOutcome::Delivered
+        } else {
+            RouteOutcome::Unavailable
         }
     }
 
-    /// Sends `msg` to every live connection of `peer_id`, regardless of room.
-    /// Returns `true` iff at least one recipient successfully accepted it.
-    /// Used by `pi_envelope` cross-PC forwarding (plan 25) where the relay
-    /// has Pi-B's pubkey but not its room_id.
-    pub fn forward_to_peer(&self, peer_id: &str, msg: Message) -> bool {
-        let lock = self.senders.lock().unwrap();
+    pub fn route_from_host(
+        &self,
+        device_id: &str,
+        endpoint_id: &str,
+        conn_id: u64,
+        route: RouteFrame,
+    ) -> RouteOutcome {
+        let Some(target_owner_id) = route.target_owner_id.as_deref() else {
+            return RouteOutcome::Unauthorized;
+        };
+        let inner = self.lock();
+        let key = (device_id.to_owned(), endpoint_id.to_owned());
+        let Some(host) = inner.endpoints.get(&key) else {
+            return RouteOutcome::Stale;
+        };
+        if host.conn_id != conn_id
+            || route.device_id != device_id
+            || route.endpoint_id != endpoint_id
+            || route.runtime_instance_id != host.runtime_instance_id
+            || route.source_owner_id.is_some()
+        {
+            return RouteOutcome::Stale;
+        }
+        if route.purpose == RoutePurpose::Session
+            && !host.authorized_owner_ids.contains(target_owner_id)
+        {
+            return RouteOutcome::Unauthorized;
+        }
+        let Some(owners) = inner.owners.get(target_owner_id) else {
+            return RouteOutcome::Unavailable;
+        };
+        let Some(line) = serialize_route(&route) else {
+            return RouteOutcome::Unavailable;
+        };
+        let message = Message::Text(line);
         let mut delivered = false;
-        for ((p, _), v) in lock.iter() {
-            if p == peer_id {
-                for (_, _, tx) in v.iter() {
-                    if tx.send(msg.clone()).is_ok() {
-                        delivered = true;
-                    }
+        for owner in owners.values() {
+            if owner.tx.send(message.clone()).is_ok() {
+                delivered = true;
+            }
+        }
+        if delivered {
+            RouteOutcome::Delivered
+        } else {
+            RouteOutcome::Unavailable
+        }
+    }
+
+    fn visibility_delta(
+        inner: &RegistryInner,
+        key: &EndpointKey,
+        previous: Option<&HostConnection>,
+        current: Option<&HostConnection>,
+    ) -> Vec<(Outbound, String)> {
+        Self::visibility_delta_with(inner, key, previous.map(HostSnapshot::from), current)
+    }
+
+    fn visibility_delta_from_snapshot(
+        inner: &RegistryInner,
+        key: &EndpointKey,
+        previous: Option<&HostSnapshot>,
+        current: Option<&HostConnection>,
+    ) -> Vec<(Outbound, String)> {
+        Self::visibility_delta_with(inner, key, previous.cloned(), current)
+    }
+
+    fn visibility_delta_with(
+        inner: &RegistryInner,
+        key: &EndpointKey,
+        previous: Option<HostSnapshot>,
+        current: Option<&HostConnection>,
+    ) -> Vec<(Outbound, String)> {
+        let previous_info = previous.as_ref().map(|host| host.endpoint_info(&key.1));
+        let current_info = current.map(|host| endpoint_info(host, &key.1));
+        let announced = current_info
+            .as_ref()
+            .and_then(|endpoint| endpoint_announced_line(&key.0, endpoint));
+        let updated = current_info
+            .as_ref()
+            .and_then(|endpoint| endpoint_updated_line(&key.0, endpoint));
+        let ended = previous_info
+            .as_ref()
+            .and_then(|endpoint| endpoint_ended_line(&key.0, endpoint));
+
+        let mut notifications = Vec::new();
+        for (owner_id, connections) in &inner.owners {
+            let was_authorized = previous
+                .as_ref()
+                .is_some_and(|host| host.authorized_owner_ids.contains(owner_id));
+            let is_authorized =
+                current.is_some_and(|host| host.authorized_owner_ids.contains(owner_id));
+            let line = match (was_authorized, is_authorized) {
+                (false, true) => announced.as_ref(),
+                (true, true) => updated.as_ref(),
+                (true, false) => ended.as_ref(),
+                (false, false) => None,
+            };
+            let Some(line) = line else {
+                continue;
+            };
+            for owner in connections.values() {
+                if owner.subscribed_device_ids.contains(&key.0) {
+                    notifications.push((owner.tx.clone(), line.clone()));
                 }
             }
         }
-        delivered
+        notifications
+    }
+
+    fn lock(&self) -> MutexGuard<'_, RegistryInner> {
+        match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                warn!("endpoint registry mutex poisoned; continuing with recovered state");
+                poisoned.into_inner()
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct HostSnapshot {
+    runtime_instance_id: String,
+    metadata: crate::protocol::outer::EndpointMetadata,
+    authorized_owner_ids: HashSet<String>,
+}
+
+impl From<&HostConnection> for HostSnapshot {
+    fn from(host: &HostConnection) -> Self {
+        Self {
+            runtime_instance_id: host.runtime_instance_id.clone(),
+            metadata: host.metadata.clone(),
+            authorized_owner_ids: host.authorized_owner_ids.clone(),
+        }
+    }
+}
+
+impl HostSnapshot {
+    fn endpoint_info(&self, endpoint_id: &str) -> EndpointInfo {
+        EndpointInfo {
+            endpoint_id: endpoint_id.to_owned(),
+            runtime_instance_id: self.runtime_instance_id.clone(),
+            metadata: self.metadata.clone(),
+        }
+    }
+}
+
+fn endpoint_info(host: &HostConnection, endpoint_id: &str) -> EndpointInfo {
+    EndpointInfo {
+        endpoint_id: endpoint_id.to_owned(),
+        runtime_instance_id: host.runtime_instance_id.clone(),
+        metadata: host.metadata.clone(),
+    }
+}
+
+fn serialize_route(route: &RouteFrame) -> Option<String> {
+    serde_json::to_string(route).ok()
+}
+
+fn send_notifications(notifications: Vec<(Outbound, String)>) {
+    for (tx, line) in notifications {
+        let _ = tx.send(Message::Text(line));
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::presence::PresenceManager;
-    use crate::rooms::{RoomManager, RoomMeta};
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use tokio::sync::mpsc;
 
-    fn make_meta(room_id: &str) -> RoomMeta {
-        RoomMeta {
-            room_id: room_id.into(),
-            name: None,
-            cwd: None,
-            model: None,
-            thinking: None,
-            working: false,
-            started_at: 0,
+    use super::*;
+    use crate::protocol::outer::{EndpointKind, EndpointMetadata};
+
+    const ENDPOINT_ID: &str = "11111111-1111-4111-8111-111111111111";
+    const RUNTIME_A: &str = "22222222-2222-4222-8222-222222222222";
+    const RUNTIME_B: &str = "33333333-3333-4333-8333-333333333333";
+
+    fn id(byte: u8) -> String {
+        STANDARD.encode([byte; 32])
+    }
+
+    fn host(device_id: String, runtime_instance_id: &str, owners: &[String]) -> HostHello {
+        HostHello {
+            device_id,
+            endpoint_id: ENDPOINT_ID.to_owned(),
+            runtime_instance_id: runtime_instance_id.to_owned(),
+            metadata: EndpointMetadata {
+                kind: EndpointKind::Daemon,
+                name: None,
+                cwd: None,
+                pid: None,
+                started_at: None,
+                model: None,
+                thinking: None,
+                working: None,
+            },
+            authorized_owner_ids: owners.iter().cloned().collect(),
         }
     }
 
-    fn make_registry() -> PeerRegistry {
-        let presence = Arc::new(PresenceManager::new());
-        let rooms = Arc::new(RoomManager::new());
-        let metrics = Arc::new(FirehoseMetrics::new());
-        PeerRegistry::new(presence, rooms, metrics)
+    fn route(device_id: String, runtime_instance_id: &str, purpose: RoutePurpose) -> RouteFrame {
+        RouteFrame {
+            frame_type: "route".to_owned(),
+            purpose,
+            device_id,
+            endpoint_id: ENDPOINT_ID.to_owned(),
+            runtime_instance_id: runtime_instance_id.to_owned(),
+            target_owner_id: None,
+            source_owner_id: None,
+            ct: "opaque payload".to_owned(),
+        }
     }
 
-    /// Sentinel `from_conn_id` for "no real sender to skip" — guaranteed not
-    /// to collide with any conn_id allocated by the registry in tests.
-    const EXTERNAL: u64 = u64::MAX;
+    #[test]
+    fn takeover_makes_the_old_runtime_stale() {
+        let registry = PeerRegistry::new();
+        let device = id(1);
+        let owner = id(2);
+        let (owner_tx, mut owner_rx) = mpsc::unbounded_channel();
+        let owner_conn = registry.register_owner(owner.clone(), owner_tx);
+        assert!(registry.subscribe_endpoints(&owner, owner_conn, vec![device.clone()]));
+        let _ = owner_rx.try_recv();
 
-    #[tokio::test]
-    async fn two_rooms_same_peer_both_accepted() {
-        let reg = make_registry();
-        let peer = "peer_a".to_string();
-
-        let (tx_main, mut rx_main) = mpsc::unbounded_channel::<Message>();
-        let (tx_work, mut rx_work) = mpsc::unbounded_channel::<Message>();
-
-        let conn_main = reg.register(peer.clone(), make_meta("main"), tx_main).await;
-        let conn_work = reg.register(peer.clone(), make_meta("work"), tx_work).await;
-
-        assert_ne!(conn_main, conn_work);
-
-        assert!(reg.forward(&peer, "main", Message::Text("to_main".into()), EXTERNAL));
-        assert_eq!(rx_main.try_recv().unwrap().to_text().unwrap(), "to_main");
-
-        assert!(reg.forward(&peer, "work", Message::Text("to_work".into()), EXTERNAL));
-        assert_eq!(rx_work.try_recv().unwrap().to_text().unwrap(), "to_work");
-
-        reg.unregister(&peer, "work", conn_work).await;
-        assert!(!reg.forward(&peer, "work", Message::Text("gone".into()), EXTERNAL));
-        assert!(reg.forward(&peer, "main", Message::Text("still_there".into()), EXTERNAL));
-        let _ = rx_main.try_recv();
-    }
-
-    /// Two conns at the same (peer, room) now coexist. `forward` with the first
-    /// conn's id as `from_conn_id` delivers only to the second (skip-sender).
-    #[tokio::test]
-    async fn duplicate_room_accepted_and_broadcast() {
-        let reg = make_registry();
-        let peer = "peer_a".to_string();
-
-        let (tx1, mut rx1) = mpsc::unbounded_channel::<Message>();
-        let (tx2, mut rx2) = mpsc::unbounded_channel::<Message>();
-
-        let conn1 = reg.register(peer.clone(), make_meta("main"), tx1).await;
-        let conn2 = reg.register(peer.clone(), make_meta("main"), tx2).await;
-        assert_ne!(conn1, conn2);
-
-        // Send "from" conn1 → only conn2 receives.
-        assert!(reg.forward(&peer, "main", Message::Text("hi".into()), conn1));
-        assert!(rx1.try_recv().is_err(), "sender must not echo");
-        assert_eq!(rx2.try_recv().unwrap().to_text().unwrap(), "hi");
-
-        // Send "from" conn2 → only conn1 receives.
-        assert!(reg.forward(&peer, "main", Message::Text("hi2".into()), conn2));
-        assert_eq!(rx1.try_recv().unwrap().to_text().unwrap(), "hi2");
-        assert!(rx2.try_recv().is_err());
-    }
-
-    /// Three conns at same (peer, room); one disconnects; remaining two keep
-    /// receiving broadcasts from external senders.
-    #[tokio::test]
-    async fn three_conns_one_disconnects_broadcast_continues() {
-        let reg = make_registry();
-        let peer = "peer_a".to_string();
-
-        let (tx1, mut rx1) = mpsc::unbounded_channel::<Message>();
-        let (tx2, mut rx2) = mpsc::unbounded_channel::<Message>();
-        let (tx3, mut rx3) = mpsc::unbounded_channel::<Message>();
-
-        let _conn1 = reg.register(peer.clone(), make_meta("main"), tx1).await;
-        let conn2 = reg.register(peer.clone(), make_meta("main"), tx2).await;
-        let _conn3 = reg.register(peer.clone(), make_meta("main"), tx3).await;
-
-        reg.unregister(&peer, "main", conn2).await;
-
-        assert!(reg.forward(&peer, "main", Message::Text("ping".into()), EXTERNAL));
-        assert_eq!(rx1.try_recv().unwrap().to_text().unwrap(), "ping");
-        assert!(
-            rx2.try_recv().is_err(),
-            "disconnected conn must not receive"
-        );
-        assert_eq!(rx3.try_recv().unwrap().to_text().unwrap(), "ping");
-    }
-
-    /// `from_conn_id` outside the destination Vec → all conns at that pair
-    /// receive. Models the common "another peer sends to (owner_pk, main)" case.
-    #[tokio::test]
-    async fn forward_with_unknown_from_conn_id_reaches_all() {
-        let reg = make_registry();
-        let peer = "peer_a".to_string();
-
-        let (tx1, mut rx1) = mpsc::unbounded_channel::<Message>();
-        let (tx2, mut rx2) = mpsc::unbounded_channel::<Message>();
-
-        let _ = reg.register(peer.clone(), make_meta("main"), tx1).await;
-        let _ = reg.register(peer.clone(), make_meta("main"), tx2).await;
-
-        assert!(reg.forward(&peer, "main", Message::Text("from_pi".into()), EXTERNAL));
-        assert_eq!(rx1.try_recv().unwrap().to_text().unwrap(), "from_pi");
-        assert_eq!(rx2.try_recv().unwrap().to_text().unwrap(), "from_pi");
-    }
-
-    /// Single-conn case: skip-sender with own id → nobody receives.
-    /// External sender → that single conn receives.
-    #[tokio::test]
-    async fn single_conn_skip_sender() {
-        let reg = make_registry();
-        let peer = "peer_a".to_string();
-
-        let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
-        let conn = reg.register(peer.clone(), make_meta("main"), tx).await;
-
-        assert!(!reg.forward(&peer, "main", Message::Text("echo".into()), conn));
-        assert!(rx.try_recv().is_err());
-
-        assert!(reg.forward(&peer, "main", Message::Text("hi".into()), EXTERNAL));
-        assert_eq!(rx.try_recv().unwrap().to_text().unwrap(), "hi");
-    }
-
-    /// Re-calling `unregister` with a stale `conn_id` does not affect any
-    /// other live conn at the same key.
-    #[tokio::test]
-    async fn stale_unregister_is_noop() {
-        let reg = make_registry();
-        let peer = "peer_a".to_string();
-
-        let (tx_a, _) = mpsc::unbounded_channel::<Message>();
-        let (tx_b, mut rx_b) = mpsc::unbounded_channel::<Message>();
-
-        let conn_a = reg.register(peer.clone(), make_meta("main"), tx_a).await;
-        reg.unregister(&peer, "main", conn_a).await;
-        let conn_b = reg.register(peer.clone(), make_meta("main"), tx_b).await;
-
-        // Stale unregister of conn_a is a no-op.
-        reg.unregister(&peer, "main", conn_a).await;
-        assert!(reg.forward(&peer, "main", Message::Text("alive".into()), EXTERNAL));
-        assert_eq!(rx_b.try_recv().unwrap().to_text().unwrap(), "alive");
-
-        // Correct unregister removes the last conn → entry gone.
-        reg.unregister(&peer, "main", conn_b).await;
-        assert!(!reg.forward(&peer, "main", Message::Text("gone".into()), EXTERNAL));
-    }
-
-    /// First register from an offline peer with a presence subscriber must
-    /// emit one `peer_online`; a second register from the **same** peer (no
-    /// real transition) must NOT emit again and must bump the suppressed
-    /// counter instead.
-    #[tokio::test]
-    async fn peer_online_fires_only_on_real_transition() {
-        let presence = Arc::new(PresenceManager::new());
-        let rooms = Arc::new(RoomManager::new());
-        let metrics = Arc::new(FirehoseMetrics::new());
-        let reg = PeerRegistry::new(presence.clone(), rooms, metrics.clone());
-
-        let pi = "pi".to_string();
-        let app = "app".to_string();
-
-        // App is online and subscribes to Pi's presence.
-        let (tx_app, mut rx_app) = mpsc::unbounded_channel::<Message>();
-        let _ = reg.register(app.clone(), make_meta("main"), tx_app).await;
-        presence.subscribe(app.clone(), vec![pi.clone()]).await;
-
-        // First Pi conn → real offline→online → app receives peer_online.
-        let (tx_pi_1, _) = mpsc::unbounded_channel::<Message>();
-        let _ = reg.register(pi.clone(), make_meta("main"), tx_pi_1).await;
-        let m1 = rx_app.try_recv().unwrap();
-        let v1: serde_json::Value = serde_json::from_str(m1.to_text().unwrap()).unwrap();
-        assert_eq!(v1["type"], "peer_online");
-        assert_eq!(v1["peer"], pi.clone());
-
-        // Second conn from the same Pi (no transition) → no extra peer_online.
-        let (tx_pi_2, _) = mpsc::unbounded_channel::<Message>();
-        let _ = reg.register(pi.clone(), make_meta("work"), tx_pi_2).await;
-        assert!(
-            rx_app.try_recv().is_err(),
-            "second register at already-online peer must NOT emit peer_online"
-        );
-
-        // Metrics: 1 emitted, 1 suppressed (each over 1 subscriber).
-        let [emitted, suppressed, ..] = metrics.snapshot();
-        assert_eq!(emitted, 1, "snapshot: {:?}", metrics.snapshot());
-        assert_eq!(suppressed, 1, "snapshot: {:?}", metrics.snapshot());
-    }
-
-    /// Helper: a Pi with one `main` room plus an `app` subscribed to that
-    /// peer's room events. Returns the registry, the shared `rooms` handle,
-    /// the peer ids, and the app's receiver (drained of any backfill).
-    async fn meta_fixture() -> (PeerRegistry, String, mpsc::UnboundedReceiver<Message>) {
-        let presence = Arc::new(PresenceManager::new());
-        let rooms = Arc::new(RoomManager::new());
-        let metrics = Arc::new(FirehoseMetrics::new());
-        let reg = PeerRegistry::new(presence, rooms.clone(), metrics);
-
-        let pi = "pi".to_string();
-        let app = "app".to_string();
-
-        // Pi registers first, *before* the app subscribes — so the app gets no
-        // `room_announced` backfill and its channel only carries the
-        // `room_meta_updated` pushes the tests assert on.
-        let (tx_pi, _rx_pi) = mpsc::unbounded_channel::<Message>();
-        let _ = reg.register(pi.clone(), make_meta("main"), tx_pi).await;
-
-        let (tx_app, rx_app) = mpsc::unbounded_channel::<Message>();
-        let _ = reg.register(app.clone(), make_meta("main"), tx_app).await;
-        rooms.subscribe(app.clone(), vec![pi.clone()]).await;
-
-        (reg, pi, rx_app)
-    }
-
-    fn recv_meta(rx: &mut mpsc::UnboundedReceiver<Message>) -> serde_json::Value {
-        let msg = rx
-            .try_recv()
-            .expect("subscriber must receive room_meta_updated");
-        let v: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
-        assert_eq!(v["type"], "room_meta_updated");
-        v
-    }
-
-    /// `working: true` patch broadcasts the post-patch state to subscribers.
-    #[tokio::test]
-    async fn working_true_patch_broadcasts_true() {
-        let (reg, pi, mut rx_app) = meta_fixture().await;
-
-        let patch = RoomMetaPatch {
-            working: Some(true),
-            ..Default::default()
-        };
-        assert!(reg.update_room_meta(&pi, "main", patch).await);
-
-        let v = recv_meta(&mut rx_app);
-        assert_eq!(v["peer"], pi);
-        assert_eq!(v["room_id"], "main");
-        assert_eq!(v["meta"]["working"], true);
-    }
-
-    /// `working: false` patch is a real (non-empty) patch and broadcasts
-    /// `working: false` — flipping a previously-true room back off.
-    #[tokio::test]
-    async fn working_false_patch_broadcasts_false() {
-        let (reg, pi, mut rx_app) = meta_fixture().await;
-
-        // Turn it on, then off.
-        let _ = reg
-            .update_room_meta(
-                &pi,
-                "main",
-                RoomMetaPatch {
-                    working: Some(true),
-                    ..Default::default()
-                },
-            )
-            .await;
-        let _ = recv_meta(&mut rx_app); // drain the `true` broadcast
-
-        assert!(
-            reg.update_room_meta(
-                &pi,
-                "main",
-                RoomMetaPatch {
-                    working: Some(false),
-                    ..Default::default()
-                },
-            )
-            .await
-        );
-
-        let v = recv_meta(&mut rx_app);
-        assert_eq!(v["meta"]["working"], false);
-    }
-
-    /// A patch that omits `working` (e.g. a model-only update) must NOT zero a
-    /// previously-set `working: true` — merge-patch absence leaves it intact,
-    /// and the broadcast re-carries the preserved value.
-    #[tokio::test]
-    async fn working_absent_patch_does_not_zero() {
-        let (reg, pi, mut rx_app) = meta_fixture().await;
-
-        let _ = reg
-            .update_room_meta(
-                &pi,
-                "main",
-                RoomMetaPatch {
-                    working: Some(true),
-                    ..Default::default()
-                },
-            )
-            .await;
-        let _ = recv_meta(&mut rx_app); // drain the `true` broadcast
-
-        // Model-only patch: `working` is absent → must be left untouched.
-        assert!(
-            reg.update_room_meta(
-                &pi,
-                "main",
-                RoomMetaPatch {
-                    model: Some(Some("opus".into())),
-                    ..Default::default()
-                },
-            )
-            .await
-        );
-
-        let v = recv_meta(&mut rx_app);
-        assert_eq!(v["meta"]["model"], "opus");
+        let (host_a_tx, mut host_a_rx) = mpsc::unbounded_channel();
+        let host_a_conn =
+            registry.register_host(host(device.clone(), RUNTIME_A, &[owner.clone()]), host_a_tx);
+        let _ = owner_rx.try_recv();
         assert_eq!(
-            v["meta"]["working"], true,
-            "absent `working` in a patch must not clear it"
+            registry.route_from_owner(
+                &owner,
+                owner_conn,
+                route(device.clone(), RUNTIME_A, RoutePurpose::Session)
+            ),
+            RouteOutcome::Delivered
+        );
+        assert!(host_a_rx.try_recv().is_ok());
+
+        let (host_b_tx, mut host_b_rx) = mpsc::unbounded_channel();
+        let _host_b_conn =
+            registry.register_host(host(device.clone(), RUNTIME_B, &[owner.clone()]), host_b_tx);
+        let update = owner_rx.try_recv().unwrap();
+        assert!(update.to_text().unwrap().contains(RUNTIME_B));
+
+        let mut stale_host_route = route(device.clone(), RUNTIME_A, RoutePurpose::Session);
+        stale_host_route.target_owner_id = Some(owner.clone());
+        assert_eq!(
+            registry.route_from_host(&device, ENDPOINT_ID, host_a_conn, stale_host_route),
+            RouteOutcome::Stale
+        );
+        assert!(owner_rx.try_recv().is_err());
+
+        assert_eq!(
+            registry.route_from_owner(
+                &owner,
+                owner_conn,
+                route(device.clone(), RUNTIME_A, RoutePurpose::Session)
+            ),
+            RouteOutcome::Stale
+        );
+        assert!(host_a_rx.try_recv().is_err());
+        assert_eq!(
+            registry.route_from_owner(
+                &owner,
+                owner_conn,
+                route(device, RUNTIME_B, RoutePurpose::Session)
+            ),
+            RouteOutcome::Delivered
+        );
+        assert!(host_b_rx.try_recv().is_ok());
+        assert!(!registry.is_active_host(&id(1), ENDPOINT_ID, host_a_conn));
+    }
+
+    #[test]
+    fn session_routes_require_acl_but_pairing_does_not() {
+        let registry = PeerRegistry::new();
+        let device = id(3);
+        let owner = id(4);
+        let (owner_tx, _) = mpsc::unbounded_channel();
+        let owner_conn = registry.register_owner(owner.clone(), owner_tx);
+        let (host_tx, mut host_rx) = mpsc::unbounded_channel();
+        registry.register_host(host(device.clone(), RUNTIME_A, &[]), host_tx);
+
+        assert_eq!(
+            registry.route_from_owner(
+                &owner,
+                owner_conn,
+                route(device.clone(), RUNTIME_A, RoutePurpose::Session)
+            ),
+            RouteOutcome::Unauthorized
+        );
+        assert_eq!(
+            registry.route_from_owner(
+                &owner,
+                owner_conn,
+                route(device, RUNTIME_A, RoutePurpose::Pairing)
+            ),
+            RouteOutcome::Delivered
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                host_rx.try_recv().unwrap().to_text().unwrap()
+            )
+            .unwrap()["ct"],
+            "opaque payload"
         );
     }
 }

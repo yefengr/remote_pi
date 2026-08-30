@@ -1,13 +1,13 @@
 import { decodeBase64, encodeBase64 } from "../remote-pi/encoding";
 import type { PeerChannel } from "../remote-pi/peer-channel";
 import type { RelayClient } from "../remote-pi/relay-client";
-import type { PwaMessageRecord, PwaRoomRecord } from "./db";
+import type { PwaEndpointRecord } from "./db";
 
 export type ConnectionContext = {
   generation: number;
-  peerId: string;
-  peerEpk: string;
-  roomId: string;
+  deviceId: string;
+  endpointId: string;
+  runtimeInstanceId: string;
   channel: PeerChannel;
   relay: RelayClient;
 };
@@ -41,25 +41,22 @@ export function migrateLegacyDefaultRelay(
   return !value || value === legacyDefault ? currentDefault : value;
 }
 
-export function mergeMessages(base: PwaMessageRecord[], preferred: PwaMessageRecord[]): PwaMessageRecord[] {
-  return Array.from(new Map([...base, ...preferred].map((message) => [message.id, message])).values())
-    .sort((a, b) => a.createdAt - b.createdAt);
-}
-
-export function upsertMessage(messages: PwaMessageRecord[], next: PwaMessageRecord): PwaMessageRecord[] {
-  const index = messages.findIndex((message) => message.id === next.id);
-  return index < 0
-    ? [...messages, next].sort((a, b) => a.createdAt - b.createdAt)
-    : messages.map((message, messageIndex) => messageIndex === index ? { ...message, ...next } : message);
-}
-
-export function mergeRooms(base: PwaRoomRecord[], preferred: PwaRoomRecord[]): PwaRoomRecord[] {
-  return Array.from(new Map([...base, ...preferred].map((room) => [room.id, room])).values())
+export function mergeEndpoints(base: PwaEndpointRecord[], preferred: PwaEndpointRecord[]): PwaEndpointRecord[] {
+  return Array.from(new Map([...base, ...preferred].map((endpoint) => [endpoint.id, endpoint])).values())
     .sort((a, b) => a.updatedAt - b.updatedAt);
 }
 
-export function markStreamingMessagesInterrupted(messages: PwaMessageRecord[], peerEpk: string, roomId: string): PwaMessageRecord[] {
-  return messages.map((message) => message.peerEpk === peerEpk && message.roomId === roomId && message.status === "streaming"
-    ? { ...message, status: "interrupted" as const }
-    : message);
+/** Reject a previously observed runtime after a newer runtime took its slot. */
+export function acceptEndpointRuntime(
+  history: Map<string, Set<string>>,
+  current: PwaEndpointRecord | undefined,
+  next: PwaEndpointRecord,
+): boolean {
+  const known = history.get(next.id) ?? new Set<string>();
+  if (current && !known.has(current.runtimeInstanceId)) known.add(current.runtimeInstanceId);
+  const latest = [...known].at(-1);
+  history.set(next.id, known);
+  if (known.has(next.runtimeInstanceId)) return latest === next.runtimeInstanceId;
+  known.add(next.runtimeInstanceId);
+  return true;
 }

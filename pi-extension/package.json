@@ -4,7 +4,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "description": "Browser PWA remote control and local agent mesh for the Pi coding agent. Pair a browser profile via QR over a relay, watch tool calls in real time, run multi-Pi sessions over a local Unix Domain Socket broker, and let agents talk to each other through structured request/reply.",
+  "description": "Browser PWA remote control for Pi coding agent endpoints over a Relay.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -30,10 +30,7 @@
     "browser",
     "pwa",
     "coding-agent",
-    "agent-mesh",
-    "agent-network",
-    "uds",
-    "broker",
+    "endpoint",
     "qr-pairing",
     "websocket"
   ],
@@ -56,7 +53,6 @@
   },
   "files": [
     "dist",
-    "skills",
     "service-templates",
     "docs",
     "README.md",
@@ -84,7 +80,6 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.79.10",
     "@earendil-works/pi-tui": "^0.79.10",
-    "@modelcontextprotocol/sdk": "^1.29.0",
     "@napi-rs/keyring": "^1.3.0",
     "@noble/ed25519": "^3.1.0",
     "croner": "^10.0.1",

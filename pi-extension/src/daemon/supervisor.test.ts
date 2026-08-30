@@ -1,297 +1,173 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createConnection } from "node:net";
 import { join } from "node:path";
 import { Supervisor, decideFireAction, getSupervisorSockPath } from "./supervisor.js";
-import { addDaemon } from "./registry.js";
+import type { DaemonPreflightResult } from "./preflight.js";
+import { addDaemon, listDaemons, setDaemonDesiredState } from "./registry.js";
+import { addJob } from "./cron_registry.js";
 import { readCronLog } from "./cron_log.js";
-import {
-  encodeRequest,
-  parseReply,
-  type ControlReply,
-  type ControlRequest,
-} from "./control_protocol.js";
+import { encodeRequest, parseReply, type ControlReply, type ControlRequest } from "./control_protocol.js";
 
-/**
- * Supervisor integration tests. We spin up a real `Supervisor` against a
- * scratch `REMOTE_PI_HOME`, connect to its UDS, send requests, and
- * inspect replies.
- *
- * `extensionPath` points at a non-existent path so the children's spawn
- * fails fast — sufficient to exercise the supervisor's request/reply
- * surface without actually booting Pi. We test child lifecycle proper
- * in `rpc_child.test.ts` separately (where applicable).
- */
-
-let testHome: string;
+let home: string;
 let supervisor: Supervisor | null = null;
 
-async function ask<R = ControlReply<unknown>>(req: ControlRequest): Promise<R> {
+function ask<R = ControlReply<unknown>>(request: ControlRequest): Promise<R> {
   return new Promise((resolve, reject) => {
-    const sock = createConnection({ path: getSupervisorSockPath() });
-    let buf = "";
-    sock.setEncoding("utf8");
-    sock.on("data", (chunk: string) => {
-      buf += chunk;
-      const nl = buf.indexOf("\n");
-      if (nl >= 0) {
-        sock.destroy();
-        try { resolve(parseReply(buf.slice(0, nl)) as R); }
-        catch (e) { reject(e); }
-      }
+    const socket = createConnection({ path: getSupervisorSockPath() });
+    let buffer = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk: string) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      socket.destroy();
+      try { resolve(parseReply(buffer.slice(0, newline)) as R); } catch (error) { reject(error); }
     });
-    sock.on("error", reject);
-    sock.write(encodeRequest(req));
+    socket.on("error", reject);
+    socket.write(encodeRequest(request));
   });
 }
 
 beforeEach(async () => {
-  testHome = mkdtempSync(join(tmpdir(), "pi-sv-"));
-  process.env["REMOTE_PI_HOME"] = testHome;
-  supervisor = new Supervisor({
-    // Point at a non-existent extension. The supervisor will try to
-    // spawn `<piBin> --mode rpc -e <path>` and the child exits immediately —
-    // fine for testing the control surface (we assert on op replies, not on
-    // the child's exit code).
-    extensionPath: "/no/such/extension.js",
-    // Cross-platform stub: `process.execPath` (node) exists on every OS, so
-    // spawn never ENOENTs (a POSIX-only path like `/usr/bin/true` failed on
-    // Windows CI). Node rejects the `--mode` arg and exits non-zero right away,
-    // which is harmless here — the spawning tests only check `started/restarted`
-    // booleans, returned synchronously at spawn time.
-    piBin: process.execPath,
-  });
+  home = mkdtempSync(join(tmpdir(), "pi-supervisor-v2-"));
+  process.env["REMOTE_PI_HOME"] = home;
+  supervisor = new Supervisor({ extensionPath: "/ignored", piBin: process.execPath, reconcileIntervalMs: 60_000 });
   await supervisor.start();
 });
-
 afterEach(async () => {
-  if (supervisor) {
-    await supervisor.stop();
-    supervisor = null;
-  }
+  await supervisor?.stop();
+  supervisor = null;
   delete process.env["REMOTE_PI_HOME"];
-  try { rmSync(testHome, { recursive: true, force: true }); } catch { /* best-effort */ }
+  rmSync(home, { recursive: true, force: true });
 });
 
-describe("Supervisor — control UDS surface", () => {
-  test("list returns empty daemons array when registry is empty", async () => {
-    const r = await ask({ op: "list" });
-    expect(r).toMatchObject({ ok: true, data: { daemons: [] } });
-  });
-
-  test("register adds an entry and returns the derived id", async () => {
-    const tmp = mkdtempSync(join(tmpdir(), "pi-sv-cwd-"));
-    const r = await ask({ op: "register", cwd: tmp }) as ControlReply<{ id: string; cwd: string }>;
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(r.data!.id).toMatch(/^[0-9a-f]{8}$/);
-      expect(r.data!.cwd.length).toBeGreaterThan(0);
-    }
-  });
-
-  test("register twice rejects with `already registered`", async () => {
-    const tmp = mkdtempSync(join(tmpdir(), "pi-sv-dup-"));
-    await ask({ op: "register", cwd: tmp });
-    const r = await ask({ op: "register", cwd: tmp });
-    expect(r).toMatchObject({ ok: false });
-    if (!r.ok) expect(r.error).toMatch(/already registered/i);
-  });
-
-  test("start spawns a single registered daemon by id", async () => {
-    const tmp = mkdtempSync(join(tmpdir(), "pi-sv-start-"));
-    const reg = await ask({ op: "register", cwd: tmp }) as ControlReply<{ id: string }>;
-    expect(reg.ok).toBe(true);
-    const id = reg.ok ? reg.data!.id : "";
-    const r = await ask({ op: "start", id }) as ControlReply<{ id: string; started: boolean }>;
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(r.data!.id).toBe(id);
-      expect(r.data!.started).toBe(true);
-    }
-  });
-
-  test("start of unknown id returns ok:false", async () => {
-    const r = await ask({ op: "start", id: "ffffffff" });
-    expect(r).toMatchObject({ ok: false });
-    if (!r.ok) expect(r.error).toMatch(/no daemon/i);
-  });
-
-  test("stop of unknown id returns ok:false", async () => {
-    const r = await ask({ op: "stop", id: "ffffffff" });
-    expect(r).toMatchObject({ ok: false });
-    if (!r.ok) expect(r.error).toMatch(/no daemon/i);
-  });
-
-  test("restart of unknown id returns ok:false", async () => {
-    const r = await ask({ op: "restart", id: "ffffffff" });
-    expect(r).toMatchObject({ ok: false });
-    if (!r.ok) expect(r.error).toMatch(/no daemon/i);
-  });
-
-  test("stop of a registered-but-not-running daemon → ok:true, stopped:false", async () => {
-    const tmp = mkdtempSync(join(tmpdir(), "pi-sv-stop-"));
-    const reg = await ask({ op: "register", cwd: tmp }) as ControlReply<{ id: string }>;
-    const id = reg.ok ? reg.data!.id : "";
-    const r = await ask({ op: "stop", id }) as ControlReply<{ id: string; stopped: boolean }>;
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(r.data!.id).toBe(id);
-      expect(r.data!.stopped).toBe(false);
-    }
-  });
-
-  test("restart spawns a single registered daemon by id", async () => {
-    const tmp = mkdtempSync(join(tmpdir(), "pi-sv-restart-"));
-    const reg = await ask({ op: "register", cwd: tmp }) as ControlReply<{ id: string }>;
-    const id = reg.ok ? reg.data!.id : "";
-    const r = await ask({ op: "restart", id }) as ControlReply<{ id: string; restarted: boolean }>;
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(r.data!.id).toBe(id);
-      expect(r.data!.restarted).toBe(true);
-    }
-  });
-
-  test("send to unknown daemon returns ok:false with clear error", async () => {
-    const r = await ask({ op: "send", id: "ffffffff", text: "hi" });
-    expect(r).toMatchObject({ ok: false });
-    if (!r.ok) expect(r.error).toMatch(/not running/i);
-  });
-
-  test("unregister of unknown id returns removed:false (not an error)", async () => {
-    const r = await ask({ op: "unregister", id: "ffffffff" });
-    // Unregister is idempotent at the supervisor — it always returns ok:true
-    // with `removed: false` when nothing matched, so a CLI script can
-    // call it repeatedly without failing.
-    expect(r).toMatchObject({ ok: true, data: { removed: false } });
-  });
-
-  test("malformed request returns ok:false with parser error", async () => {
-    const reply = await new Promise<ControlReply<unknown>>((resolve, reject) => {
-      const sock = createConnection({ path: getSupervisorSockPath() });
-      let buf = "";
-      sock.setEncoding("utf8");
-      sock.on("data", (c: string) => {
-        buf += c;
-        const nl = buf.indexOf("\n");
-        if (nl >= 0) { sock.destroy(); try { resolve(parseReply(buf.slice(0, nl))); } catch (e) { reject(e); } }
-      });
-      sock.on("error", reject);
-      sock.write("{not-json}\n");
+describe("SDK preflight supervisor gate", () => {
+  test("blocks a desired-running entry without spawning its Pi child", async () => {
+    await supervisor!.stop();
+    let preflightCalls = 0;
+    const blocked: DaemonPreflightResult = {
+      ok: false,
+      code: "remote_pi_extension_missing",
+      message: "No configured Remote Pi Extension was discovered",
+    };
+    supervisor = new Supervisor({
+      extensionPath: "/ignored",
+      piBin: process.execPath,
+      reconcileIntervalMs: 60_000,
+      preflight: async () => { preflightCalls += 1; return blocked; },
     });
-    expect(reply).toMatchObject({ ok: false });
-    if (!reply.ok) expect(reply.error).toMatch(/malformed/i);
+    await supervisor.start();
+    const entry = addDaemon(mkdtempSync(join(tmpdir(), "pi-supervisor-preflight-")));
+    const start = await ask<ControlReply<{ id: string }>>({ op: "start", id: entry.id });
+    expect(start).toMatchObject({ ok: true });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const status = await ask<ControlReply<{ daemons: Array<Record<string, unknown>> }>>({ op: "status" });
+    const daemon = status.ok ? status.data!.daemons.find((item) => item["daemon_id"] === entry.id) : undefined;
+    expect(preflightCalls).toBe(1);
+    expect(daemon).toMatchObject({ process: "absent", runtime: "pending", health: "blocked", last_error_code: "remote_pi_extension_missing" });
   });
 
-  test("unknown op returns ok:false", async () => {
-    // Bypass the typed encoder so we can send an op the type system
-    // doesn't know about.
-    const reply = await new Promise<ControlReply<unknown>>((resolve, reject) => {
-      const sock = createConnection({ path: getSupervisorSockPath() });
-      let buf = "";
-      sock.setEncoding("utf8");
-      sock.on("data", (c: string) => {
-        buf += c;
-        const nl = buf.indexOf("\n");
-        if (nl >= 0) { sock.destroy(); try { resolve(parseReply(buf.slice(0, nl))); } catch (e) { reject(e); } }
-      });
-      sock.on("error", reject);
-      sock.write('{"op":"frobnicate"}\n');
+  test("merges concurrent entry preflights before spawning", async () => {
+    await supervisor!.stop();
+    let resolvePreflight: ((result: DaemonPreflightResult) => void) | undefined;
+    let preflightCalls = 0;
+    const pending = new Promise<DaemonPreflightResult>((resolve) => { resolvePreflight = resolve; });
+    supervisor = new Supervisor({
+      extensionPath: "/ignored",
+      piBin: process.execPath,
+      reconcileIntervalMs: 60_000,
+      preflight: async () => { preflightCalls += 1; return pending; },
     });
-    expect(reply).toMatchObject({ ok: false });
-    if (!reply.ok) expect(reply.error).toMatch(/unknown op/i);
-  });
-
-  test("list reflects a daemon added directly via registry (not just register op)", async () => {
-    const tmp = mkdtempSync(join(tmpdir(), "pi-sv-direct-"));
-    addDaemon(tmp);
-    const r = await ask({ op: "list" }) as ControlReply<{ daemons: Array<{ cwd: string; state: string }> }>;
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      const found = r.data!.daemons.find((d) => d.cwd.endsWith(tmp.split("/").pop()!));
-      expect(found).toBeDefined();
-      // State is "stopped" — the children were spawned at supervisor.start()
-      // before our addDaemon call, so this entry isn't in the children map.
-      expect(found?.state).toBe("stopped");
-    }
+    await supervisor.start();
+    const entry = addDaemon(mkdtempSync(join(tmpdir(), "pi-supervisor-preflight-merge-")));
+    await Promise.all([
+      ask({ op: "start", id: entry.id }),
+      ask({ op: "start", id: entry.id }),
+    ]);
+    expect(preflightCalls).toBe(1);
+    resolvePreflight!({ ok: false, code: "preflight_failed", message: "test" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
   });
 });
 
-describe("decideFireAction (cron — 4 ramos)", () => {
-  test("running + idle → send", () => {
-    expect(decideFireAction({ running: true, busy: false, wake: false, skipIfBusy: true })).toBe("send");
+describe("orthogonal daemon lifecycle", () => {
+  test("register creates desired-running registration with persistent opaque id", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-supervisor-reg-"));
+    const reply = await ask<ControlReply<{ id: string; desired_state: string }>>({ op: "register", cwd });
+    expect(reply).toMatchObject({ ok: true, data: { desired_state: "running" } });
+    if (reply.ok) expect(reply.data!.id).toMatch(/^[0-9a-f-]{36}$/i);
   });
-  test("running + busy + skip_if_busy → skip_busy", () => {
-    expect(decideFireAction({ running: true, busy: true, wake: false, skipIfBusy: true })).toBe("skip_busy");
+
+  test("status separates process lifecycle from runtime health", async () => {
+    const entry = addDaemon(mkdtempSync(join(tmpdir(), "pi-supervisor-status-")));
+    const reply = await ask<ControlReply<{ daemons: Array<Record<string, unknown>> }>>({ op: "status" });
+    const daemon = reply.ok ? reply.data!.daemons.find((item) => item["daemon_id"] === entry.id) : undefined;
+    expect(daemon).toMatchObject({
+      registration: "registered",
+      desired: "running",
+      process: "absent",
+      runtime: "pending",
+      health: "failed",
+      endpoint_id: entry.id,
+      kind: "daemon",
+    });
   });
-  test("running + busy + no skip_if_busy → send", () => {
-    expect(decideFireAction({ running: true, busy: true, wake: false, skipIfBusy: false })).toBe("send");
+
+  test("start and stop persist desired state", async () => {
+    const entry = addDaemon(mkdtempSync(join(tmpdir(), "pi-supervisor-desired-")));
+    const start = await ask<ControlReply<{ desired_state: string }>>({ op: "start", id: entry.id });
+    expect(start).toMatchObject({ ok: true, data: { desired_state: "running" } });
+    const stop = await ask<ControlReply<{ desired_state: string }>>({ op: "stop", id: entry.id });
+    expect(stop).toMatchObject({ ok: true, data: { desired_state: "stopped" } });
+    expect(listDaemons().find((item) => item.id === entry.id)?.desired_state).toBe("stopped");
   });
-  test("down + no wake → skip_down", () => {
-    expect(decideFireAction({ running: false, busy: false, wake: false, skipIfBusy: true })).toBe("skip_down");
+
+  test("supervisor startup spawns only desired-running registrations", async () => {
+    const stopped = addDaemon(mkdtempSync(join(tmpdir(), "pi-supervisor-stopped-")));
+    setDaemonDesiredState(stopped.id, "stopped");
+    await supervisor!.stop();
+    supervisor = new Supervisor({ extensionPath: "/ignored", piBin: process.execPath, reconcileIntervalMs: 60_000 });
+    await supervisor.start();
+    const reply = await ask<ControlReply<{ daemons: Array<Record<string, unknown>> }>>({ op: "status" });
+    const daemon = reply.ok ? reply.data!.daemons.find((item) => item["daemon_id"] === stopped.id) : undefined;
+    expect(daemon).toMatchObject({ desired: "stopped", process: "absent", health: "stopped" });
   });
-  test("down + wake → wake_and_send", () => {
-    expect(decideFireAction({ running: false, busy: false, wake: true, skipIfBusy: true })).toBe("wake_and_send");
+
+  test("send rejects unready runtime rather than treating stdin write as delivery", async () => {
+    const entry = addDaemon(mkdtempSync(join(tmpdir(), "pi-supervisor-send-")));
+    const reply = await ask<ControlReply<{ accepted: boolean; code: string }>>({ op: "send", id: entry.id, text: "hello" });
+    expect(reply).toMatchObject({ ok: true, data: { accepted: false, code: "runtime_not_ready" } });
+  });
+
+  test("removes stale cwd during a control-path reconcile", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-supervisor-stale-"));
+    const entry = addDaemon(cwd);
+    rmSync(cwd, { recursive: true, force: true });
+    await ask({ op: "list" });
+    expect(listDaemons().find((item) => item.id === entry.id)).toBeUndefined();
   });
 });
 
-describe("Supervisor — cron ops", () => {
-  async function registerDaemon(): Promise<string> {
-    const tmp = mkdtempSync(join(tmpdir(), "pi-cron-d-"));
-    const r = await ask({ op: "register", cwd: tmp }) as ControlReply<{ id: string }>;
-    return r.ok ? r.data!.id : "";
-  }
-
-  test("cron_add validates: invalid expr + <60s rejected, valid accepted", async () => {
-    const daemon_id = await registerDaemon();
-    const bad = await ask({ op: "cron_add", daemon_id, schedule: "nope", prompt: "p" });
-    expect(bad.ok).toBe(false);
-    const tooFreq = await ask({ op: "cron_add", daemon_id, schedule: "* * * * * *", prompt: "p" });
-    expect(tooFreq).toMatchObject({ ok: false });
-    if (!tooFreq.ok) expect(tooFreq.error).toMatch(/60s|too frequent/i);
-    const good = await ask({ op: "cron_add", daemon_id, schedule: "0 9 * * *", prompt: "p" }) as ControlReply<{ job: { id: string } }>;
-    expect(good.ok).toBe(true);
-    expect(good.ok && good.data!.job.id).toMatch(/^j_/);
+describe("cron gate", () => {
+  test("has no wake action and gates by desired/readiness/health", () => {
+    expect(decideFireAction({ exists: true, desired: "stopped", runtime: "ready", health: "stopped", busy: false, skipIfBusy: true, retrying: false })).toBe("skip_desired_stopped");
+    expect(decideFireAction({ exists: true, desired: "running", runtime: "pending", health: "starting", busy: false, skipIfBusy: true, retrying: false })).toBe("skip_starting");
+    expect(decideFireAction({ exists: true, desired: "running", runtime: "ready", health: "degraded", busy: false, skipIfBusy: true, retrying: false })).toBe("send");
   });
 
-  test("cron list/enable/remove round-trip", async () => {
-    const daemon_id = await registerDaemon();
-    const add = await ask({ op: "cron_add", daemon_id, schedule: "0 9 * * *", prompt: "p" }) as ControlReply<{ job: { id: string } }>;
-    const jobId = add.ok ? add.data!.job.id : "";
-
-    const list = await ask({ op: "cron_list" }) as ControlReply<{ jobs: Array<{ id: string; next_run?: string | null }> }>;
-    expect(list.ok && list.data!.jobs.some((j) => j.id === jobId && !!j.next_run)).toBe(true);
-
-    const dis = await ask({ op: "cron_enable", job_id: jobId, enabled: false }) as ControlReply<{ updated: boolean }>;
-    expect(dis.ok && dis.data!.updated).toBe(true);
-
-    const rm = await ask({ op: "cron_remove", job_id: jobId }) as ControlReply<{ removed: boolean }>;
-    expect(rm.ok && rm.data!.removed).toBe(true);
-    const list2 = await ask({ op: "cron_list" }) as ControlReply<{ jobs: unknown[] }>;
-    expect(list2.ok && list2.data!.jobs.length).toBe(0);
+  test("manual run cannot wake a stopped daemon and records audit", async () => {
+    const entry = addDaemon(mkdtempSync(join(tmpdir(), "pi-supervisor-cron-")));
+    setDaemonDesiredState(entry.id, "stopped");
+    const job = addJob({ daemon_id: entry.id, schedule: "0 9 * * *", prompt: "ping" });
+    const reply = await ask<ControlReply<{ result: string }>>({ op: "cron_run", job_id: job.id });
+    expect(reply).toMatchObject({ ok: true, data: { result: "skipped_desired_stopped" } });
+    expect(readCronLog({ jobId: job.id }).at(-1)).toMatchObject({ result: "skipped_desired_stopped", fired: false });
   });
 
-  test("cron_run on a down daemon → skipped_down, recorded + logged", async () => {
-    const daemon_id = await registerDaemon(); // registered, not started → not running
-    const add = await ask({ op: "cron_add", daemon_id, schedule: "0 9 * * *", prompt: "ping" }) as ControlReply<{ job: { id: string } }>;
-    const jobId = add.ok ? add.data!.job.id : "";
-
-    const run = await ask({ op: "cron_run", job_id: jobId }) as ControlReply<{ result: string }>;
-    expect(run.ok && run.data!.result).toBe("skipped_down");
-
-    // logged to cron.jsonl
-    const log = readCronLog({ jobId });
-    expect(log.at(-1)).toMatchObject({ result: "skipped_down", fired: false });
-
-    // last_status reflected in cron list
-    const list = await ask({ op: "cron_list" }) as ControlReply<{ jobs: Array<{ id: string; last_status?: string }> }>;
-    const job = list.ok ? list.data!.jobs.find((j) => j.id === jobId) : undefined;
-    expect(job?.last_status).toBe("skipped_down");
-  });
-
-  test("cron_run on an unknown job → ok:false", async () => {
-    const r = await ask({ op: "cron_run", job_id: "j_unknown" });
-    expect(r).toMatchObject({ ok: false });
+  test("protocol rejects old wake request at type boundary", () => {
+    const req: Extract<ControlRequest, { op: "cron_add" }> = { op: "cron_add", daemon_id: "d", schedule: "0 9 * * *", prompt: "p" };
+    expect("wake" in req).toBe(false);
   });
 });
