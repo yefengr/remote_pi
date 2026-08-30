@@ -8,6 +8,8 @@ Numeração `00-` é proposital: este arquivo carrega antes dos planos numerados
 
 A partir de 2026-08-29, [Plan 69](69-remove-agent-mesh-and-rework-daemon.md) substitui as decisões históricas abaixo sobre daemon residente, rooms, mesh local/cross-PC e Owner membership. A implementação vigente remove Agent Mesh completo, usa `device_id → endpoint_id → runtime_instance_id → session_id/history_generation`, faz pairing independente por computador e mantém apenas Relay endpoint discovery/routing entre Owner e Host. Não há migração de room/mesh/IndexedDB/protocolo antigo, nem fallback de compatibilidade. Este bloco é o índice da decisão atual; as entradas históricas permanecem para auditoria.
 
+Correção de runtime fechada em 2026-08-30: o Supervisor não carrega uma cópia privada do Pi SDK para preflight. O processo host `pi --mode rpc` é a única execução de settings/package/resource discovery e diagnostics; readiness exige RPC `get_state` + `runtime-ready` da Extension. O pacote declara `@earendil-works/pi-coding-agent` como peer e dependência apenas de desenvolvimento, sem dependência direta de `pi-tui`.
+
 ---
 
 ## Origin / posicionamento

@@ -15,7 +15,7 @@ device_id → endpoint_id → runtime_instance_id → session_id / history_gener
 - Node 20+ / TypeScript 6
 - ESM only（NodeNext）；TypeScript import 也必须带 `.js`
 - pnpm（不要使用 npm/yarn）
-- Pi SDK：`@earendil-works/pi-coding-agent`
+- Pi SDK types/test contract：`@earendil-works/pi-coding-agent`（peer + dev；生产包不私有安装 SDK）
 - Relay transport：`ws`
 - Host identity：`@napi-rs/keyring` + headless file fallback
 - Schema：TypeBox / Zod（沿现有模块边界）
@@ -64,8 +64,8 @@ pnpm verify
 - Registry v2 使用 canonical cwd、稳定 UUID、`desired_state` 和 `created_at`。
 - Supervisor 只恢复 `desired_state=running`，并清理 cwd 不存在的 stale entry。
 - Pi settings/package discovery 是 Remote Pi Extension 的唯一来源；child 不传 `-e`。
-- Spawn 前用 Pi SDK resource discovery preflight：Extension 缺失、重复或 diagnostics/config 错误进入 deterministic `blocked`。
-- Runtime ready 必须同时通过 Pi RPC `get_state` 和 Extension `runtime-ready`，并核对 control protocol、endpoint/runtime identity。
+- Supervisor 不导入或运行私有 Pi SDK；实际宿主 `pi --mode rpc` 负责 settings/package/resource discovery 和 diagnostics。
+- Runtime ready 必须同时通过宿主 Pi RPC `get_state` 和 Extension `runtime-ready`，并核对 control protocol、endpoint/runtime identity；RPC ready 但 Extension 未 ready 时确定性进入 `extension_not_ready` blocked。
 - Cron 只能在 desired/readiness/health 门禁通过时发送；没有 wake 路径。
 - `unregister_cwd`/`remove-cwd` 必须幂等停止并删除 entry。
 

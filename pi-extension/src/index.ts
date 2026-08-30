@@ -23,7 +23,7 @@ import {
   getModelsList, type ActionCtx, type ActionReplySender,
 } from "./actions/handlers.js";
 import { ensureModelRegistry } from "./actions/registry.js";
-import { EXIT_DAEMON_FRESH_SESSION } from "./daemon/rpc_child.js";
+import { EXIT_DAEMON_FRESH_SESSION, RPC_CONTROL_STATUS_KEY } from "./daemon/rpc_child.js";
 import { defaultAgentName, loadLocalConfig } from "./session/local_config.js";
 import { resolveRelayUrl, toWebSocketUrl } from "./config.js";
 import { persistModelDefault, registerCommands, runDirectCli, type RemoteCommandDependencies } from "./daemon/commands.js";
@@ -136,6 +136,12 @@ function relayStatus(): RelayConnectivity {
 }
 
 function emitRuntimeEvent(type: string, details: Record<string, unknown>): void {
+  if (process.env.REMOTE_PI_DAEMON === "1") {
+    const ui = lastEventCtx?.ui ?? lastCommandCtx?.ui;
+    try { ui?.setStatus(RPC_CONTROL_STATUS_KEY, JSON.stringify({ type: type.replace(/-/g, "_"), ...details })); }
+    catch { /* a stale RPC UI context must not take down the process */ }
+    return;
+  }
   try { piApi?.sendMessage({ customType: `remote-pi:${type}`, content: "", details, display: false }); }
   catch { /* a stale session must not take down the process */ }
 }

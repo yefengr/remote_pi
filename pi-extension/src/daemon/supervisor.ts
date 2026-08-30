@@ -24,7 +24,6 @@ import {
 } from "./cron_registry.js";
 import { appendCronLog, readCronLog, type CronResult } from "./cron_log.js";
 import { decideFireAction, infoFor, type FireAction, type DaemonStatusSnapshot } from "./status.js";
-import { runDaemonPreflight, type DaemonPreflightResult } from "./preflight.js";
 import { probeSupervisor } from "./supervisor-ipc.js";
 
 const SUPERVISOR_SOCK_NAME = "supervisor.sock";
@@ -42,13 +41,17 @@ export class SupervisorAlreadyRunningError extends Error {
   }
 }
 
-export interface SupervisorOptions { extensionPath: string; piBin?: string; reconcileIntervalMs?: number; preflight?: (entry: Pick<DaemonEntry, "cwd">) => Promise<DaemonPreflightResult>; }
+export interface SupervisorOptions {
+  piBin?: string;
+  reconcileIntervalMs?: number;
+  childFactory?: (options: RpcChildOptions) => RpcChild;
+}
 
 export { decideFireAction, type FireAction } from "./status.js";
 
 type SlotError = { code: string; message?: string; at: number; retryable: boolean; stage: string; };
 
-interface ChildSlot { entry: DaemonEntry; child: RpcChild; restartTimer: ReturnType<typeof setTimeout> | null; stabilityTimer: ReturnType<typeof setTimeout> | null; restartAttempt: number; nextRetryAt?: number; blocked: boolean; error?: SlotError; missingCwdObservations: number; reconcileInProgress: boolean; preflight: Promise<void> | null; }
+interface ChildSlot { entry: DaemonEntry; child: RpcChild; restartTimer: ReturnType<typeof setTimeout> | null; stabilityTimer: ReturnType<typeof setTimeout> | null; restartAttempt: number; nextRetryAt?: number; blocked: boolean; error?: SlotError; missingCwdObservations: number; reconcileInProgress: boolean; }
 
 export class Supervisor {
   private server: Server | null = null;
@@ -57,11 +60,11 @@ export class Supervisor {
   private shuttingDown = false;
   private reconcileTimer: ReturnType<typeof setInterval> | null = null;
   private reconcileRunning = false;
-  private readonly preflightFor: (entry: Pick<DaemonEntry, "cwd">) => Promise<DaemonPreflightResult>;
+  private readonly lifecycleQueues = new Map<string, Promise<void>>();
+  private readonly controlSockets = new Map<Socket, { requestStarted: boolean }>();
+  private readonly activeRequests = new Set<Promise<void>>();
 
-  constructor(private readonly opts: SupervisorOptions) {
-    this.preflightFor = opts.preflight ?? ((entry) => runDaemonPreflight({ cwd: entry.cwd }));
-  }
+  constructor(private readonly opts: SupervisorOptions) {}
 
   async start(): Promise<void> {
     this.mkdirParent();
@@ -81,11 +84,23 @@ export class Supervisor {
     this.reconcileTimer = null;
     for (const cron of this.cronJobs.values()) cron.stop();
     this.cronJobs.clear();
-    for (const slot of this.children.values()) this.cancelRetry(slot);
+
+    const server = this.server;
+    this.server = null;
+    const serverClosed = new Promise<void>((resolve) => server ? server.close(() => resolve()) : resolve());
+    for (const [socket, state] of this.controlSockets) {
+      if (!state.requestStarted) socket.destroy();
+    }
+    for (const slot of this.children.values()) {
+      this.cancelRetry(slot);
+      this.cancelStabilityReset(slot);
+    }
+
+    await Promise.all([...this.activeRequests]);
+    while (this.lifecycleQueues.size > 0) await Promise.all([...this.lifecycleQueues.values()]);
     await Promise.all([...this.children.values()].map(async (slot) => slot.child.stop()));
     this.children.clear();
-    await new Promise<void>((resolve) => this.server ? this.server.close(() => resolve()) : resolve());
-    this.server = null;
+    await serverClosed;
     if (!usesNamedPipe()) {
       try { unlinkSync(supervisorSockPath()); } catch { /* socket already absent */ }
     }
@@ -111,17 +126,28 @@ export class Supervisor {
   }
 
   private onConnection(socket: Socket): void {
+    if (this.shuttingDown) {
+      socket.destroy();
+      return;
+    }
+    const state = { requestStarted: false };
+    this.controlSockets.set(socket, state);
     let buffer = "";
     socket.setEncoding("utf8");
     socket.on("data", (chunk: string) => {
+      if (state.requestStarted || this.shuttingDown) return;
       buffer += chunk;
       const newline = buffer.indexOf("\n");
       if (newline < 0) return;
-      void this.handleRequest(buffer.slice(0, newline)).then(
-        (reply) => socket.end(encodeReply(reply)),
-        (error) => socket.end(encodeReply({ ok: false, error: String(error) })),
-      );
+      state.requestStarted = true;
+      let task!: Promise<void>;
+      task = this.handleRequest(buffer.slice(0, newline)).then(
+        (reply) => { socket.end(encodeReply(reply)); },
+        (error) => { socket.end(encodeReply({ ok: false, error: String(error) })); },
+      ).finally(() => this.activeRequests.delete(task));
+      this.activeRequests.add(task);
     });
+    socket.on("close", () => this.controlSockets.delete(socket));
     socket.on("error", () => { /* callers can abandon a control operation */ });
   }
 
@@ -181,43 +207,49 @@ export class Supervisor {
     return infoFor(snapshot);
   }
 
-  private startAll(): ControlReply<unknown> {
+  private async startAll(): Promise<ControlReply<unknown>> {
     const started: string[] = [];
     const alreadyRunning: string[] = [];
     for (const entry of listDaemons()) {
-      const result = this.startEntry(entry);
+      const result = await this.startEntry(entry);
       (result ? alreadyRunning : started).push(entry.id);
     }
     return { ok: true, data: { started, already_running: alreadyRunning } };
   }
 
-  private startOne(id: string): ControlReply<unknown> {
+  private async startOne(id: string): Promise<ControlReply<unknown>> {
     const entry = listDaemons().find((item) => item.id === id);
     if (!entry) return { ok: false, error: `no daemon with id ${id}` };
-    const alreadyRunning = this.startEntry(entry);
-    const info = this.infoFor(setDaemonDesiredState(id, "running")!);
+    const alreadyRunning = await this.startEntry(entry);
+    const updated = listDaemons().find((item) => item.id === id);
+    if (!updated) return { ok: false, error: `no daemon with id ${id}` };
+    const info = this.infoFor(updated);
     return { ok: true, data: { id, state: info.state, started: !alreadyRunning, desired_state: "running" } };
   }
 
-  private startEntry(entry: DaemonEntry): boolean {
-    const updated = setDaemonDesiredState(entry.id, "running")!;
-    const slot = this.children.get(entry.id);
-    if (slot) slot.entry = updated;
-    if (slot && (slot.child.processState === "running" || slot.child.processState === "spawning") && !slot.blocked) return true;
-    if (slot) {
-      this.cancelRetry(slot);
-      slot.blocked = false;
-      slot.error = undefined;
-      slot.entry = updated;
-      if (slot.child.processState === "exited" || slot.child.pid === undefined) {
-        void this.preflightAndSpawn(slot);
+  private startEntry(entry: DaemonEntry): Promise<boolean> {
+    return this.enqueueLifecycle(entry.id, async () => {
+      const updated = setDaemonDesiredState(entry.id, "running");
+      if (!updated) return true;
+      const slot = this.children.get(entry.id);
+      if (slot) slot.entry = updated;
+      if (slot && (slot.child.processState === "running" || slot.child.processState === "spawning") && !slot.blocked) return true;
+      if (slot) {
+        this.cancelRetry(slot);
+        slot.blocked = false;
+        slot.error = undefined;
+        slot.entry = updated;
+        if (slot.child.processState === "exited" || slot.child.pid === undefined) {
+          slot.child.spawn();
+          return false;
+        }
+        await slot.child.stop();
+        if (this.children.get(entry.id) === slot && !this.shuttingDown && slot.entry.desired_state === "running") slot.child.spawn();
         return false;
       }
-      void slot.child.stop().then(() => this.preflightAndSpawn(slot));
+      if (!this.shuttingDown) this.createSlot(updated);
       return false;
-    }
-    this.createSlot(updated);
-    return false;
+    });
   }
 
   private async stopAll(): Promise<ControlReply<unknown>> {
@@ -230,27 +262,34 @@ export class Supervisor {
     const entry = listDaemons().find((item) => item.id === id);
     if (!entry) return { ok: false, error: `no daemon with id ${id}` };
     const stopped = await this.stopEntry(entry);
-    const info = this.infoFor(setDaemonDesiredState(id, "stopped")!);
+    const updated = listDaemons().find((item) => item.id === id);
+    if (!updated) return { ok: false, error: `no daemon with id ${id}` };
+    const info = this.infoFor(updated);
     return { ok: true, data: { id, state: info.state, stopped, desired_state: "stopped" } };
   }
 
-  private async stopEntry(entry: DaemonEntry): Promise<boolean> {
-    const updated = setDaemonDesiredState(entry.id, "stopped")!;
-    const slot = this.children.get(entry.id);
-    if (slot) slot.entry = updated;
-    if (!slot) return false;
-    this.cancelRetry(slot);
-    this.cancelStabilityReset(slot);
-    const wasLive = slot.child.processState === "running" || slot.child.processState === "spawning";
-    await slot.child.stop();
-    return wasLive;
+  private stopEntry(entry: DaemonEntry): Promise<boolean> {
+    return this.enqueueLifecycle(entry.id, async () => {
+      const updated = setDaemonDesiredState(entry.id, "stopped");
+      if (!updated) return false;
+      const slot = this.children.get(entry.id);
+      if (slot) slot.entry = updated;
+      if (!slot) return false;
+      this.cancelRetry(slot);
+      this.cancelStabilityReset(slot);
+      const wasLive = slot.child.processState === "running" || slot.child.processState === "spawning";
+      await slot.child.stop();
+      return wasLive;
+    });
   }
 
   private async restartOne(id: string): Promise<ControlReply<unknown>> {
     const entry = listDaemons().find((item) => item.id === id);
     if (!entry) return { ok: false, error: `no daemon with id ${id}` };
     await this.restartEntry(entry);
-    const info = this.infoFor(setDaemonDesiredState(id, "running")!);
+    const updated = listDaemons().find((item) => item.id === id);
+    if (!updated) return { ok: false, error: `no daemon with id ${id}` };
+    const info = this.infoFor(updated);
     return { ok: true, data: { id, state: info.state, restarted: true, desired_state: "running" } };
   }
 
@@ -260,18 +299,21 @@ export class Supervisor {
     return { ok: true, data: { restarted } };
   }
 
-  private async restartEntry(entry: DaemonEntry): Promise<void> {
-    const updated = setDaemonDesiredState(entry.id, "running")!;
-    const existing = this.children.get(entry.id);
-    if (existing) {
-      this.cancelRetry(existing);
-      this.cancelStabilityReset(existing);
-      existing.blocked = false;
-      existing.error = undefined;
-      await existing.child.stop();
-      this.children.delete(entry.id);
-    }
-    this.createSlot(updated);
+  private restartEntry(entry: DaemonEntry): Promise<void> {
+    return this.enqueueLifecycle(entry.id, async () => {
+      const updated = setDaemonDesiredState(entry.id, "running");
+      if (!updated) return;
+      const existing = this.children.get(entry.id);
+      if (existing) {
+        this.cancelRetry(existing);
+        this.cancelStabilityReset(existing);
+        existing.blocked = false;
+        existing.error = undefined;
+        await existing.child.stop();
+        if (this.children.get(entry.id) === existing) this.children.delete(entry.id);
+      }
+      if (!this.shuttingDown) this.createSlot(updated);
+    });
   }
 
   private async send(id: string, text: string): Promise<ControlReply<unknown>> {
@@ -296,25 +338,28 @@ export class Supervisor {
     } };
   }
 
-  private register(cwd: string): ControlReply<unknown> {
+  private async register(cwd: string): Promise<ControlReply<unknown>> {
     try {
       const entry = addDaemon(cwd);
-      this.startEntry(entry);
+      await this.startEntry(entry);
       return { ok: true, data: { id: entry.id, cwd: entry.cwd, name: entry.name, desired_state: entry.desired_state } };
     } catch (error) {
       return { ok: false, error: (error as Error).message };
     }
   }
 
-  private async unregister(id: string): Promise<ControlReply<unknown>> {
-    const slot = this.children.get(id);
-    if (slot) {
-      this.cancelRetry(slot);
-      await slot.child.stop();
-      this.children.delete(id);
-    }
-    try { return { ok: true, data: removeDaemon(id) }; }
-    catch (error) { return { ok: false, error: (error as Error).message }; }
+  private unregister(id: string): Promise<ControlReply<unknown>> {
+    return this.enqueueLifecycle(id, async () => {
+      const slot = this.children.get(id);
+      if (slot) {
+        this.cancelRetry(slot);
+        this.cancelStabilityReset(slot);
+        await slot.child.stop();
+        if (this.children.get(id) === slot) this.children.delete(id);
+      }
+      try { return { ok: true, data: removeDaemon(id) }; }
+      catch (error) { return { ok: false, error: (error as Error).message }; }
+    });
   }
 
   private async unregisterCwd(cwd: string): Promise<ControlReply<unknown>> {
@@ -445,11 +490,22 @@ export class Supervisor {
     for (const entry of listDaemons()) if (entry.desired_state === "running") this.createSlot(entry);
   }
 
+  private enqueueLifecycle<T>(id: string, operation: () => Promise<T> | T): Promise<T> {
+    const previous = this.lifecycleQueues.get(id) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    this.lifecycleQueues.set(id, current);
+    return previous.then(operation).finally(() => {
+      release();
+      if (this.lifecycleQueues.get(id) === current) this.lifecycleQueues.delete(id);
+    });
+  }
+
   private createSlot(entry: DaemonEntry): void {
     const config: LocalConfig = { agent_name: entry.name || defaultAgentName(entry.cwd), auto_start_relay: true };
-    const childOptions: RpcChildOptions = { endpointId: entry.id, extensionPath: this.opts.extensionPath, cwd: entry.cwd, config };
+    const childOptions: RpcChildOptions = { endpointId: entry.id, cwd: entry.cwd, config };
     if (this.opts.piBin) childOptions.piBin = this.opts.piBin;
-    const child = new RpcChild(childOptions);
+    const child = this.opts.childFactory?.(childOptions) ?? new RpcChild(childOptions);
     const slot: ChildSlot = {
       entry,
       child,
@@ -459,45 +515,16 @@ export class Supervisor {
       blocked: false,
       missingCwdObservations: 0,
       reconcileInProgress: false,
-      preflight: null,
     };
     this.children.set(entry.id, slot);
-    child.on("exit", (event: RpcChildExitEvent) => this.onChildExit(entry.id, event));
-    child.on("runtime_ready", () => this.onRuntimeReady(entry.id));
-    child.on("runtime_failed", (event: RuntimeFailedEvent) => this.onRuntimeFailed(entry.id, event));
-    void this.preflightAndSpawn(slot);
+    child.on("exit", (event: RpcChildExitEvent) => this.onChildExit(entry.id, slot, event));
+    child.on("runtime_ready", () => this.onRuntimeReady(entry.id, slot));
+    child.on("runtime_failed", (event: RuntimeFailedEvent) => this.onRuntimeFailed(entry.id, slot, event));
+    child.spawn();
   }
 
-  private preflightAndSpawn(slot: ChildSlot): Promise<void> {
-    if (slot.preflight) return slot.preflight;
-    const run = async () => {
-      const result = await this.preflightFor(slot.entry);
-      if (this.children.get(slot.entry.id) !== slot || this.shuttingDown || slot.entry.desired_state !== "running") return;
-      if (!result.ok) {
-        slot.blocked = true;
-        slot.error = { code: result.code, message: result.message, at: Date.now(), retryable: false, stage: "preflight" };
-        return;
-      }
-      slot.blocked = false;
-      slot.error = undefined;
-      slot.child.spawn();
-    };
-    const pending = run().catch(() => {
-      if (this.children.get(slot.entry.id) !== slot || this.shuttingDown) return;
-      slot.blocked = true;
-      slot.error = { code: "preflight_failed", message: "Pi SDK resource discovery failed", at: Date.now(), retryable: false, stage: "preflight" };
-    });
-    let tracked: Promise<void>;
-    tracked = pending.finally(() => {
-      if (slot.preflight === tracked) slot.preflight = null;
-    });
-    slot.preflight = tracked;
-    return tracked;
-  }
-
-  private onRuntimeReady(id: string): void {
-    const slot = this.children.get(id);
-    if (!slot || this.shuttingDown || slot.entry.desired_state !== "running") return;
+  private onRuntimeReady(id: string, slot: ChildSlot): void {
+    if (this.children.get(id) !== slot || this.shuttingDown || slot.entry.desired_state !== "running") return;
     if (slot.stabilityTimer) clearTimeout(slot.stabilityTimer);
     slot.stabilityTimer = setTimeout(() => {
       slot.stabilityTimer = null;
@@ -506,29 +533,30 @@ export class Supervisor {
     slot.stabilityTimer.unref();
   }
 
-  private onRuntimeFailed(id: string, event: RuntimeFailedEvent): void {
-    const slot = this.children.get(id);
-    if (!slot || this.shuttingDown || slot.entry.desired_state === "stopped") return;
+  private onRuntimeFailed(id: string, slot: ChildSlot, event: RuntimeFailedEvent): void {
+    if (this.children.get(id) !== slot || this.shuttingDown || slot.entry.desired_state === "stopped") return;
     slot.error = { code: event.code, message: event.message, at: Date.now(), retryable: event.retryable, stage: event.stage ?? "runtime" };
     if (!event.retryable) {
       slot.blocked = true;
       this.cancelRetry(slot);
       this.cancelStabilityReset(slot);
-      void slot.child.stop();
+      void this.enqueueLifecycle(id, () => this.children.get(id) === slot ? slot.child.stop() : undefined);
       return;
     }
     this.scheduleRetry(slot, "runtime failure");
-    void slot.child.stop();
+    void this.enqueueLifecycle(id, () => this.children.get(id) === slot ? slot.child.stop() : undefined);
   }
 
-  private onChildExit(id: string, event: RpcChildExitEvent): void {
-    const slot = this.children.get(id);
-    if (!slot || this.shuttingDown || slot.entry.desired_state === "stopped" || slot.blocked) return;
+  private onChildExit(id: string, slot: ChildSlot, event: RpcChildExitEvent): void {
+    if (this.children.get(id) !== slot || this.shuttingDown || slot.entry.desired_state === "stopped" || slot.blocked) return;
     this.cancelStabilityReset(slot);
     if (event.code === EXIT_DAEMON_FRESH_SESSION) {
-      slot.restartAttempt = 0;
-      slot.child.noteRestart();
-      void this.preflightAndSpawn(slot);
+      void this.enqueueLifecycle(id, () => {
+        if (this.children.get(id) !== slot || this.shuttingDown || slot.entry.desired_state !== "running" || slot.blocked) return;
+        slot.restartAttempt = 0;
+        slot.child.noteRestart();
+        slot.child.spawn();
+      });
       return;
     }
     if (!event.isCrash) return;
@@ -547,10 +575,12 @@ export class Supervisor {
     slot.restartTimer = setTimeout(() => {
       slot.restartTimer = null;
       slot.nextRetryAt = undefined;
-      if (this.shuttingDown || slot.blocked || slot.entry.desired_state !== "running") return;
-      slot.restartAttempt += 1;
-      slot.child.noteRestart();
-      void this.preflightAndSpawn(slot);
+      void this.enqueueLifecycle(slot.entry.id, () => {
+        if (this.children.get(slot.entry.id) !== slot || this.shuttingDown || slot.blocked || slot.entry.desired_state !== "running") return;
+        slot.restartAttempt += 1;
+        slot.child.noteRestart();
+        slot.child.spawn();
+      });
     }, delay);
   }
 
@@ -583,9 +613,12 @@ export class Supervisor {
         if (slot.missingCwdObservations < MISSING_CWD_CONFIRMATIONS || slot.reconcileInProgress) continue;
         slot.reconcileInProgress = true;
         this.cancelRetry(slot);
-        await slot.child.stop();
-        this.children.delete(entry.id);
-        removeDaemon(entry.id);
+        await this.enqueueLifecycle(entry.id, async () => {
+          if (this.children.get(entry.id) !== slot) return;
+          await slot.child.stop();
+          if (this.children.get(entry.id) === slot) this.children.delete(entry.id);
+          removeDaemon(entry.id);
+        });
       }
     } finally {
       this.reconcileRunning = false;

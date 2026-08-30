@@ -16,8 +16,6 @@
  *
  * Exits cleanly on SIGTERM/SIGINT (used by `remote-pi uninstall`).
  */
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
 import { Supervisor, SupervisorAlreadyRunningError } from "../daemon/supervisor.js";
 
 const HELP_TEXT = `pi-supervisord — Remote Pi daemon supervisor
@@ -60,13 +58,7 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  // Retained only for Supervisor constructor compatibility. Pi discovers the
-  // configured extension itself; the child process never receives `-e`.
-  const here = fileURLToPath(import.meta.url);
-  const distRoot = dirname(dirname(here));  // dist/bin → dist
-  const extensionPath = join(distRoot, "index.js");
-
-  const supervisor = new Supervisor({ extensionPath });
+  const supervisor = new Supervisor({});
   await supervisor.start();
   process.stderr.write(
     "[pi-supervisord] up — UDS: ~/.pi/remote/supervisor.sock\n",

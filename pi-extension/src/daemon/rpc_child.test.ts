@@ -6,6 +6,7 @@ import {
   _npmShimTarget,
   busyTransition,
   parseRuntimeEvent,
+  RPC_CONTROL_STATUS_KEY,
   resolvePiSpawn,
   rpcSpawnArgs,
   RpcChild,
@@ -23,7 +24,7 @@ function rpcStub(cwd: string): string {
 
 describe("rpc spawn", () => {
   test("does not pass the extension with -e", () => {
-    expect(rpcSpawnArgs("/remote-pi/dist/index.js", "daemon")).toEqual([
+    expect(rpcSpawnArgs("daemon")).toEqual([
       "--mode", "rpc", "--approve", "--continue", "--name", "daemon",
     ]);
   });
@@ -64,16 +65,35 @@ describe("structured RPC lifecycle", () => {
     expect(parseRuntimeEvent('{"type":"entry_appended","entry":{"customType":"remote-pi:relay-state","details":{"status":"reconnecting"}}}')).toEqual({
       type: "relay_state_changed", event: { state: "reconnecting" },
     });
+    expect(parseRuntimeEvent(JSON.stringify({
+      type: "extension_ui_request",
+      method: "setStatus",
+      statusKey: RPC_CONTROL_STATUS_KEY,
+      statusText: JSON.stringify({
+        type: "runtime_ready",
+        control_protocol_version: 2,
+        endpoint_id: ENDPOINT_ID,
+        runtime_instance_id: "runtime-1",
+        session_id: "session-1",
+      }),
+    }))).toMatchObject({
+      type: "runtime_ready",
+      event: { endpoint_id: ENDPOINT_ID, runtime_instance_id: "runtime-1", session_id: "session-1" },
+    });
   });
 
-  test("does not parse stderr or arbitrary text as a lifecycle event", () => {
+  test("does not parse stderr, arbitrary text, or unrelated RPC status as a lifecycle event", () => {
     expect(parseRuntimeEvent("remote-pi failed to start")).toBeNull();
     expect(parseRuntimeEvent('{"type":"runtime_failed","code":"x"}')).toBeNull();
+    expect(parseRuntimeEvent('{"type":"extension_ui_request","method":"setStatus","statusKey":"other","statusText":"{\\"type\\":\\"runtime_ready\\"}"}')).toBeNull();
+    expect(parseRuntimeEvent(JSON.stringify({
+      type: "extension_ui_request", method: "setStatus", statusKey: RPC_CONTROL_STATUS_KEY, statusText: "not-json",
+    }))).toBeNull();
   });
 
   test("requires both Pi RPC and Extension structured readiness", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "pi-ready-"));
-    const child = new RpcChild({ endpointId: ENDPOINT_ID, piBin: rpcStub(cwd), extensionPath: "/ignored", cwd, readinessTimeoutMs: 100 });
+    const child = new RpcChild({ endpointId: ENDPOINT_ID, piBin: rpcStub(cwd), cwd, readinessTimeoutMs: 100 });
     child.spawn();
     expect(child.runtimeState).toBe("pending");
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -87,9 +107,26 @@ describe("structured RPC lifecycle", () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
+  test("blocks when host RPC is ready but the configured Extension is not", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-extension-not-ready-"));
+    const child = new RpcChild({ endpointId: ENDPOINT_ID, piBin: rpcStub(cwd), cwd, readinessTimeoutMs: 30 });
+    const failed = new Promise<Record<string, unknown>>((resolve) => child.once("runtime_failed", resolve));
+    child.spawn();
+    child._ingestStdoutForTest('{"type":"response","id":"ready","command":"get_state","success":true,"data":{"sessionId":"s","isStreaming":false}}');
+    await expect(failed).resolves.toMatchObject({
+      stage: "extension",
+      code: "extension_not_ready",
+      retryable: false,
+    });
+    expect(child.runtimeState).toBe("failed");
+    expect(child.state).toBe("blocked");
+    await child.stop();
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
   test("runtime_failed remains deterministic and exposes retryability", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "pi-failed-"));
-    const child = new RpcChild({ piBin: rpcStub(cwd), extensionPath: "/ignored", cwd });
+    const child = new RpcChild({ piBin: rpcStub(cwd), cwd });
     child._ingestStdoutForTest('{"type":"runtime_failed","stage":"extension","code":"duplicate_extension","retryable":false}');
     expect(child.runtimeState).toBe("failed");
     expect(child.state).toBe("blocked");
@@ -98,7 +135,7 @@ describe("structured RPC lifecycle", () => {
 
   test("correlates prompt acceptance instead of accepting stdin write", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "pi-prompt-"));
-    const child = new RpcChild({ endpointId: ENDPOINT_ID, piBin: rpcStub(cwd), extensionPath: "/ignored", cwd });
+    const child = new RpcChild({ endpointId: ENDPOINT_ID, piBin: rpcStub(cwd), cwd });
     child.spawn();
     await new Promise((resolve) => setTimeout(resolve, 20));
     child._ingestStdoutForTest(extensionReady(child));
@@ -113,7 +150,7 @@ describe("structured RPC lifecycle", () => {
 
   test("blocks a mismatched Extension runtime identity", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "pi-identity-mismatch-"));
-    const child = new RpcChild({ endpointId: ENDPOINT_ID, piBin: rpcStub(cwd), extensionPath: "/ignored", cwd });
+    const child = new RpcChild({ endpointId: ENDPOINT_ID, piBin: rpcStub(cwd), cwd });
     child.spawn();
     child._ingestStdoutForTest(JSON.stringify({
       type: "runtime_ready",
@@ -137,7 +174,7 @@ describe("structured RPC lifecycle", () => {
     const bin = join(cwd, "sleep.sh");
     writeFileSync(bin, "#!/bin/sh\nexec sleep 30\n");
     chmodSync(bin, 0o755);
-    const child = new RpcChild({ piBin: bin, extensionPath: "/ignored", cwd });
+    const child = new RpcChild({ piBin: bin, cwd });
     const exited = new Promise<{ isCrash: boolean }>((resolve) => child.once("exit", resolve));
     child.spawn();
     await new Promise((resolve) => setTimeout(resolve, 20));

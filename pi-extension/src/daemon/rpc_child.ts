@@ -10,10 +10,6 @@ import { defaultAgentName, loadLocalConfig, type LocalConfig } from "../session/
  * responses/events can move runtime from pending to ready. */
 export interface RpcChildOptions {
   piBin?: string;
-  /** Retained until bin/supervisor wiring is removed; daemon spawn deliberately
-   * does not pass it as `-e` because Pi's configured extension environment is
-   * the sole extension source. */
-  extensionPath: string;
   cwd: string;
   /** Stable daemon endpoint identity supplied by the supervisor. */
   endpointId?: string;
@@ -55,6 +51,7 @@ export interface RelayStateChangedEvent { state: RelayState; }
 export interface SessionChangedEvent { session_id?: string; }
 
 export const EXIT_DAEMON_FRESH_SESSION = 42;
+export const RPC_CONTROL_STATUS_KEY = "remote-pi:control";
 export const DEFAULT_READINESS_TIMEOUT_MS = 10_000;
 export const DEFAULT_PROMPT_TIMEOUT_MS = 5_000;
 
@@ -106,7 +103,7 @@ export function busyTransition(line: string): boolean | null {
  * The installed Pi RPC starts configured extensions itself. In particular this
  * must not attach Remote Pi with `-e`, which could load it a second time.
  */
-export function rpcSpawnArgs(_extensionPath: string, sessionName?: string, useContinue = true): string[] {
+export function rpcSpawnArgs(sessionName?: string, useContinue = true): string[] {
   return [
     "--mode", "rpc",
     "--approve",
@@ -139,15 +136,23 @@ type ParsedRuntimeEvent =
 export function parseRuntimeEvent(line: string): ParsedRuntimeEvent | null {
   let raw: unknown;
   try { raw = JSON.parse(line); } catch { return null; }
-  if (!raw || typeof raw !== "object") return null;
-  const obj = raw as Record<string, unknown>;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  let obj = raw as Record<string, unknown>;
+  if (obj["type"] === "extension_ui_request" && obj["method"] === "setStatus" && obj["statusKey"] === RPC_CONTROL_STATUS_KEY) {
+    if (typeof obj["statusText"] !== "string") return null;
+    try { raw = JSON.parse(obj["statusText"]); } catch { return null; }
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    obj = raw as Record<string, unknown>;
+  }
   let type = obj["type"];
   let payload: Record<string, unknown> = obj;
-  if (type === "entry_appended" && obj["entry"] && typeof obj["entry"] === "object") {
-    const entry = obj["entry"] as Record<string, unknown>;
-    const customType = entry["customType"];
-    const details = entry["details"];
-    if (typeof customType === "string" && details && typeof details === "object") {
+  const messageContainer = type === "message_start" || type === "message_end" ? obj["message"] : undefined;
+  const customContainer = type === "entry_appended" ? obj["entry"] : messageContainer;
+  if (customContainer && typeof customContainer === "object" && !Array.isArray(customContainer)) {
+    const custom = customContainer as Record<string, unknown>;
+    const customType = custom["customType"];
+    const details = custom["details"];
+    if (typeof customType === "string" && details && typeof details === "object" && !Array.isArray(details)) {
       type = customType.replace(/^remote-pi:/, "").replace(/-/g, "_");
       payload = details as Record<string, unknown>;
     }
@@ -245,7 +250,7 @@ export class RpcChild extends EventEmitter {
     const sessionName = config.agent_name ?? defaultAgentName(this.opts.cwd);
     const useContinue = !this.forceFreshSessionOnNextSpawn;
     this.forceFreshSessionOnNextSpawn = false;
-    const args = [...target.prefixArgs, ...rpcSpawnArgs(this.opts.extensionPath, sessionName, useContinue)];
+    const args = [...target.prefixArgs, ...rpcSpawnArgs(sessionName, useContinue)];
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       ...this.opts.env,
@@ -274,7 +279,7 @@ export class RpcChild extends EventEmitter {
     this.emit("spawn", { pid: child.pid, runtime_instance_id: this._runtimeInstanceId });
   }
 
-  /** Waits for Pi's correlated prompt preflight response, not merely stdin write. */
+  /** Waits for Pi's correlated prompt acceptance response, not merely stdin write. */
   sendPrompt(text: string, requestId = `sv-${randomUUID()}`, timeoutMs = this.opts.promptTimeoutMs ?? DEFAULT_PROMPT_TIMEOUT_MS): Promise<PromptAcceptance> {
     if (!this.child?.stdin || this._process !== "running" || this._runtime !== "ready") {
       return Promise.resolve({ accepted: false, code: "runtime_not_ready", error: "daemon RPC runtime is not ready" });

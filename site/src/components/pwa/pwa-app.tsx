@@ -179,14 +179,12 @@ export function PwaApp() {
     setTimelineItems(change.items);
     for (const frame of change.observed) channelRef.current?.send(frame);
   }, []);
-  const clearConnection = useCallback(() => {
+  const clearSessionConnection = useCallback(() => {
     connectionGenerationRef.current += 1;
     if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
     reconnectTimerRef.current = null;
     channelRef.current?.close();
-    relayRef.current?.close();
     channelRef.current = null;
-    relayRef.current = null;
     channelContextRef.current = null;
     historyAssemblerRef.current = null;
     fragmentAssemblerRef.current?.reset();
@@ -281,7 +279,7 @@ export function PwaApp() {
       return;
     }
     if (frame.type === "cancelled") { stopRequestIdRef.current = null; setStopRequestId(null); return; }
-    if (frame.type === "reset") { applyTimelineChange(timelineRuntimeRef.current.invalidateScope()); clearConnection(); scheduleReconnect(); return; }
+    if (frame.type === "reset") { applyTimelineChange(timelineRuntimeRef.current.invalidateScope()); clearSessionConnection(); scheduleReconnect(); return; }
     const changed = timelineRuntimeRef.current.receive(frame);
     if (frame.type === "protocol_error") setError(frame.message);
     if (frame.type === "timeline_event_fragment") {
@@ -310,7 +308,7 @@ export function PwaApp() {
       return;
     }
     applyTimelineChange(changed);
-  }, [applyTimelineChange, clearConnection, scheduleReconnect]);
+  }, [applyTimelineChange, clearSessionConnection, scheduleReconnect]);
 
   useEffect(() => {
     let cancelled = false;
@@ -366,7 +364,7 @@ export function PwaApp() {
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
-      clearConnection();
+      clearSessionConnection();
       if (!activeDevice || !activeEndpoint || !activeEndpoint.online || !identity) { setConnection("offline"); return; }
       const relay = relayRef.current;
       if (!relay || relay.state !== "open") { setConnection("connecting"); return; }
@@ -391,7 +389,7 @@ export function PwaApp() {
       channel?.close();
       if (channelRef.current === channel) channelRef.current = null;
     };
-  }, [activeDevice, activeEndpoint, clearConnection, handleServerFrame, identity, scheduleReconnect]);
+  }, [activeDevice, activeEndpoint, clearSessionConnection, handleServerFrame, identity, scheduleReconnect]);
 
   const selectDevice = useCallback((deviceId: string | null) => {
     setActiveDeviceId(deviceId); setActiveEndpointId(null); setTimelineItems([]); setLastSyncedAt(undefined); setError(null);
@@ -468,7 +466,13 @@ export function PwaApp() {
           if (!channel?.sendPairRequest(createPairRequest(payload.token, browserName(), id()))) throw new Error("Relay is not ready for pairing.");
         }).catch(reject);
       });
-      await getPwaDatabase().devices.put(paired);
+      const db = getPwaDatabase();
+      await db.transaction("rw", [db.devices, db.settings], async () => {
+        await Promise.all([
+          db.devices.put(paired),
+          db.settings.put({ key: `${ACTIVE_ENDPOINT_SETTING}${paired.id}`, value: payload.endpointId }),
+        ]);
+      });
       setDevices(await listPwaDevices());
       setActiveDeviceId(paired.id);
       setActiveEndpointId(payload.endpointId);
@@ -481,11 +485,11 @@ export function PwaApp() {
     }
   }, [identity, relayUrl]);
   const removePairing = useCallback(async (device: PwaDeviceRecord) => {
-    if (activeDeviceIdRef.current === device.id) clearConnection();
+    if (activeDeviceIdRef.current === device.id) clearSessionConnection();
     await removePwaDeviceData(device.deviceId, device.id, `${ACTIVE_ENDPOINT_SETTING}${device.id}`);
     const remaining = await listPwaDevices(); setDevices(remaining);
     if (activeDeviceIdRef.current === device.id) selectDevice(remaining[0]?.id ?? null);
-  }, [clearConnection, selectDevice]);
+  }, [clearSessionConnection, selectDevice]);
   const saveDeviceNickname = useCallback(async (device: PwaDeviceRecord, nickname: string) => { await getPwaDatabase().devices.put({ ...device, nickname }); setDevices(await listPwaDevices()); }, []);
   const saveRelayUrl = useCallback(async (value: string) => {
     const normalized = value.trim().replace(/\/$/, "") || DEFAULT_RELAY;
@@ -496,8 +500,8 @@ export function PwaApp() {
   const setImageAttachment = useCallback((source: Blob, label: string) => { try { getImageOutputMime(source.type); setAttachment({ source, previewUrl: URL.createObjectURL(source), label }); } catch (imageError) { setError(imageError instanceof Error ? imageError.message : "Could not use that image."); } }, []);
   const confirmRequestedAction = useCallback(async () => {
     if (!confirmAction) return;
-    await runConfirmAction(confirmAction, { startNewSession: () => sendCommandAction({ action: "session_new" }), removePairing, invalidateConnection: clearConnection, clearLocalData: clearPwaData, reload: () => window.location.reload() }, { pendingRef: confirmPendingRef, setPending: setConfirmPending, setError: setConfirmError, onSuccess: () => setConfirmAction(null) });
-  }, [clearConnection, confirmAction, removePairing, sendCommandAction]);
+    await runConfirmAction(confirmAction, { startNewSession: () => sendCommandAction({ action: "session_new" }), removePairing, invalidateConnection: clearSessionConnection, clearLocalData: clearPwaData, reload: () => window.location.reload() }, { pendingRef: confirmPendingRef, setPending: setConfirmPending, setError: setConfirmError, onSuccess: () => setConfirmAction(null) });
+  }, [clearSessionConnection, confirmAction, removePairing, sendCommandAction]);
   if (startupState === "loading") return <StartupLoading />;
   if (startupState === "error") return <StartupErrorView error={startupError} onRetry={() => window.location.reload()} />;
   const canAttachImage = connection === "online" && visionAvailable === true && !sendingImage;

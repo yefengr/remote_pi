@@ -21,7 +21,9 @@ remote-pi install
 
 `install` configures `launchd` on macOS or `systemd --user` on Linux, links `remote-pi` and `pi-supervisord`, and starts the service. The service reads the v2 registry from `~/.pi/remote/daemons.json`.
 
-The supervisor launches Pi in RPC mode without passing an extra extension argument. Pi settings are the only source for extension loading, model selection, providers, and tool permissions. Correct Pi settings before registering an unattended daemon.
+The supervisor launches Pi in RPC mode without passing an extra extension argument. Pi settings are the only source for extension loading, model selection, providers, and tool permissions. The supervisor does not import a private Pi SDK or repeat resource discovery out of process: the installed host Pi performs its own settings, package, resource, and diagnostic startup path. Correct Pi settings before registering an unattended daemon.
+
+Runtime readiness requires both a successful host Pi RPC `get_state` response and the configured Remote Pi Extension's structured `runtime-ready` event with matching protocol and endpoint/runtime identities. In daemon RPC mode, lifecycle events use Pi's structured `extension_ui_request` status channel with the reserved `remote-pi:control` key; stderr remains diagnostic text and is never parsed as state. If RPC is ready but the Extension is missing or failed to load, the daemon becomes blocked with `extension_not_ready`; inspect the host Pi diagnostics in the supervisor log.
 
 ### Service does not start at login
 

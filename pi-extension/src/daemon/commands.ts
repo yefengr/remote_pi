@@ -224,7 +224,7 @@ export function runDirectCli(deps: RemoteCommandDependencies, directRun: boolean
   if (commandName === "devices" || commandName === "list") void listDevices(ctx, deps);
   else if (commandName === "revoke") void revoke(args[0] ?? "", ctx, deps);
   else if (commandName === "set-relay") setRelay(args[0] ?? "", ctx);
-  else if (commandName === "daemons") void daemonList(ctx);
+  else if (commandName === "daemons" || (commandName === "daemon" && args[0] === "status")) void daemonList(ctx);
   else if (commandName === "daemon" && ["start", "stop", "restart"].includes(args[0] ?? "")) void daemonControl(args[0] as DaemonOperation, args[1], ctx);
   else if (commandName === "create") void daemonCreate(args.join(" "), ctx);
   else if (commandName === "remove") void daemonRemove(args[0] ?? "", ctx);

@@ -2,6 +2,7 @@ import { describe, expect, test, vi, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { decodeServerFrameV2 } from "./protocol/v2/index.js";
+import { RPC_CONTROL_STATUS_KEY } from "./daemon/rpc_child.js";
 
 const relays: MockRelay[] = [];
 
@@ -118,6 +119,32 @@ describe("Remote Pi endpoint extension", () => {
       authorizedOwnerIds: [sourceOwner()],
       metadata: expect.objectContaining({ kind: "interactive", pid: process.pid }),
     }));
+  });
+
+  test("emits daemon readiness over the structured RPC status channel", () => {
+    const pi = makePi();
+    (extension as ExtensionFactory)(pi);
+    const context = ctx();
+    const manager = { getSessionId: () => "session-ready", getBranch: () => [], appendCustomEntry: vi.fn(), getLeafId: () => "session-ready" };
+    process.env["REMOTE_PI_DAEMON"] = "1";
+    process.env["REMOTE_PI_DIRECT_CONFIG"] = JSON.stringify({ auto_start_relay: false });
+    try {
+      pi.handlers.get("session_start")?.({}, { ...context, sessionManager: manager });
+    } finally {
+      delete process.env["REMOTE_PI_DAEMON"];
+      delete process.env["REMOTE_PI_DIRECT_CONFIG"];
+    }
+    const control = context.ui.setStatus.mock.calls
+      .filter(([key]) => key === RPC_CONTROL_STATUS_KEY)
+      .map(([, text]) => JSON.parse(text as string) as Record<string, unknown>)
+      .find((event) => event["type"] === "runtime_ready");
+    expect(control).toMatchObject({
+      type: "runtime_ready",
+      control_protocol_version: 2,
+      endpoint_id: processEndpointIdentity().endpointId,
+      runtime_instance_id: processEndpointIdentity().runtimeInstanceId,
+      session_id: "session-ready",
+    });
   });
 
   test("pairing trusts relay-injected source_owner_id and targets its response", async () => {

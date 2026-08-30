@@ -6,10 +6,9 @@ import { join, relative } from "node:path";
 import { Type } from "typebox";
 import { TimelineRuntime } from "./runtime.js";
 import {
-  AuthStorage,
   createAgentSession,
   DefaultResourceLoader,
-  ModelRegistry,
+  ModelRuntime,
   SessionManager,
   SettingsManager,
   type ExtensionFactory,
@@ -44,7 +43,7 @@ type FakeAssistantMessage = {
   timestamp: number;
 };
 
-type LocalStreamFn = TestSession["agent"]["streamFn"];
+type LocalStreamFn = TestSession["agent"]["streamFunction"];
 type LocalStream = Awaited<ReturnType<LocalStreamFn>>;
 
 function makeAssistant(
@@ -243,11 +242,14 @@ async function createHarness(options: {
 }): Promise<TestSession> {
   const cwd = options.cwd ?? process.cwd();
   const agentDir = options.agentDir ?? cwd;
-  const auth = AuthStorage.inMemory();
-  const modelRegistry = ModelRegistry.inMemory(auth);
-  const model = modelRegistry.getAll()[0];
-  if (!model) throw new Error("The in-memory ModelRegistry has no built-in model");
-  auth.setRuntimeApiKey(model.provider, TEST_API_KEY);
+  const modelRuntime = await ModelRuntime.create({
+    authPath: join(tmpdir(), "remote-pi-sdk-contract-no-auth.json"),
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+  const model = modelRuntime.getModels("anthropic")[0];
+  if (!model) throw new Error("The test ModelRuntime has no Anthropic model");
+  await modelRuntime.setRuntimeApiKey(model.provider, TEST_API_KEY);
 
   const settingsManager = SettingsManager.inMemory({
     retry: { enabled: false },
@@ -269,15 +271,14 @@ async function createHarness(options: {
   const { session } = await createAgentSession({
     cwd,
     agentDir,
-    authStorage: auth,
-    modelRegistry,
+    modelRuntime,
     model,
     settingsManager,
     resourceLoader,
     sessionManager: options.sessionManager,
     noTools: options.enableExtensionTools ? "builtin" : "all",
   });
-  session.agent.streamFn = options.streamFn ?? textStream();
+  session.agent.streamFunction = options.streamFn ?? textStream();
   return session;
 }
 
