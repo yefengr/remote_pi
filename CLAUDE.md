@@ -8,7 +8,7 @@
 |---|---|---|
 | `pi-extension/` | Node + TypeScript | Pi 扩展、Daemon、Agent Mesh 与远程会话协议 |
 | `relay/` | Rust + Tokio | WebSocket Relay、Rooms 与跨 PC Agent Mesh 路由 |
-| `site/` | NextJS + React + TypeScript | 官网、文档与浏览器 PWA |
+| `site/` | NextJS + React + TypeScript | 浏览器 PWA；唯一产品路由为 `/app`，根路径 `/` 重定向至该路由 |
 
 ## 工作规则
 

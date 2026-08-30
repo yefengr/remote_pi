@@ -1,7 +1,5 @@
-import type { Metadata } from "next";
 import { Space_Grotesk, Hanken_Grotesk, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
-import { SiteChrome } from "@/components/site-chrome";
 
 const display = Space_Grotesk({
   variable: "--font-display",
@@ -24,42 +22,6 @@ const mono = JetBrains_Mono({
   display: "swap",
 });
 
-const siteTagline = "Remote Pi — Your coding agents, in your browser";
-const siteDescription =
-  "Open Remote Pi as a browser PWA, pair it once, then drive any Pi coding agent — keep a fleet running 24/7 and link every machine into one mesh. Open source, self-hostable.";
-
-export const metadata: Metadata = {
-  metadataBase: new URL("https://remote-pi.jacobmoura.work"),
-  title: {
-    default: siteTagline,
-    template: "%s · Remote Pi",
-  },
-  description: siteDescription,
-  applicationName: "Remote Pi",
-  authors: [{ name: "Flutterando", url: "https://flutterando.com.br" }],
-  keywords: [
-    "Remote Pi",
-    "coding agents",
-    "Pi coding agent",
-    "browser agent control",
-    "24/7 agent daemon",
-    "agent mesh",
-    "self-hostable relay",
-  ],
-  openGraph: {
-    type: "website",
-    url: "https://remote-pi.jacobmoura.work",
-    title: siteTagline,
-    description: siteDescription,
-    siteName: "Remote Pi",
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: siteTagline,
-    description: siteDescription,
-  },
-};
-
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -71,9 +33,7 @@ export default function RootLayout({
       className={`${display.variable} ${body.variable} ${mono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-bg text-fg">
-        <div className="app flex min-h-full flex-1 flex-col" id="top">
-          <SiteChrome>{children}</SiteChrome>
-        </div>
+        <div className="relative z-[1] flex min-h-full w-full flex-1 flex-col">{children}</div>
       </body>
     </html>
   );

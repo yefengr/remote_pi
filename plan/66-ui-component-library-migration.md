@@ -1,32 +1,31 @@
 # 计划 66 — Site UI 组件库引入与 PWA 迁移
 
-**状态：进行中（Phase 0–3 已完成）**
+**状态：进行中（Phase 0–4 已完成）**
 **跨计划调度：见 [Plan 68 — PWA UI 与自动化测试交付路线](68-pwa-ui-quality-roadmap.md)**
 **范围：`site/` 前端，优先 PWA**
 **基线：Next.js 16、React 19、TypeScript、Tailwind CSS 4**
 
 ## 1. 背景
 
-当前 `site/` 使用 Next.js App Router、React、Tailwind CSS 4 和集中式 `globals.css`，没有正式的 UI 组件库。PWA 内部已经自行实现了按钮、输入框、状态标签、Dialog、Sheet、Menu、Tabs、Settings 面板和 Session 管理等基础交互。
+当前 `site/` 使用 Next.js App Router、React、Tailwind CSS 4 和集中式 `globals.css`，没有正式的 UI 组件库。PWA 内部已经自行实现了按钮、输入框、状态标签、Dialog、Sheet、Menu、Settings 面板和 Session 管理等基础交互。
 
 当前架构的主要维护问题：
 
 - `Dialog`、菜单、遮罩、焦点返回、Escape 关闭和滚动处理存在多套实现；
 - `SessionSheet` 使用原生 `<dialog>.showModal()`，曾导致 Top Layer 层级与重命名弹窗冲突；
 - PWA 基础控件通过大量 `.pwa-*` CSS 分散实现，按钮、输入框和状态标签存在重复样式；
-- `site/src/app/globals.css` 同时承载官网、文档、法律页面和 PWA 样式，当前超过 2,200 行；
+- `site/src/app/globals.css` 承载根布局和 PWA 样式，遗留官网样式清理由 Phase 5 单独处理；
 - `site/src/components/pwa/pwa-app.tsx` 同时编排 Relay、IndexedDB、Timeline、配对、Session 和大量 UI 状态，后续迁移成本会持续增加；
-- 项目已有 `Tabs` 和多个页面级 Tabs 实现，但尚未形成统一基础组件层。
 
 这些问题表明，长期项目不应继续手写所有基础交互组件。
 
 ## 2. 目标
 
 1. 在 PWA 范围建立正式、可持续升级的 React UI 组件基础；
-2. 将 Dialog、Drawer、Menu、Input、Button、Badge、Tabs 等通用能力交给成熟组件库维护；
+2. 将 Dialog、Drawer、Menu、Input、Button、Badge 等通用能力交给成熟组件库维护；
 3. 统一焦点管理、键盘交互、Portal、遮罩、滚动锁定和移动端 overlay 行为；
 4. 保留 Remote Pi 现有黑色、天蓝色、终端化视觉，不引入另一套产品品牌；
-5. 保持官网、文档、教程和法律页面稳定，不为迁移 PWA 强行重做全站；
+5. 保持 PWA 路由、启动和视觉稳定，不为迁移基础组件改动业务流程；
 6. 让 PWA 业务组件只负责 Pairing、Session、Timeline、Relay 等领域逻辑，减少基础 UI 细节；
 7. 支持后续把 `PwaApp` 拆分为连接、配对、Session、Timeline 和 Composer 等独立 hooks/controller。
 
@@ -35,7 +34,7 @@
 本计划不包含：
 
 - 不修改 Relay、`pi-extension`、协议字段、`room_id`、Pairing 数据语义或 IndexedDB 数据模型；
-- 不把 Landing、Docs、Tutorials 和 Legal 页面整体改造成 Mantine 页面；
+- 不重建已删除的 Landing、Docs、Tutorials 或 Legal 页面；
 - 不一次性重写所有 PWA 业务组件；
 - 不引入大型全局状态管理库；
 - 不引入新的 CSS-in-JS 体系来替换 Tailwind 4；
@@ -69,7 +68,7 @@ Mantine 负责通用组件的实现、可访问性和交互行为，Remote Pi �
 组件库只替代基础 UI 能力，不替代 Remote Pi 业务组件：
 
 ```text
-Mantine：Button / Input / Dialog / Drawer / Menu / Badge / Tabs / Tooltip
+Mantine：Button / Input / Dialog / Drawer / Menu / Badge / Tooltip
 Remote Pi：PairingRecord / Session / Timeline / MessageComposer / Relay 状态
 ```
 
@@ -91,7 +90,6 @@ site/src/
 │   │   ├── dialog.tsx
 │   │   ├── drawer.tsx
 │   │   ├── menu.tsx
-│   │   ├── tabs.tsx
 │   │   └── tooltip.tsx
 │   └── pwa/                        # Remote Pi 业务组件
 │       ├── session-drawer.tsx
@@ -109,16 +107,12 @@ site/src/
 `MantineProvider` 只放在 PWA 路由子树，不放到根 `src/app/layout.tsx`：
 
 ```text
-RootLayout / SiteChrome
-  ├── Landing / Docs / Legal：现有 CSS 与 Tailwind
+RootLayout
   └── /app：PwaUiProvider → PwaApp
 ```
 
-这样可以避免：
-
-- 官网和文档被 Mantine reset 或主题变量影响；
-- 为组件库把整个站点转换为 Client Component；
-- Mantine 运行时和样式被无关页面加载。
+这样可以保持根布局为 Server Component，并将 Mantine Provider、交互运行时和
+PWA 主题限制在 `/app` 子树。
 
 具体 Provider 放置方式以 Next.js 16 对嵌套路由布局和全局 CSS 的构建约束为准；如 Mantine CSS 必须在根布局导入，则只导入静态样式，Provider 仍保持 PWA 局部化，并通过作用域和回归测试防止官网样式变化。
 
@@ -148,7 +142,6 @@ wrapper 必须保持轻量。简单的 `Button` 或 `Badge` 可以直接导出 M
 | `ComposerCommandMenu` 外层 | `Popover` | P1 | 内部模型和 thinking 业务逻辑继续保留 |
 | `pwa-presence-label` / `pwa-current-label` | `Badge` | P1 | 保留 ONLINE、OFFLINE、CHECKING、CURRENT 语义 |
 | 原生 `select` | `Select` | P1 | 先验证移动端键盘和长选项行为 |
-| 既有 Tabs 及页面 Tabs | `Tabs` | P2 | 先盘点消费者，再统一 ARIA 和样式 |
 | 长列表滚动容器 | `ScrollArea` | P2 | 只在原生滚动行为不足时采用，避免无收益替换 |
 | Tooltip | `Tooltip` | P2 | 仅替换确有 hover/focus 说明需求的 title |
 
@@ -229,16 +222,16 @@ wrapper 必须保持轻量。简单的 `Button` 或 `Badge` 可以直接导出 M
 
 **验收：**已通过四个独立批次完成 Pairing/Session 展示组件、`PwaAppView` 展示编排、PWA 启动边界和非当前配对探测边界抽取；当前会话连接、Session Selection 与 Timeline generation 因共享连接失效、stale guard、持久化和流式状态边界，明确保留在 `PwaApp` controller，后续仅在出现新的重复实现或所有权证据时单独拆分。Node 23/23、legacy 119/119、Browser Mode 64/64、coverage 87/87、Playwright E2E 8/8、TypeScript、受影响 ESLint、production build、`git diff --check` 和独立审查均通过；全量 Lint 仍仅受既有生成文件 `site/public/sw.js` 的 `@typescript-eslint/no-this-alias` 阻断。实现提交：`c5e3cce`、`7e8f35d`、`6785b64`、`f579ee7`。
 
-### Phase 4 — Tabs 与低收益组件评估
+### Phase 4 — 遗留站点移除与低收益组件评估
 
-**状态：待开始**
+**状态：已完成**
 
-1. 盘点 `components/tabs.tsx`、Landing install tabs、`install-tabs.tsx` 和其他消费者；
-2. 对已有稳定 Tabs 先补测试和 ARIA，不为统一而强制替换；
-3. 只有 Mantine Tabs 能明确减少重复逻辑且不影响官网视觉时才迁移；
-4. 对 `ScrollArea`、Tooltip、Popover 等组件逐个按收益引入，不进行批量替换。
+1. 删除遗留官网、文档、教程、法律页面、上游 OG image 及其仅有消费者；根路径改为服务端重定向至 `/app`，保留 Docker 根路径 healthcheck；
+2. `Tabs` 的消费者随遗留页面删除，原 Tabs 迁移决策点不再适用；
+3. `ScrollArea`、Tooltip、Popover 按实际消费者和收益保持现状，不为组件库覆盖率进行替换；
+4. 不在本阶段清理 `globals.css` 中的大段遗留样式，交由 Phase 5 单独收敛。
 
-**验收：**没有为了组件库覆盖率而引入无收益依赖；Tabs 的 active、disabled、panel 和键盘行为一致。
+**验收：**Site 仅保留 `/app` 产品页面与根路径重定向；没有为已删除页面保留无消费者组件或无收益组件库迁移。
 
 ### Phase 5 — 清理与长期维护
 
@@ -248,7 +241,7 @@ wrapper 必须保持轻量。简单的 `Button` 或 `Badge` 可以直接导出 M
 2. 保留 PWA 业务布局、消息流、终端视觉和 safe-area 特殊样式；
 3. 将全局 token、PWA token 和 Mantine theme 的关系记录在同一处；
 4. 记录 Mantine 版本、升级窗口和兼容验证命令；
-5. 每次 Mantine 升级先在 PWA smoke 和构建中验证，再扩大到公共页面。
+5. 每次 Mantine 升级先在 PWA smoke 和构建中验证，再扩大到全部受影响消费者。
 
 **验收：**没有遗留两套同名基础行为；未迁移的自定义 CSS 都能明确对应业务布局或品牌视觉。
 
@@ -272,7 +265,7 @@ Mantine theme 只做映射，不另起一套无法解释的颜色命名。现有
 - Mantine 样式只加载一次；
 - 不引入第二套全局 reset、字体或 body 背景；
 - PWA 特殊布局、消息 Markdown、QR 扫描和 safe-area 仍可使用 `.pwa-*` CSS；
-- 组件库默认 selector 不得覆盖官网 `.btn`、`.tabs`、`.prose` 等既有样式；
+- Phase 5 清理前，遗留官网 selector 继续保留在 `globals.css`，但不得影响 PWA 组件；
 - 迁移一个组件后再删除其旧样式，禁止先删后补。
 
 ## 9. 运行时与构建约束
@@ -281,7 +274,7 @@ Mantine theme 只做映射，不另起一套无法解释的颜色命名。现有
 2. 保持 `site/src/app/app/` 的 `/app` PWA scope，不改变 Serwist 缓存边界；
 3. 维持 Next.js standalone Docker 输出；
 4. 核对 Webpack、standalone、Service Worker 和生产缓存中 Mantine CSS/字体资源的表现；
-5. 按路由和组件按需加载，不让 Landing/Docs 加载不需要的 PWA 交互代码；
+5. 按路由和组件按需加载，不引入已删除站点页面的交互代码；
 6. 不改变 Relay WebSocket、IndexedDB、Pairing、Session 和 Timeline 的数据流；
 7. 组件库升级必须锁定 `pnpm-lock.yaml`，不接受隐式漂移。
 
@@ -307,7 +300,7 @@ cd .. && git diff --check
 - Settings、Menu、Select 的键盘与触摸行为；
 - 背景滚动锁定和关闭后焦点恢复；
 - `prefers-reduced-motion`；
-- Landing、Docs、Tutorials 页面无视觉和布局回归；
+- `/` 重定向至 `/app`，并验证 PWA 启动页面无回归；
 - 浏览器控制台无新增错误。
 
 完整 `pnpm lint` 如果继续命中已有 `site/public/sw.js` 的历史错误，必须区分既有失败与本计划引入的问题，并单独运行受影响文件 ESLint。
@@ -329,8 +322,7 @@ cd .. && git diff --check
 3. PWA theme 中字体、radius、control height 和状态色的精确映射；
 4. Settings 在桌面端使用侧栏、移动端使用 Drawer 的具体形态；
 5. 是否引入 `@mantine/notifications`；
-6. Tabs 是否迁移，以及官网页面是否继续保留自定义 Tabs；
-7. 是否在 Phase 3 同时拆分 `PwaApp` hooks，还是作为独立计划执行。
+6. 是否在 Phase 3 同时拆分 `PwaApp` hooks，还是作为独立计划执行。
 
 ## 13. 完成定义
 
@@ -340,7 +332,7 @@ cd .. && git diff --check
 - Session 管理在移动端使用稳定的左侧 Drawer；
 - 重命名、Settings、Menu 的层级、焦点、Escape 和滚动行为统一；
 - Pairing、Session、Timeline、Relay 和 IndexedDB 业务行为不变；
-- Landing、Docs、Tutorials 和 Legal 页面无回归；
+- `/` 的服务端重定向和 `/app` PWA 启动行为正确；
 - 相关 TypeScript、Lint、测试、构建和浏览器验收通过；
 - 迁移后的旧 `.pwa-*` 样式只保留业务布局、消息渲染和品牌特有视觉；
 - 版本、升级和回滚方式已由项目文档记录。

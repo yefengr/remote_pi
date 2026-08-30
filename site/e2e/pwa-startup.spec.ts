@@ -1,5 +1,12 @@
 import { test, expect } from "./fixtures/pwa";
 
+test("redirects the root route to the PWA", async ({ page }) => {
+  await page.goto("/");
+
+  await expect(page).toHaveURL(/\/app$/);
+  await expect(page.getByRole("heading", { name: "Your agents, within reach." })).toBeVisible();
+});
+
 test("opens an empty PWA without horizontal overflow and activates the app service worker", async ({ context, page, pwa }) => {
   const serviceWorker = context.waitForEvent("serviceworker");
 

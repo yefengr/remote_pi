@@ -385,7 +385,7 @@ print_next_steps() {
     3. Scan the QR with the browser PWA to pair.
 
     Manage the always-on daemon later with ${BOLD}remote-pi${RST} (now on your PATH).
-    Docs: ${DIM}https://remote-pi.jacobmoura.work${RST}
+    PWA: ${DIM}https://remote-pi.jacobmoura.work/app${RST}
 
 EOF
   case ":$PATH:" in

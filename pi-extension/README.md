@@ -473,7 +473,7 @@ the mesh/PWA like any prompt; the cron layer only audits the dispatch.
   `woke_and_delivered`, `deliver_failed`, `skipped_busy`, `skipped_down`, or
   `skipped_disabled` — read it with `remote-pi cron log`.
 
-Step-by-step walkthrough: the [daemon tutorial](https://remote-pi.jacobmoura.work/tutorials/daemon).
+Step-by-step walkthrough: [Daemon mode](./docs/daemon.md).
 
 ### Footer + title
 

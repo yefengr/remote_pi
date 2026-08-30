@@ -1,7 +1,9 @@
 # Remote Pi — Site (NextJS)
 
-Subprojeto web do Remote Pi. Contém a landing page, documentação do MVP e o
-PWA browser em `src/app/app/`, `src/components/pwa/` e `src/lib/pwa/`.
+Subprojeto web do Remote Pi. Contém somente o PWA browser em
+`src/app/app/`, `src/components/pwa/` e `src/lib/pwa/`. A única rota de produto
+é `/app`; `/` usa redirecionamento de servidor para `/app` para manter o
+healthcheck Docker na raiz funcional.
 
 ## Stack
 
@@ -32,7 +34,8 @@ PWA browser em `src/app/app/`, `src/components/pwa/` e `src/lib/pwa/`.
 
 - Features do PWA browser ficam neste subprojeto e devem permanecer em
   `src/app/app/`, `src/components/pwa/` e `src/lib/pwa/`.
-- Landing page e documentação devem continuar separadas da lógica do PWA.
+- Não reintroduza landing page, documentação pública ou páginas legais no Site; a
+  interface de produto permanece exclusivamente em `/app`.
 - Não adicionar backend ou API routes sem autorização explícita.
 - Não comitar `.next/`, `out/`, `node_modules/` (já no .gitignore raiz).
 - Não desabilitar lint pra fazer passar — corrigir o erro.

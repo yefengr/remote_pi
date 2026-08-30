@@ -35,6 +35,7 @@
 | Plan 67 | Phase 3：统一 Node 测试 API | 已完成首批 | 4 个纯 TypeScript 测试文件、9 项测试已迁移到 Vitest Node；legacy 119/119、Node 9/9、Browser 64/64、coverage 73/73、TypeScript、受影响 ESLint、production build 和独立审查通过。实现提交：`88f875a`。 |
 | Plan 67 | Phase 4：`/app` E2E 基线 | 已完成 | 独立 Playwright Test 基线覆盖 production standalone 启动、IndexedDB 隔离 fixture、Settings、Session Drawer、Composer、清库确认、desktop/mobile viewport 和真实 Service Worker 注册。E2E 8/8，重复运行 16/16；TypeScript、受影响 ESLint、现有 Node/legacy/Browser/coverage、production build、diff check 和独立审查通过。实现提交：`79922cc`。 |
 | Plan 66 | Phase 3：业务组件收敛 | 已完成 | Pairing/Session 展示层、`PwaAppView` 展示编排、PWA 启动边界和非当前配对探测边界已抽取；当前会话连接、Session Selection 与 Timeline generation 按证据保留在 controller。Node 23/23、legacy 119/119、Browser 64/64、coverage 87/87、E2E 8/8、TypeScript、受影响 ESLint、production build、diff check 和独立审查通过。实现提交：`c5e3cce`、`7e8f35d`、`6785b64`、`f579ee7`。 |
+| Plan 66 | Phase 4：遗留站点移除与低收益组件评估 | 已完成 | 已移除遗留官网、文档、教程、法律页面、上游 OG image 及仅有消费者；`/` 改为服务端重定向到唯一产品路由 `/app`，以保持 Docker 根路径 healthcheck。Tabs 消费者已随遗留页面删除，迁移决策不再适用；ScrollArea、Tooltip、Popover 按证据保持现状。 |
 
 当前已形成的 Plan 67 Phase 2 本地提交：
 
@@ -147,11 +148,11 @@ site/src/lib/remote-pi/protocol.test.ts → protocol.node.test.ts
 - `PwaApp` 的 UI 编排与领域逻辑边界有可核对的改善；
 - 每个结构调整批次独立提交和验证。
 
-### 阶段 E：Plan 66 Phase 4–5
+### 阶段 E：Plan 66 Phase 5 清理与长期维护
 
-**当前优先级：进行中（Phase 4 只读收益评估）**
+**当前优先级：待开始**
 
-按收益逐项评估 Tabs、ScrollArea、Tooltip 和旧样式清理。对没有明确收益的组件保持现状，不以组件库覆盖率为目标进行机械替换。
+Phase 4 已完成遗留站点移除；后续只在独立批次按证据清理 `globals.css` 中已无消费者的遗留样式，并维护 PWA token、Mantine theme 与升级验证。不得把已删除的官网页面或 Tabs 迁移重新纳入范围。
 
 ## 4. 调度规则
 
