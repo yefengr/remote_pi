@@ -13,12 +13,12 @@ import { DesktopTopbarActions, PwaMessageActions, PwaStatusToast, SessionSwitche
 import { SessionSheet } from "@/components/pwa/session-sheet";
 import { SettingsPanel } from "@/components/pwa/settings-panel";
 import { ConnectionStatus, DesktopSidebar, EmptyWorkspace, displayDevice, type ConnectionViewState, type PairingPresence } from "@/components/pwa/workspace-view";
-import { createPairRequest, normalizePairDeviceId, parsePairUri, relayMismatch } from "@/lib/remote-pi/pairing";
 import { PeerChannel } from "@/lib/remote-pi/peer-channel";
 import { RelayClient } from "@/lib/remote-pi/relay-client";
 import { generateOwnerKeyPair } from "@/lib/remote-pi/crypto";
-import { assertBrowserCapabilities, browserName, fromStoredKey, migrateLegacyDefaultRelay, toStoredKey, type ConnectionContext } from "@/lib/pwa/runtime";
+import { assertBrowserCapabilities, fromStoredKey, migrateLegacyDefaultRelay, toStoredKey, type ConnectionContext } from "@/lib/pwa/runtime";
 import { useEndpointRegistry } from "@/lib/pwa/use-endpoint-registry";
+import { useDevicePairing, type DevicePairingResult } from "@/lib/pwa/use-device-pairing";
 import { useTimelineViewport } from "@/lib/pwa/use-timeline-viewport";
 import { TimelineRuntime, type TimelineScope, type TimelineViewItem } from "@/lib/pwa/timeline-runtime";
 import { getImageOutputMime, prepareImageAttachment } from "@/lib/pwa/image-upload";
@@ -34,7 +34,6 @@ import {
   clearPwaData,
   getPwaDatabase,
   listPwaDevices,
-  makePwaDeviceId,
   openPwaDatabase,
   removePwaDeviceData,
   type PwaDeviceRecord,
@@ -46,7 +45,6 @@ const ACTIVE_DEVICE_SETTING = "active_device";
 const ACTIVE_ENDPOINT_SETTING = "active_endpoint:";
 const RELAY_SETTING = "relay_url";
 const RETRY_DELAYS_MS = [1000, 2000, 5000, 10000, 30000] as const;
-type PairState = "idle" | "scanning" | "pairing";
 type StartupState = "loading" | "ready" | "error";
 type ImageAttachment = { source: Blob; previewUrl: string; label: string };
 
@@ -129,7 +127,6 @@ export function PwaApp() {
   const [currentModel, setCurrentModel] = useState<WireModel | null>(null);
   const [pendingAction, setPendingAction] = useState<{ id: string; action: ComposerCommandAction } | null>(null);
   const [stopRequestId, setStopRequestId] = useState<string | null>(null);
-  const [pairState, setPairState] = useState<PairState>("idle");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [renameDevice, setRenameDevice] = useState<PwaDeviceRecord | null>(null);
@@ -580,50 +577,19 @@ export function PwaApp() {
     if (!channel.send(frame)) { pendingActionRef.current = null; setPendingAction(null); setError("Relay is not connected."); return false; }
     return true;
   }, [connection]);
-  const pairFromQr = useCallback(async (raw: string) => {
-    if (!identity) return;
-    const payload = parsePairUri(raw);
-    if (!payload || relayMismatch(payload.relayUrl, relayUrl)) { setError(payload ? "This QR belongs to a different Relay." : "That is not a valid endpoint pairing QR."); return; }
-    setPairState("pairing"); setError(null);
-    const deviceId = normalizePairDeviceId(payload.deviceId);
-    const relay = new RelayClient({ relayUrl: payload.relayUrl || relayUrl, identity });
-    let channel: PeerChannel | null = null;
-    try {
-      const paired = await new Promise<PwaDeviceRecord>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("Pairing timed out. Generate a fresh QR on the Pi.")), 15000);
-        channel = new PeerChannel({
-          relay,
-          endpoint: { deviceId, endpointId: payload.endpointId, runtimeInstanceId: payload.runtimeInstanceId },
-          onPairOk: (ok) => {
-            if (ok.endpoint_id !== payload.endpointId) { clearTimeout(timer); reject(new Error("Pairing response belongs to a different endpoint.")); return; }
-            clearTimeout(timer);
-            resolve({ id: makePwaDeviceId(deviceId), deviceId, relayUrl: payload.relayUrl || relayUrl, pairedAt: new Date().toISOString(), hostname: ok.hostname, harness: ok.harness });
-          },
-          onPairError: (pairError) => { clearTimeout(timer); reject(new Error(pairError.message)); },
-          onMalformed: (reason) => { clearTimeout(timer); reject(new Error(reason)); },
-        });
-        void relay.connect().then(() => {
-          if (!channel?.sendPairRequest(createPairRequest(payload.token, browserName(), id()))) throw new Error("Relay is not ready for pairing.");
-        }).catch(reject);
-      });
-      const db = getPwaDatabase();
-      await db.transaction("rw", [db.devices, db.settings], async () => {
-        await Promise.all([
-          db.devices.put(paired),
-          db.settings.put({ key: `${ACTIVE_ENDPOINT_SETTING}${paired.id}`, value: payload.endpointId }),
-        ]);
-      });
-      setDevices(await listPwaDevices());
-      setActiveDeviceId(paired.id);
-      setActiveEndpointId(payload.endpointId);
-      setPairState("idle");
-    } catch (pairingError) { setError(pairingError instanceof Error ? pairingError.message : "Pairing failed."); setPairState("scanning"); }
-    finally {
-      const pairingChannel = channel as PeerChannel | null;
-      pairingChannel?.close();
-      relay.close();
-    }
-  }, [identity, relayUrl]);
+  const persistPairedDevice = useCallback(async ({ device, endpointId }: DevicePairingResult) => {
+    const db = getPwaDatabase();
+    await db.transaction("rw", [db.devices, db.settings], async () => {
+      await Promise.all([
+        db.devices.put(device),
+        db.settings.put({ key: `${ACTIVE_ENDPOINT_SETTING}${device.id}`, value: endpointId }),
+      ]);
+    });
+    setDevices(await listPwaDevices());
+    setActiveDeviceId(device.id);
+    setActiveEndpointId(endpointId);
+  }, []);
+  const pairing = useDevicePairing({ identity, relayUrl, onPaired: persistPairedDevice, onError: setError });
   const removePairing = useCallback(async (device: PwaDeviceRecord) => {
     if (activeDeviceIdRef.current === device.id) clearSessionConnection();
     await invalidatePersistence();
@@ -651,10 +617,10 @@ export function PwaApp() {
   if (startupState === "error") return <StartupErrorView error={startupError} onRetry={() => window.location.reload()} />;
   const canAttachImage = connection === "online" && visionAvailable === true && !sendingImage;
   return <div className="pwa-root"><header className="pwa-topbar"><div className="pwa-brand"><span className="pwa-brand-mark">π</span><span>Remote Pi</span><span className="pwa-brand-tag">BROWSER APP</span></div><div className="pwa-topbar-actions"><SessionSwitcherTrigger label={activeDevice && activeEndpoint ? `Endpoint: ${displayDevice(activeDevice)} / ${activeEndpoint.name || activeEndpoint.endpointId}` : null} expanded={sheetOpen} onOpen={() => setSheetOpen(true)} /><ConnectionStatus state={connection} retryAttempt={retryAttempt} /><DesktopTopbarActions onRefresh={refreshPwaApp} onToggleSettings={() => setSettingsOpen(true)} /><MobileTopbarMenu onRefresh={refreshPwaApp} onOpenSettings={() => setSettingsOpen(true)} /></div></header>
-    <div className="pwa-layout"><DesktopSidebar devices={devices} activeDeviceId={activeDeviceId} pairingPresence={pairingPresence} onPair={() => setPairState("scanning")} onSelect={selectDevice} onRename={setRenameDevice} onRemove={(device) => setConfirmAction({ kind: "remove-pairing", label: displayDevice(device), device })} onClearData={async () => setConfirmAction({ kind: "clear-local-data" })} /><main className="pwa-main">{activeDevice && activeEndpoint ? <><div className="pwa-chat-head"><div><span className="pwa-kicker">Active endpoint</span><h2>{activeEndpoint.name || activeEndpoint.endpointId}</h2><span className="pwa-chat-meta"><span className={connection === "online" ? "pwa-status-dot online" : "pwa-status-dot"} />{activeEndpoint.kind} <span className="pwa-separator">/</span> {activeEndpoint.cwd || "cwd unavailable"} <span className="pwa-separator">/</span> last synced <time dateTime={lastSyncedAt ? new Date(lastSyncedAt).toISOString() : undefined}>{formatSyncTime(lastSyncedAt)}</time></span></div></div><MessageList items={timelineItems} hasEarlier={nextBefore !== null} loadingEarlier={loadingEarlier} onLoadEarlier={loadEarlier} listRef={messageListRef} bottomSentinelRef={bottomSentinelRef} onScroll={handleScroll} onRetryUnknown={(requestId) => { const retry = timelineRuntimeRef.current.retryUnknown(requestId); if (retry && channelRef.current?.send(retry.frame)) applyTimelineChange(retry.change); }} onCancelQueued={(requestId) => { const scope = timelineRuntimeRef.current.currentScope; if (scope) channelRef.current?.send({ protocol_version: 2, type: "queued_message_clear", id: id(), channel_id: scope.channelId, history_generation: scope.historyGeneration, target_id: requestId }); }} /><div className="pwa-chat-footer"><PwaMessageActions show={connection === "offline" || !followingOutput || unreadOutput > 0} showRetry={connection === "offline"} showLatest={!followingOutput || unreadOutput > 0} unreadOutput={unreadOutput} onRetry={retryCurrentSession} onLatest={showLatest} /><MessageComposer attachment={attachment} canAttachImage={canAttachImage} sendingImage={sendingImage} isOnline={connection === "online"} isWorking={activeEndpoint.working === true} stopping={stopRequestId !== null} draft={draft} onDraftChange={setDraft} onSend={sendMessage} onStop={stopCurrentTask} onSetAttachment={setImageAttachment} onClearAttachment={() => setAttachment(null)} commandModels={models} commandCurrentModel={currentModel} commandCurrentModelFallback={activeEndpoint.model ?? null} commandThinking={activeThinking} commandPendingAction={pendingAction?.action ?? null} onNewSession={() => setConfirmAction({ kind: "new-session" })} onCompactSession={() => sendCommandAction({ action: "session_compact" })} onSetModel={(model) => sendCommandAction({ action: "model_set", provider: model.provider, modelId: model.id })} onSetThinking={(level) => sendCommandAction({ action: "thinking_set", level })} onCommandsOpen={() => { const scope = timelineRuntimeRef.current.currentScope; const channel = channelRef.current; if (scope && channel) { const requestId = id(); modelRequestRef.current = requestId; channel.send({ protocol_version: 2, type: "list_models", id: requestId, channel_id: scope.channelId, history_generation: scope.historyGeneration }); } }} /></div></> : <EmptyWorkspace onPair={() => setPairState("scanning")} />}</main>{settingsOpen ? <SettingsPanel relayUrl={relayUrl} defaultRelayUrl={DEFAULT_RELAY} onSave={saveRelayUrl} onClose={() => setSettingsOpen(false)} onClearData={async () => setConfirmAction({ kind: "clear-local-data" })} onResetLayout={() => undefined} /> : null}</div>
-    {sheetOpen ? <SessionSheet devices={devices} endpoints={endpoints} activeDeviceId={activeDeviceId} activeEndpointId={activeEndpointId} pairingPresence={pairingPresence} onSelectDevice={selectDevice} onSelectEndpoint={selectEndpoint} onPair={() => setPairState("scanning")} onRename={setRenameDevice} onRemove={(device) => setConfirmAction({ kind: "remove-pairing", label: displayDevice(device), device })} onClose={() => setSheetOpen(false)} /> : null}
+    <div className="pwa-layout"><DesktopSidebar devices={devices} activeDeviceId={activeDeviceId} pairingPresence={pairingPresence} onPair={pairing.open} onSelect={selectDevice} onRename={setRenameDevice} onRemove={(device) => setConfirmAction({ kind: "remove-pairing", label: displayDevice(device), device })} onClearData={async () => setConfirmAction({ kind: "clear-local-data" })} /><main className="pwa-main">{activeDevice && activeEndpoint ? <><div className="pwa-chat-head"><div><span className="pwa-kicker">Active endpoint</span><h2>{activeEndpoint.name || activeEndpoint.endpointId}</h2><span className="pwa-chat-meta"><span className={connection === "online" ? "pwa-status-dot online" : "pwa-status-dot"} />{activeEndpoint.kind} <span className="pwa-separator">/</span> {activeEndpoint.cwd || "cwd unavailable"} <span className="pwa-separator">/</span> last synced <time dateTime={lastSyncedAt ? new Date(lastSyncedAt).toISOString() : undefined}>{formatSyncTime(lastSyncedAt)}</time></span></div></div><MessageList items={timelineItems} hasEarlier={nextBefore !== null} loadingEarlier={loadingEarlier} onLoadEarlier={loadEarlier} listRef={messageListRef} bottomSentinelRef={bottomSentinelRef} onScroll={handleScroll} onRetryUnknown={(requestId) => { const retry = timelineRuntimeRef.current.retryUnknown(requestId); if (retry && channelRef.current?.send(retry.frame)) applyTimelineChange(retry.change); }} onCancelQueued={(requestId) => { const scope = timelineRuntimeRef.current.currentScope; if (scope) channelRef.current?.send({ protocol_version: 2, type: "queued_message_clear", id: id(), channel_id: scope.channelId, history_generation: scope.historyGeneration, target_id: requestId }); }} /><div className="pwa-chat-footer"><PwaMessageActions show={connection === "offline" || !followingOutput || unreadOutput > 0} showRetry={connection === "offline"} showLatest={!followingOutput || unreadOutput > 0} unreadOutput={unreadOutput} onRetry={retryCurrentSession} onLatest={showLatest} /><MessageComposer attachment={attachment} canAttachImage={canAttachImage} sendingImage={sendingImage} isOnline={connection === "online"} isWorking={activeEndpoint.working === true} stopping={stopRequestId !== null} draft={draft} onDraftChange={setDraft} onSend={sendMessage} onStop={stopCurrentTask} onSetAttachment={setImageAttachment} onClearAttachment={() => setAttachment(null)} commandModels={models} commandCurrentModel={currentModel} commandCurrentModelFallback={activeEndpoint.model ?? null} commandThinking={activeThinking} commandPendingAction={pendingAction?.action ?? null} onNewSession={() => setConfirmAction({ kind: "new-session" })} onCompactSession={() => sendCommandAction({ action: "session_compact" })} onSetModel={(model) => sendCommandAction({ action: "model_set", provider: model.provider, modelId: model.id })} onSetThinking={(level) => sendCommandAction({ action: "thinking_set", level })} onCommandsOpen={() => { const scope = timelineRuntimeRef.current.currentScope; const channel = channelRef.current; if (scope && channel) { const requestId = id(); modelRequestRef.current = requestId; channel.send({ protocol_version: 2, type: "list_models", id: requestId, channel_id: scope.channelId, history_generation: scope.historyGeneration }); } }} /></div></> : <EmptyWorkspace onPair={pairing.open} />}</main>{settingsOpen ? <SettingsPanel relayUrl={relayUrl} defaultRelayUrl={DEFAULT_RELAY} onSave={saveRelayUrl} onClose={() => setSettingsOpen(false)} onClearData={async () => setConfirmAction({ kind: "clear-local-data" })} onResetLayout={() => undefined} /> : null}</div>
+    {sheetOpen ? <SessionSheet devices={devices} endpoints={endpoints} activeDeviceId={activeDeviceId} activeEndpointId={activeEndpointId} pairingPresence={pairingPresence} onSelectDevice={selectDevice} onSelectEndpoint={selectEndpoint} onPair={pairing.open} onRename={setRenameDevice} onRemove={(device) => setConfirmAction({ kind: "remove-pairing", label: displayDevice(device), device })} onClose={() => setSheetOpen(false)} /> : null}
     {renameDevice ? <RenamePairingDialog device={renameDevice} onSave={(nickname) => saveDeviceNickname(renameDevice, nickname)} onClose={() => setRenameDevice(null)} /> : null}
-    {pairState !== "idle" ? <div className="pwa-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && pairState === "scanning") setPairState("idle"); }} role="presentation">{pairState === "scanning" ? <PairingDialog onScan={pairFromQr} onClose={() => setPairState("idle")} /> : <div className="pwa-pairing-card"><Activity className="pwa-spin" /><span className="pwa-kicker">Pairing</span><h2>Connecting to your Pi</h2><p>Waiting for the endpoint to confirm this browser.</p></div>}</div> : null}
+    {pairing.state !== "idle" ? <div className="pwa-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) pairing.close(); }} role="presentation">{pairing.state === "scanning" ? <PairingDialog onScan={pairing.pairFromQr} onClose={pairing.close} /> : <div className="pwa-pairing-card"><Activity className="pwa-spin" /><span className="pwa-kicker">Pairing</span><h2>Connecting to your Pi</h2><p>Waiting for the endpoint to confirm this browser.</p></div>}</div> : null}
     <ConfirmActionDialog action={confirmAction?.kind === "remove-pairing" ? { kind: "remove-pairing", label: confirmAction.label } : confirmAction} pending={confirmPending} error={confirmError} onConfirm={() => { void confirmRequestedAction(); }} onClose={() => { if (!confirmPendingRef.current) { setConfirmAction(null); setConfirmError(null); } }} />
     <PwaStatusToast message={error} onDismiss={() => setError(null)} /></div>;
 }
