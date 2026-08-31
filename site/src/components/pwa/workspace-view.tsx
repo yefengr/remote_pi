@@ -3,10 +3,10 @@
 import { Badge, Button, IconButton } from "@/components/ui";
 import { Circle, Link2, MessageSquare, Pencil, Plus, Radio, Trash2 } from "lucide-react";
 import type { PwaDeviceRecord } from "@/lib/pwa/db";
+import type { PairingPresence, PairingStatus } from "@/lib/pwa/pwa-view-model";
 
+export type { PairingPresence, PairingStatus } from "@/lib/pwa/pwa-view-model";
 export type ConnectionViewState = "offline" | "connecting" | "online" | "retrying" | "no_network";
-export type PairingStatus = "online" | "checking" | "offline" | "partial";
-export type PairingPresence = { status: PairingStatus; onlineEndpoints: number; totalEndpoints: number; lastSeenAt?: number };
 
 export function displayDevice(device: PwaDeviceRecord): string {
   const nickname = device.nickname?.trim();

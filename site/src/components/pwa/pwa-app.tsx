@@ -12,11 +12,12 @@ import { MobileTopbarMenu } from "@/components/pwa/mobile-topbar-menu";
 import { DesktopTopbarActions, PwaMessageActions, PwaStatusToast, SessionSwitcherTrigger } from "@/components/pwa/pwa-app-actions";
 import { SessionSheet } from "@/components/pwa/session-sheet";
 import { SettingsPanel } from "@/components/pwa/settings-panel";
-import { ConnectionStatus, DesktopSidebar, EmptyWorkspace, displayDevice, type ConnectionViewState, type PairingPresence } from "@/components/pwa/workspace-view";
+import { ConnectionStatus, DesktopSidebar, EmptyWorkspace, displayDevice, type ConnectionViewState } from "@/components/pwa/workspace-view";
 import { PeerChannel } from "@/lib/remote-pi/peer-channel";
 import { RelayClient } from "@/lib/remote-pi/relay-client";
 import { generateOwnerKeyPair } from "@/lib/remote-pi/crypto";
 import { assertBrowserCapabilities, fromStoredKey, migrateLegacyDefaultRelay, toStoredKey, type ConnectionContext } from "@/lib/pwa/runtime";
+import { derivePairingPresence } from "@/lib/pwa/pwa-view-model";
 import { useEndpointRegistry } from "@/lib/pwa/use-endpoint-registry";
 import { useDevicePairing, type DevicePairingResult } from "@/lib/pwa/use-device-pairing";
 import { ACTIVE_DEVICE_SETTING, activeEndpointSettingKey, useActiveEndpointSelection } from "@/lib/pwa/use-active-endpoint-selection";
@@ -195,11 +196,7 @@ export function PwaApp() {
   const sessionEndpointId = activeEndpoint?.endpointId ?? null;
   const sessionRuntimeInstanceId = activeEndpoint?.runtimeInstanceId ?? null;
   const sessionOnline = activeEndpoint?.online === true;
-  const pairingPresence = useMemo<Record<string, PairingPresence>>(() => Object.fromEntries(devices.map((device) => {
-    const deviceEndpoints = endpoints.filter((endpoint) => endpoint.deviceId === device.deviceId);
-    const onlineEndpoints = deviceEndpoints.filter((endpoint) => endpoint.online).length;
-    return [device.id, { status: deviceEndpoints.length === 0 ? "checking" : onlineEndpoints === 0 ? "offline" : onlineEndpoints === deviceEndpoints.length ? "online" : "partial", onlineEndpoints, totalEndpoints: deviceEndpoints.length, lastSeenAt: deviceEndpoints.find((endpoint) => endpoint.online)?.updatedAt }];
-  })), [devices, endpoints]);
+  const pairingPresence = useMemo(() => derivePairingPresence(devices, endpoints), [devices, endpoints]);
 
   const applyTimelineChange = useCallback((change: ReturnType<TimelineRuntime["receive"]>) => {
     setTimelineItems(change.items);
