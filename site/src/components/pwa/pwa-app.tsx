@@ -17,7 +17,8 @@ import { createPairRequest, normalizePairDeviceId, parsePairUri, relayMismatch }
 import { PeerChannel } from "@/lib/remote-pi/peer-channel";
 import { RelayClient } from "@/lib/remote-pi/relay-client";
 import { generateOwnerKeyPair } from "@/lib/remote-pi/crypto";
-import { acceptEndpointRuntime, assertBrowserCapabilities, browserName, fromStoredKey, mergeEndpoints, migrateLegacyDefaultRelay, toStoredKey, type ConnectionContext } from "@/lib/pwa/runtime";
+import { assertBrowserCapabilities, browserName, fromStoredKey, migrateLegacyDefaultRelay, toStoredKey, type ConnectionContext } from "@/lib/pwa/runtime";
+import { useEndpointRegistry } from "@/lib/pwa/use-endpoint-registry";
 import { TimelineRuntime, type TimelineScope, type TimelineViewItem } from "@/lib/pwa/timeline-runtime";
 import { getImageOutputMime, prepareImageAttachment } from "@/lib/pwa/image-upload";
 import { HistoryWindowAssembler, TimelineEventFragmentAssembler } from "@/lib/pwa/timeline-transfer";
@@ -25,20 +26,17 @@ import { commitRealtime, loadRecent, replaceRecentWindow, TimelineStoreConflictE
 import { refreshPwaApp } from "@/lib/pwa/service-worker-update";
 import { ReconnectState, type ReconnectTrigger } from "@/lib/pwa/reconnect-state";
 import { recoverServerFrame } from "@/lib/pwa/server-frame-recovery";
-import type { ControlFrame, OwnerKeyPair, ThinkingLevel, WireImage, WireModel } from "@/lib/remote-pi/types";
+import type { OwnerKeyPair, ThinkingLevel, WireImage, WireModel } from "@/lib/remote-pi/types";
 import type { ClientFrame, ServerFrame } from "@/lib/remote-pi/protocol-v2/frames";
 import type { TimelineEvent } from "@/lib/remote-pi/protocol-v2/schema";
 import {
   clearPwaData,
   getPwaDatabase,
   listPwaDevices,
-  listPwaEndpoints,
   makePwaDeviceId,
-  makePwaEndpointId,
   openPwaDatabase,
   removePwaDeviceData,
   type PwaDeviceRecord,
-  type PwaEndpointRecord,
 } from "@/lib/pwa/db";
 
 const LEGACY_DEFAULT_RELAY = "https://relay-rp1.jacobmoura.work";
@@ -108,18 +106,9 @@ export function canCloseBackgroundOverlay(confirmOpen: boolean, confirmPending: 
 function id(): string { return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`; }
 function formatSyncTime(timestamp?: number): string { return timestamp ? new Date(timestamp).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : "never"; }
 function safeThinkingLevel(value: unknown): ThinkingLevel { return typeof value === "string" && COMPOSER_THINKING_LEVELS.includes(value as ThinkingLevel) ? value as ThinkingLevel : "off"; }
-function toEndpointRecord(deviceId: string, endpoint: Extract<ControlFrame, { type: "endpoints" }> ["endpoints"][number], online: boolean): PwaEndpointRecord {
-  const metadata = endpoint.metadata;
-  return { id: makePwaEndpointId(deviceId, endpoint.endpoint_id), deviceId, endpointId: endpoint.endpoint_id, runtimeInstanceId: endpoint.runtime_instance_id, kind: metadata.kind, name: metadata.name ?? undefined, cwd: metadata.cwd ?? undefined, pid: metadata.pid ?? undefined, startedAt: metadata.started_at ?? undefined, model: metadata.model ?? undefined, thinking: metadata.thinking ?? undefined, working: metadata.working ?? undefined, online, updatedAt: Date.now() };
-}
-function endpointRecordFromEvent(frame: Extract<ControlFrame, { type: "endpoint_announced" | "endpoint_updated" }>): PwaEndpointRecord {
-  return toEndpointRecord(frame.device_id, { endpoint_id: frame.endpoint_id, runtime_instance_id: frame.runtime_instance_id, metadata: frame.metadata }, true);
-}
-
 export function PwaApp() {
   const [identity, setIdentity] = useState<OwnerKeyPair | null>(null);
   const [devices, setDevices] = useState<PwaDeviceRecord[]>([]);
-  const [endpoints, setEndpoints] = useState<PwaEndpointRecord[]>([]);
   const [activeDeviceId, setActiveDeviceId] = useState<string | null>(null);
   const [activeEndpointId, setActiveEndpointId] = useState<string | null>(null);
   const [connection, setConnection] = useState<ConnectionViewState>("offline");
@@ -154,10 +143,6 @@ export function PwaApp() {
   const [realtimeOutputVersion, setRealtimeOutputVersion] = useState(0);
 
   const devicesRef = useRef(devices);
-  const endpointsRef = useRef(endpoints);
-  const endpointRuntimeHistoryRef = useRef(new Map<string, Set<string>>());
-  const endpointPersistEpochRef = useRef(0);
-  const endpointPersistChainRef = useRef(Promise.resolve());
   const activeDeviceIdRef = useRef(activeDeviceId);
   const relayRef = useRef<RelayClient | null>(null);
   const relayReconnectNowRef = useRef<(() => void) | null>(null);
@@ -188,12 +173,12 @@ export function PwaApp() {
   const realtimeOutputKeysRef = useRef(new Set<string>());
 
   useEffect(() => { devicesRef.current = devices; }, [devices]);
-  useEffect(() => { endpointsRef.current = endpoints; }, [endpoints]);
   useEffect(() => { activeDeviceIdRef.current = activeDeviceId; }, [activeDeviceId]);
   useEffect(() => { followingOutputRef.current = followingOutput; }, [followingOutput]);
   useEffect(() => () => { if (attachment) URL.revokeObjectURL(attachment.previewUrl); }, [attachment]);
 
   const activeDevice = useMemo(() => devices.find((device) => device.id === activeDeviceId) ?? null, [activeDeviceId, devices]);
+  const { endpoints, applyControl, markAllOffline, invalidatePersistence } = useEndpointRegistry({ devices, activeDevice, onError: setError });
   const activeEndpoint = useMemo(() => activeDevice && activeEndpointId ? endpoints.find((endpoint) => endpoint.deviceId === activeDevice.deviceId && endpoint.endpointId === activeEndpointId) ?? null : null, [activeDevice, activeEndpointId, endpoints]);
   const activeThinking = useMemo(() => safeThinkingLevel(activeEndpoint?.thinking), [activeEndpoint?.thinking]);
   const sessionDeviceId = activeDevice?.deviceId ?? null;
@@ -281,53 +266,6 @@ export function PwaApp() {
     setConnection("connecting");
     setSessionRestartToken((token) => token + 1);
   }, [clearSessionConnection]);
-
-  const persistEndpoints = useCallback((deviceId: string, next: PwaEndpointRecord[]) => {
-    const epoch = endpointPersistEpochRef.current;
-    const operation = endpointPersistChainRef.current.then(async () => {
-      if (epoch !== endpointPersistEpochRef.current) return;
-      const database = getPwaDatabase();
-      const device = await database.devices.get(makePwaDeviceId(deviceId));
-      if (!device || epoch !== endpointPersistEpochRef.current) return;
-      const persisted = next.map((endpoint) => { const record = { ...endpoint }; delete record.online; return record; });
-      await database.endpoints.bulkPut(persisted);
-      if (epoch !== endpointPersistEpochRef.current) return;
-      setEndpoints((current) => mergeEndpoints(current.filter((endpoint) => endpoint.deviceId !== deviceId), next));
-    });
-    endpointPersistChainRef.current = operation.catch(() => undefined);
-    return operation;
-  }, []);
-  const invalidateEndpointPersistence = useCallback(async () => {
-    endpointPersistEpochRef.current += 1;
-    await endpointPersistChainRef.current;
-  }, []);
-  const applyControl = useCallback((frame: ControlFrame) => {
-    const device = devicesRef.current.find((candidate) => candidate.deviceId === frame.device_id);
-    if (!device) return;
-    if (frame.type === "endpoints") {
-      const snapshot = frame.endpoints.map((endpoint) => toEndpointRecord(frame.device_id, endpoint, true));
-      const snapshotIds = new Set(snapshot.map((endpoint) => endpoint.id));
-      const current = endpointsRef.current.filter((endpoint) => endpoint.deviceId === frame.device_id);
-      const accepted = snapshot.filter((endpoint) => acceptEndpointRuntime(
-        endpointRuntimeHistoryRef.current,
-        current.find((candidate) => candidate.id === endpoint.id),
-        endpoint,
-      ));
-      const acceptedIds = new Set(accepted.map((endpoint) => endpoint.id));
-      const retained = current.filter((endpoint) => snapshotIds.has(endpoint.id) && !acceptedIds.has(endpoint.id));
-      const stale = current.filter((endpoint) => !snapshotIds.has(endpoint.id)).map((endpoint) => ({ ...endpoint, online: false, updatedAt: Date.now() }));
-      void persistEndpoints(frame.device_id, [...retained, ...accepted, ...stale]);
-      return;
-    }
-    if (frame.type === "endpoint_announced" || frame.type === "endpoint_updated") {
-      const next = endpointRecordFromEvent(frame);
-      const current = endpointsRef.current.find((endpoint) => endpoint.id === next.id);
-      if (!acceptEndpointRuntime(endpointRuntimeHistoryRef.current, current, next)) return;
-      void persistEndpoints(frame.device_id, [...endpointsRef.current.filter((endpoint) => endpoint.id !== next.id), next]);
-      return;
-    }
-    setEndpoints((current) => current.map((endpoint) => endpoint.deviceId === frame.device_id && endpoint.endpointId === frame.endpoint_id && endpoint.runtimeInstanceId === frame.runtime_instance_id ? { ...endpoint, online: false, updatedAt: Date.now() } : endpoint));
-  }, [persistEndpoints]);
 
   const handleServerFrame = useCallback((frame: ServerFrame, context: ConnectionContext) => {
     const current = channelContextRef.current;
@@ -439,15 +377,10 @@ export function PwaApp() {
     let cancelled = false;
     if (!activeDevice) {
       queueMicrotask(() => {
-        if (cancelled) return;
-        setEndpoints([]);
-        setActiveEndpointId(null);
+        if (!cancelled) setActiveEndpointId(null);
       });
       return () => { cancelled = true; };
     }
-    void listPwaEndpoints(activeDevice.deviceId)
-      .then((stored) => { if (!cancelled) setEndpoints((current) => mergeEndpoints(stored.map((endpoint) => ({ ...endpoint, online: false })), current.filter((endpoint) => endpoint.deviceId === activeDevice.deviceId))); })
-      .catch(() => { if (!cancelled) setError("Could not read local endpoints."); });
     void getPwaDatabase().settings.get(`${ACTIVE_ENDPOINT_SETTING}${activeDevice.id}`).then((setting) => { if (!cancelled) setActiveEndpointId(setting?.value ?? null); });
     void getPwaDatabase().settings.put({ key: ACTIVE_DEVICE_SETTING, value: activeDevice.id });
     return () => { cancelled = true; };
@@ -520,7 +453,7 @@ export function PwaApp() {
           setConnection("offline");
           return;
         }
-        setEndpoints((current) => current.map((endpoint) => endpoint.online ? { ...endpoint, online: false } : endpoint));
+        markAllOffline();
         if (!scheduleRelayReconnect("closed") && !relayReconnectTimerRef.current) setConnection("offline");
       }
     });
@@ -565,7 +498,7 @@ export function PwaApp() {
       if (relayRef.current === relay) relayRef.current = null;
       relay.close();
     };
-  }, [applyControl, clearSessionConnection, devices.length, identity, relayUrl, startupState]);
+  }, [applyControl, clearSessionConnection, devices.length, identity, markAllOffline, relayUrl, startupState]);
 
   useEffect(() => {
     const relay = relayRef.current;
@@ -714,15 +647,15 @@ export function PwaApp() {
   }, [identity, relayUrl]);
   const removePairing = useCallback(async (device: PwaDeviceRecord) => {
     if (activeDeviceIdRef.current === device.id) clearSessionConnection();
-    await invalidateEndpointPersistence();
+    await invalidatePersistence();
     await removePwaDeviceData(device.deviceId, device.id, `${ACTIVE_ENDPOINT_SETTING}${device.id}`);
     const remaining = await listPwaDevices(); setDevices(remaining);
     if (activeDeviceIdRef.current === device.id) selectDevice(remaining[0]?.id ?? null);
-  }, [clearSessionConnection, invalidateEndpointPersistence, selectDevice]);
+  }, [clearSessionConnection, invalidatePersistence, selectDevice]);
   const clearLocalData = useCallback(async () => {
-    await invalidateEndpointPersistence();
+    await invalidatePersistence();
     await clearPwaData();
-  }, [invalidateEndpointPersistence]);
+  }, [invalidatePersistence]);
   const saveDeviceNickname = useCallback(async (device: PwaDeviceRecord, nickname: string) => { await getPwaDatabase().devices.put({ ...device, nickname }); setDevices(await listPwaDevices()); }, []);
   const saveRelayUrl = useCallback(async (value: string) => {
     const normalized = value.trim().replace(/\/$/, "") || DEFAULT_RELAY;
