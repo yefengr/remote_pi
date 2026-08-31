@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Drawer, Menu, Modal } from "@mantine/core";
 import { Badge, Button, Input, Select } from "@/components/ui";
@@ -33,20 +32,20 @@ function renderPilot(): string {
 test("Mantine PWA pilot renders core controls with the Remote Pi provider", () => {
   const html = renderPilot();
 
-  assert.match(html, /Save/);
-  assert.match(html, /Pairing name/);
-  assert.match(html, /Endpoints/);
-  assert.match(html, /Rename pairing/);
-  assert.match(html, /Settings/);
-  assert.match(html, /pwa-button/);
-  assert.match(html, /pwa-input/);
-  assert.match(html, /pwa-select/);
-  assert.match(html, /id="endpoint-id"/);
-  assert.match(html, /value="endpoint-main"/);
-  assert.match(html, /disabled=""/);
-  assert.match(html, /Old endpoint/);
-  assert.match(html, /pwa-badge/);
-  assert.match(html, /data-tone="primary"/);
-  assert.match(html, /\.pwa-ui-scope\[data-mantine-color-scheme="dark"\]/);
-  assert.match(html, /--mantine-color-remotePi-filled/);
+  expect(html).toMatch(/Save/);
+  expect(html).toMatch(/Pairing name/);
+  expect(html).toMatch(/Endpoints/);
+  expect(html).toMatch(/Rename pairing/);
+  expect(html).toMatch(/Settings/);
+  expect(html).toMatch(/pwa-button/);
+  expect(html).toMatch(/pwa-input/);
+  expect(html).toMatch(/pwa-select/);
+  expect(html).toMatch(/id="endpoint-id"/);
+  expect(html).toMatch(/value="endpoint-main"/);
+  expect(html).toMatch(/disabled=""/);
+  expect(html).toMatch(/Old endpoint/);
+  expect(html).toMatch(/pwa-badge/);
+  expect(html).toMatch(/data-tone="primary"/);
+  expect(html).toMatch(/\.pwa-ui-scope\[data-mantine-color-scheme="dark"\]/);
+  expect(html).toMatch(/--mantine-color-remotePi-filled/);
 });

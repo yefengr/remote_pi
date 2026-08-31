@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "vitest";
 import { createRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { TimelineEvent } from "@/lib/remote-pi/protocol-v2/schema";
@@ -53,12 +52,12 @@ test("uses Mantine controls for earlier records, collapse, and retry actions", (
   const collapseAction = html.match(/<button[^>]*aria-label="Expand message"[^>]*>/)?.[0] ?? "";
   const retryAction = html.match(/<button[^>]*aria-label="Retry delivery"[^>]*>/)?.[0] ?? "";
 
-  assert.match(earlierButton, /pwa-button/);
-  assert.match(earlierButton, /data-tone="secondary"/);
-  assert.match(collapseAction, /pwa-icon-button/);
-  assert.match(collapseAction, /pwa-message-toggle/);
-  assert.match(retryAction, /pwa-icon-button/);
-  assert.match(retryAction, /pwa-pending-retry/);
+  expect(earlierButton).toMatch(/pwa-button/);
+  expect(earlierButton).toMatch(/data-tone="secondary"/);
+  expect(collapseAction).toMatch(/pwa-icon-button/);
+  expect(collapseAction).toMatch(/pwa-message-toggle/);
+  expect(retryAction).toMatch(/pwa-icon-button/);
+  expect(retryAction).toMatch(/pwa-pending-retry/);
 });
 
 test("uses a Mantine cancel action only for cancelable queued messages", () => {
@@ -69,6 +68,6 @@ test("uses a Mantine cancel action only for cancelable queued messages", () => {
   }], { onCancelQueued: () => {} });
   const cancelAction = html.match(/<button[^>]*aria-label="Cancel queued message"[^>]*>/)?.[0] ?? "";
 
-  assert.match(cancelAction, /pwa-icon-button/);
-  assert.match(cancelAction, /pwa-pending-retry/);
+  expect(cancelAction).toMatch(/pwa-icon-button/);
+  expect(cancelAction).toMatch(/pwa-pending-retry/);
 });

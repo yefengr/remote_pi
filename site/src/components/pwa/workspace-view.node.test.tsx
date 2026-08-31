@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DesktopSidebar, displayDevice, EmptyWorkspace } from "./workspace-view";
 import { PwaUiProvider } from "./pwa-ui-provider";
@@ -16,9 +15,9 @@ function device(overrides: Partial<PwaDeviceRecord> = {}): PwaDeviceRecord {
 }
 
 test("pairing display name prefers local nickname, then host, then stable key", () => {
-  assert.equal(displayDevice(device({ nickname: "Office Mac", hostname: "office" })), "Office Mac");
-  assert.equal(displayDevice(device({ hostname: "office" })), "Pi on office");
-  assert.equal(displayDevice(device()), "Remote Pi · e5FRoCab");
+  expect(displayDevice(device({ nickname: "Office Mac", hostname: "office" }))).toBe("Office Mac");
+  expect(displayDevice(device({ hostname: "office" }))).toBe("Pi on office");
+  expect(displayDevice(device())).toBe("Remote Pi · e5FRoCab");
 });
 
 test("pairing card keeps current selection separate from online status", () => {
@@ -40,17 +39,17 @@ test("pairing card keeps current selection separate from online status", () => {
   const removeAction = html.match(/<button[^>]*aria-label="Remove Office Mac"[^>]*>/)?.[0] ?? "";
   const clearButton = html.match(/<button[^>]*class="[^"]*pwa-button[^"]*"[^>]*data-tone="text"[^>]*>/)?.[0] ?? "";
 
-  assert.match(html, /OFFLINE/);
-  assert.match(html, /CURRENT/);
-  assert.match(html, /pwa-badge/);
-  assert.match(html, /Paired devices/);
-  assert.match(renameAction, /pwa-icon-button/);
-  assert.match(renameAction, /title="Rename pairing"/);
-  assert.match(removeAction, /pwa-icon-button/);
-  assert.match(removeAction, /title="Remove pairing"/);
-  assert.match(clearButton, /pwa-button/);
-  assert.match(clearButton, /data-tone="text"/);
-  assert.doesNotMatch(html, />XCrawl#2</);
+  expect(html).toMatch(/OFFLINE/);
+  expect(html).toMatch(/CURRENT/);
+  expect(html).toMatch(/pwa-badge/);
+  expect(html).toMatch(/Paired devices/);
+  expect(renameAction).toMatch(/pwa-icon-button/);
+  expect(renameAction).toMatch(/title="Rename pairing"/);
+  expect(removeAction).toMatch(/pwa-icon-button/);
+  expect(removeAction).toMatch(/title="Remove pairing"/);
+  expect(clearButton).toMatch(/pwa-button/);
+  expect(clearButton).toMatch(/data-tone="text"/);
+  expect(html).not.toMatch(/>XCrawl#2</);
 });
 
 test("uses Mantine actions for pairing entry points", () => {
@@ -62,11 +61,11 @@ test("uses Mantine actions for pairing entry points", () => {
   const emptyWorkspaceHtml = renderToStaticMarkup(<PwaUiProvider><EmptyWorkspace onPair={() => {}} /></PwaUiProvider>);
   const roundAction = sidebarHtml.match(/<button[^>]*aria-label="Pair a Pi"[^>]*>/)?.[0] ?? "";
 
-  assert.match(roundAction, /pwa-icon-button/);
-  assert.match(roundAction, /title="Pair a Pi"/);
-  assert.match(sidebarHtml, /pwa-button/);
-  assert.match(sidebarHtml, /data-tone="primary"/);
-  assert.match(emptyWorkspaceHtml, /pwa-button/);
-  assert.match(emptyWorkspaceHtml, /data-tone="primary"/);
-  assert.match(emptyWorkspaceHtml, /Pair a Pi/);
+  expect(roundAction).toMatch(/pwa-icon-button/);
+  expect(roundAction).toMatch(/title="Pair a Pi"/);
+  expect(sidebarHtml).toMatch(/pwa-button/);
+  expect(sidebarHtml).toMatch(/data-tone="primary"/);
+  expect(emptyWorkspaceHtml).toMatch(/pwa-button/);
+  expect(emptyWorkspaceHtml).toMatch(/data-tone="primary"/);
+  expect(emptyWorkspaceHtml).toMatch(/Pair a Pi/);
 });

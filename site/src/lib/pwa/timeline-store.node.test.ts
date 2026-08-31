@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "vitest";
 import type { TimelineEvent } from "../remote-pi/protocol-v2/schema";
 import { findTimelineConflict, isPersistableTimelineEvent, makePwaTimelineEventId, selectRecentTimelineEvents, type TimelineScope } from "./timeline-store";
 import type { PwaTimelineEventRecord } from "./db";
@@ -12,15 +11,15 @@ function record(event: TimelineEvent): PwaTimelineEventRecord { return { id: mak
 test("stores only committed grouped events", () => {
   const committed = userEvent("committed", "group-1", 1);
   const system: TimelineEvent = { event_id: "system", session_id: scope.sessionId, history_generation: scope.historyGeneration, timestamp: 2, kind: "custom", payload: { notice: true }, truncated: false };
-  assert.equal(isPersistableTimelineEvent(committed), true);
-  assert.equal(isPersistableTimelineEvent(system), false);
-  assert.deepEqual(selectRecentTimelineEvents(scope, [committed, system]), [committed]);
+  expect(isPersistableTimelineEvent(committed)).toBe(true);
+  expect(isPersistableTimelineEvent(system)).toBe(false);
+  expect(selectRecentTimelineEvents(scope, [committed, system])).toEqual([committed]);
 });
 test("detects divergent data for a stable device/endpoint/session/generation key", () => {
   const existing = [record(userEvent("event", "group", 1))];
   const incoming = [record({ ...userEvent("event", "group", 1), blocks: [{ type: "text", text: "different" }] })];
-  assert.equal(findTimelineConflict(existing, incoming)?.eventId, "event");
+  expect(findTimelineConflict(existing, incoming)?.eventId).toBe("event");
 });
 test("omits runtime identity from the persistent key", () => {
-  assert.equal(makePwaTimelineEventId(scope, "event/1"), "device:endpoint:session:generation:event%2F1");
+  expect(makePwaTimelineEventId(scope, "event/1")).toBe("device:endpoint:session:generation:event%2F1");
 });

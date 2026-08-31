@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ServiceWorkerNotice } from "./service-worker-register";
 import { PwaUiProvider } from "./pwa-ui-provider";
@@ -25,14 +24,14 @@ function renderNotice(overrides: NoticeOverrides = {}): string {
 
 function buttonForLabel(html: string, label: string): string {
   const match = html.match(new RegExp(`<button\\b[^>]*>(?:(?!<\\/button>).)*${label}(?:(?!<\\/button>).)*<\\/button>`));
-  assert.ok(match, `expected a button labelled ${label}`);
-  return match[0];
+  expect(match, `expected a button labelled ${label}`).toBeTruthy();
+  return match![0];
 }
 
 function dismissButton(html: string): string {
   const match = html.match(/<button\b(?=[^>]*aria-label="Dismiss PWA notice")[^>]*>(?:(?!<\/button>).)*<\/button>/);
-  assert.ok(match, "expected a PWA notice dismiss button");
-  return match[0];
+  expect(match, "expected a PWA notice dismiss button").toBeTruthy();
+  return match![0];
 }
 
 test("renders the install notice with Mantine actions and preserved semantics", () => {
@@ -40,13 +39,13 @@ test("renders the install notice with Mantine actions and preserved semantics", 
   const install = buttonForLabel(html, "Install app");
   const dismiss = dismissButton(html);
 
-  assert.match(html, /role="status"/);
-  assert.match(html, /Install Remote Pi/);
-  assert.match(install, /pwa-button/);
-  assert.match(install, /data-tone="secondary"/);
-  assert.match(install, /type="button"/);
-  assert.match(dismiss, /pwa-icon-button/);
-  assert.match(dismiss, /title="Dismiss"/);
+  expect(html).toMatch(/role="status"/);
+  expect(html).toMatch(/Install Remote Pi/);
+  expect(install).toMatch(/pwa-button/);
+  expect(install).toMatch(/data-tone="secondary"/);
+  expect(install).toMatch(/type="button"/);
+  expect(dismiss).toMatch(/pwa-icon-button/);
+  expect(dismiss).toMatch(/title="Dismiss"/);
 });
 
 test("renders the update notice and disables Updating after requesting an update", () => {
@@ -55,26 +54,26 @@ test("renders the update notice and disables Updating after requesting an update
   const refresh = buttonForLabel(ready, "Refresh");
   const updating = buttonForLabel(requested, "Updating");
 
-  assert.match(ready, /Remote Pi update ready/);
-  assert.match(refresh, /pwa-button/);
-  assert.match(refresh, /data-tone="primary"/);
-  assert.match(refresh, /type="button"/);
-  assert.match(updating, /disabled|data-disabled/);
+  expect(ready).toMatch(/Remote Pi update ready/);
+  expect(refresh).toMatch(/pwa-button/);
+  expect(refresh).toMatch(/data-tone="primary"/);
+  expect(refresh).toMatch(/type="button"/);
+  expect(updating).toMatch(/disabled|data-disabled/);
 });
 
 test("renders only the dismiss action for unsupported offline mode", () => {
   const html = renderNotice({ unsupported: true });
   const dismiss = dismissButton(html);
 
-  assert.match(html, /Offline app mode unavailable/);
-  assert.match(dismiss, /pwa-icon-button/);
-  assert.doesNotMatch(html, /<button\b[^>]*>(?:(?!<\/button>).)*Install app(?:(?!<\/button>).)*<\/button>/);
-  assert.doesNotMatch(html, /<button\b[^>]*>(?:(?!<\/button>).)*Refresh(?:(?!<\/button>).)*<\/button>/);
+  expect(html).toMatch(/Offline app mode unavailable/);
+  expect(dismiss).toMatch(/pwa-icon-button/);
+  expect(html).not.toMatch(/<button\b[^>]*>(?:(?!<\/button>).)*Install app(?:(?!<\/button>).)*<\/button>/);
+  expect(html).not.toMatch(/<button\b[^>]*>(?:(?!<\/button>).)*Refresh(?:(?!<\/button>).)*<\/button>/);
 });
 
 test("keeps install and update actions independent when both are available", () => {
   const html = renderNotice({ installPrompt: true, updateReady: true });
 
-  assert.match(buttonForLabel(html, "Install app"), /data-tone="secondary"/);
-  assert.match(buttonForLabel(html, "Refresh"), /data-tone="primary"/);
+  expect(buttonForLabel(html, "Install app")).toMatch(/data-tone="secondary"/);
+  expect(buttonForLabel(html, "Refresh")).toMatch(/data-tone="primary"/);
 });

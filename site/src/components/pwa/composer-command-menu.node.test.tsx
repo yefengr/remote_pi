@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { WireModel } from "@/lib/remote-pi/types";
 import { ComposerCommandMenuPanel, type ComposerCommandMenuPanelProps } from "./composer-command-menu";
@@ -38,62 +37,62 @@ function renderPanel(view: ComposerCommandMenuPanelProps["view"], overrides: Par
 test("renders all root Pi commands with Mantine unstyled controls", () => {
   const html = renderPanel("root");
 
-  assert.match(html, /mantine-UnstyledButton-root/);
-  assert.match(html, /\/new/);
-  assert.match(html, /New session/);
-  assert.match(html, /\/compact/);
-  assert.match(html, /Compact context/);
-  assert.match(html, /\/model/);
-  assert.match(html, /anthropic \/ Claude Sonnet 4/);
-  assert.match(html, /\/thinking/);
-  assert.match(html, /Thinking level: medium/);
+  expect(html).toMatch(/mantine-UnstyledButton-root/);
+  expect(html).toMatch(/\/new/);
+  expect(html).toMatch(/New session/);
+  expect(html).toMatch(/\/compact/);
+  expect(html).toMatch(/Compact context/);
+  expect(html).toMatch(/\/model/);
+  expect(html).toMatch(/anthropic \/ Claude Sonnet 4/);
+  expect(html).toMatch(/\/thinking/);
+  expect(html).toMatch(/Thinking level: medium/);
 });
 
 test("falls back to endpoint metadata before the current model catalog arrives", () => {
   const html = renderPanel("root", { currentModel: null, currentModelFallback: "GPT-5.4" });
 
-  assert.match(html, /GPT-5.4/);
-  assert.doesNotMatch(html, /Current model unavailable/);
+  expect(html).toMatch(/GPT-5.4/);
+  expect(html).not.toMatch(/Current model unavailable/);
 });
 
 test("shows an explicit unavailable state when no current model is known", () => {
   const html = renderPanel("root", { currentModel: null, currentModelFallback: null });
 
-  assert.match(html, /Current model unavailable/);
+  expect(html).toMatch(/Current model unavailable/);
 });
 
 test("disables new and compact while the active endpoint is working", () => {
   const html = renderPanel("root", { isWorking: true });
 
-  assert.equal((html.match(/disabled=""/g) ?? []).length, 2);
+  expect((html.match(/disabled=""/g) ?? []).length).toBe(2);
 });
 
 test("disables every command while offline", () => {
   const html = renderPanel("root", { isOnline: false });
 
-  assert.equal((html.match(/disabled=""/g) ?? []).length, 4);
+  expect((html.match(/disabled=""/g) ?? []).length).toBe(4);
 });
 
 test("disables every command while another action is pending", () => {
   const html = renderPanel("root", { pendingAction: "model_set" });
 
-  assert.equal((html.match(/disabled=""/g) ?? []).length, 4);
+  expect((html.match(/disabled=""/g) ?? []).length).toBe(4);
 });
 
 test("renders the model chooser with provider, name, and current model", () => {
   const html = renderPanel("models");
 
-  assert.match(html, /role="group" aria-label="Change model"/);
-  assert.match(html, /role="menuitem"/);
-  assert.match(html, /Back/);
-  assert.match(html, /Change model/);
-  assert.match(html, /anthropic \/ Claude Sonnet 4/);
-  assert.match(html, /aria-label="Current model"/);
+  expect(html).toMatch(/role="group" aria-label="Change model"/);
+  expect(html).toMatch(/role="menuitem"/);
+  expect(html).toMatch(/Back/);
+  expect(html).toMatch(/Change model/);
+  expect(html).toMatch(/anthropic \/ Claude Sonnet 4/);
+  expect(html).toMatch(/aria-label="Current model"/);
 });
 
 test("renders every thinking level and marks the active level", () => {
   const html = renderPanel("thinking");
 
-  for (const level of ["off", "minimal", "low", "medium", "high", "xhigh"]) assert.match(html, new RegExp(`>${level}<`));
-  assert.match(html, /aria-label="Current thinking level"/);
+  for (const level of ["off", "minimal", "low", "medium", "high", "xhigh"]) expect(html).toMatch(new RegExp(`>${level}<`));
+  expect(html).toMatch(/aria-label="Current thinking level"/);
 });

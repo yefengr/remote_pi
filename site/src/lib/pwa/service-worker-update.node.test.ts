@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "vitest";
 import { refreshPwaApp, type RefreshPwaAppDependencies } from "./service-worker-update";
 
 function createDependencies(registration?: { waiting: { postMessage: (message: { type: "SKIP_WAITING" }) => void } | null }) {
@@ -37,14 +36,14 @@ test("activates a waiting worker before reloading the app", async () => {
 
   const result = await refreshPwaApp(undefined, harness.dependencies);
 
-  assert.equal(result, "update_requested");
-  assert.deepEqual(messages, [{ type: "SKIP_WAITING" }]);
-  assert.equal(harness.fallbackDelay(), 5000);
-  assert.equal(harness.reloads(), 0);
+  expect(result).toBe("update_requested");
+  expect(messages).toEqual([{ type: "SKIP_WAITING" }]);
+  expect(harness.fallbackDelay()).toBe(5000);
+  expect(harness.reloads()).toBe(0);
 
   harness.controllerChange()?.();
-  assert.equal(harness.reloads(), 1);
-  assert.equal(harness.fallback(), undefined);
+  expect(harness.reloads()).toBe(1);
+  expect(harness.fallback()).toBeUndefined();
 });
 
 test("uses an ordinary reload when no update is waiting", async () => {
@@ -52,9 +51,9 @@ test("uses an ordinary reload when no update is waiting", async () => {
 
   const result = await refreshPwaApp(undefined, harness.dependencies);
 
-  assert.equal(result, "reload_requested");
-  assert.equal(harness.reloads(), 1);
-  assert.equal(harness.controllerChange(), undefined);
+  expect(result).toBe("reload_requested");
+  expect(harness.reloads()).toBe(1);
+  expect(harness.controllerChange()).toBeUndefined();
 });
 
 test("reloads once when worker activation does not emit controllerchange", async () => {
@@ -62,9 +61,9 @@ test("reloads once when worker activation does not emit controllerchange", async
 
   await refreshPwaApp(undefined, harness.dependencies);
   const fallback = harness.fallback();
-  assert.ok(fallback);
-  fallback();
+  expect(fallback).toBeDefined();
+  fallback?.();
 
-  assert.equal(harness.reloads(), 1);
-  assert.equal(harness.controllerChange(), undefined);
+  expect(harness.reloads()).toBe(1);
+  expect(harness.controllerChange()).toBeUndefined();
 });

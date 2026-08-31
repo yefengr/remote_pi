@@ -1,8 +1,7 @@
-import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import test from "node:test";
+import { expect, test } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { isValidElement } from "react";
+import { isValidElement, type ReactElement } from "react";
 import { ConfirmActionDialog, type ConfirmActionDialogAction } from "./confirm-action-dialog";
 import { canCloseBackgroundOverlay, pickConfirmationFocusFallback, runConfirmAction, type ConfirmActionRequest } from "./pwa-app";
 import { PwaUiProvider } from "./pwa-ui-provider";
@@ -18,28 +17,28 @@ function render(action: ConfirmActionDialogAction, pending = false): string {
 
 function buttonByClass(html: string, className: string): string {
   const match = html.match(new RegExp(`<button(?=[^>]*type="button")(?=[^>]*${className})[^>]*>[\\s\\S]*?<\\/button>`));
-  assert.ok(match, `expected one ${className} button`);
-  return match[0];
+  expect(match, `expected one ${className} button`).toBeTruthy();
+  return match![0];
 }
 
 function confirmButton(html: string): string {
   const match = html.match(/<button(?=[^>]*type="button")(?=[^>]*data-tone="(?:primary|danger)")[^>]*>[\s\S]*?<\/button>/);
-  assert.ok(match, "expected one confirmation button");
-  return match[0];
+  expect(match, "expected one confirmation button").toBeTruthy();
+  return match![0];
 }
 
 test("keeps a closed modal mounted so Mantine can observe the opened transition", () => {
   const closedDialog = ConfirmActionDialog({ action: null, pending: false, onConfirm: () => {}, onClose: () => {}, withinPortal: false });
-  assert.ok(isValidElement<{ opened: boolean }>(closedDialog));
-  assert.equal(closedDialog.props.opened, false);
+  expect(isValidElement<{ opened: boolean }>(closedDialog)).toBe(true);
+  expect((closedDialog as ReactElement<{ opened: boolean }>).props.opened).toBe(false);
 
   const html = renderToStaticMarkup(<PwaUiProvider>{closedDialog}</PwaUiProvider>);
-  assert.doesNotMatch(html, /role="dialog"/);
-  assert.doesNotMatch(html, /pwa-confirm-dialog/);
+  expect(html).not.toMatch(/role="dialog"/);
+  expect(html).not.toMatch(/pwa-confirm-dialog/);
 
   const appSource = readFileSync(new URL("./pwa-app.tsx", import.meta.url), "utf8");
-  assert.match(appSource, /^\s*<ConfirmActionDialog action=/m);
-  assert.doesNotMatch(appSource, /\{confirmAction\s*\?\s*<ConfirmActionDialog/);
+  expect(appSource).toMatch(/^\s*<ConfirmActionDialog action=/m);
+  expect(appSource).not.toMatch(/\{confirmAction\s*\?\s*<ConfirmActionDialog/);
 });
 
 test("uses focus fallbacks only when Mantine cannot keep an active element", () => {
@@ -50,15 +49,15 @@ test("uses focus fallbacks only when Mantine cannot keep an active element", () 
   const shouldKeepActive = (element: typeof active) => element.valid;
   const canFocus = (element: typeof active) => element.valid;
 
-  assert.equal(pickConfirmationFocusFallback(active, [original, firstFallback], shouldKeepActive, canFocus), null);
-  assert.equal(pickConfirmationFocusFallback(null, [original, firstFallback, secondFallback], shouldKeepActive, canFocus), firstFallback);
-  assert.equal(pickConfirmationFocusFallback(null, [original, null], shouldKeepActive, canFocus), null);
+  expect(pickConfirmationFocusFallback(active, [original, firstFallback], shouldKeepActive, canFocus)).toBe(null);
+  expect(pickConfirmationFocusFallback(null, [original, firstFallback, secondFallback], shouldKeepActive, canFocus)).toBe(firstFallback);
+  expect(pickConfirmationFocusFallback(null, [original, null], shouldKeepActive, canFocus)).toBe(null);
 });
 
 test("keeps background drawers open while a confirmation is active", () => {
-  assert.equal(canCloseBackgroundOverlay(true, false), false);
-  assert.equal(canCloseBackgroundOverlay(false, true), false);
-  assert.equal(canCloseBackgroundOverlay(false, false), true);
+  expect(canCloseBackgroundOverlay(true, false)).toBe(false);
+  expect(canCloseBackgroundOverlay(false, true)).toBe(false);
+  expect(canCloseBackgroundOverlay(false, false)).toBe(true);
 });
 
 test("renders each confirmation action as an accessible Mantine modal", () => {
@@ -70,42 +69,42 @@ test("renders each confirmation action as an accessible Mantine modal", () => {
 
   for (const scenario of cases) {
     const html = render(scenario.action);
-    assert.match(html, /mantine-Modal-content/);
-    assert.match(html, /role="dialog"/);
-    assert.match(html, /aria-modal="true"/);
-    assert.match(html, /aria-labelledby="pwa-confirm-action-title"/);
-    assert.match(html, /aria-describedby="pwa-confirm-action-description"/);
-    assert.match(html, new RegExp(scenario.title.replace(/[?]/g, "\\?")));
-    assert.match(html, new RegExp(scenario.description.replace(/[?]/g, "\\?")));
-    assert.match(buttonByClass(html, "pwa-button"), /Cancel/);
-    assert.match(confirmButton(html), new RegExp(scenario.confirmLabel));
-    assert.match(html, /aria-label="Close confirmation dialog"/);
-    assert.match(html, /title="Close confirmation dialog"/);
-    assert.match(html, /type="button"/);
+    expect(html).toMatch(/mantine-Modal-content/);
+    expect(html).toMatch(/role="dialog"/);
+    expect(html).toMatch(/aria-modal="true"/);
+    expect(html).toMatch(/aria-labelledby="pwa-confirm-action-title"/);
+    expect(html).toMatch(/aria-describedby="pwa-confirm-action-description"/);
+    expect(html).toMatch(new RegExp(scenario.title.replace(/[?]/g, "\\?")));
+    expect(html).toMatch(new RegExp(scenario.description.replace(/[?]/g, "\\?")));
+    expect(buttonByClass(html, "pwa-button")).toMatch(/Cancel/);
+    expect(confirmButton(html)).toMatch(new RegExp(scenario.confirmLabel));
+    expect(html).toMatch(/aria-label="Close confirmation dialog"/);
+    expect(html).toMatch(/title="Close confirmation dialog"/);
+    expect(html).toMatch(/type="button"/);
   }
 });
 
 test("uses a primary confirmation only for a new session", () => {
   const newSessionConfirm = confirmButton(render({ kind: "new-session" }));
-  assert.match(newSessionConfirm, /data-tone="primary"/);
-  assert.doesNotMatch(newSessionConfirm, /data-tone="danger"/);
+  expect(newSessionConfirm).toMatch(/data-tone="primary"/);
+  expect(newSessionConfirm).not.toMatch(/data-tone="danger"/);
 
   for (const action of [{ kind: "remove-pairing", label: "Pi on office / interactive" } as const, { kind: "clear-local-data" } as const]) {
     const html = render(action);
     const matches = html.match(/<button(?=[^>]*type="button")(?=[^>]*data-tone="danger")[^>]*>[\s\S]*?<\/button>/g) ?? [];
-    assert.equal(matches.length, 1);
-    assert.match(matches[0], /data-tone="danger"/);
+    expect(matches.length).toBe(1);
+    expect(matches[0]).toMatch(/data-tone="danger"/);
   }
 });
 
 test("locks all close paths while an action is pending", () => {
   const html = render({ kind: "clear-local-data" }, true);
   const pendingConfirm = confirmButton(html);
-  assert.match(pendingConfirm, /disabled=""/);
-  assert.match(pendingConfirm, /Clearing local data…/);
-  assert.match(buttonByClass(html, "pwa-button"), /disabled=""/);
-  assert.match(buttonByClass(html, "pwa-button"), /Cancel/);
-  assert.match(html, /aria-label="Close confirmation dialog"[^>]*disabled=""/);
+  expect(pendingConfirm).toMatch(/disabled=""/);
+  expect(pendingConfirm).toMatch(/Clearing local data…/);
+  expect(buttonByClass(html, "pwa-button")).toMatch(/disabled=""/);
+  expect(buttonByClass(html, "pwa-button")).toMatch(/Cancel/);
+  expect(html).toMatch(/aria-label="Close confirmation dialog"[^>]*disabled=""/);
 });
 
 const device: PwaDeviceRecord = {
@@ -160,13 +159,13 @@ test("runs a remove-pairing confirmation once while concurrent confirms are lock
   const second = await runConfirmAction(action, harness.effects, harness.state);
   releaseRemoval();
 
-  assert.equal(second, "ignored");
-  assert.equal(await first, "completed");
-  assert.equal(removals, 1);
-  assert.equal(harness.successes(), 1);
-  assert.deepEqual(harness.pending, [true, false]);
-  assert.deepEqual(harness.errors, [null]);
-  assert.equal(harness.pendingRef.current, false);
+  expect(second).toBe("ignored");
+  expect(await first).toBe("completed");
+  expect(removals).toBe(1);
+  expect(harness.successes()).toBe(1);
+  expect(harness.pending).toStrictEqual([true, false]);
+  expect(harness.errors).toStrictEqual([null]);
+  expect(harness.pendingRef.current).toBe(false);
 });
 
 test("keeps the confirmation open with an error when starting a session is rejected", async () => {
@@ -174,10 +173,10 @@ test("keeps the confirmation open with an error when starting a session is rejec
 
   const result = await runConfirmAction({ kind: "new-session" }, harness.effects, harness.state);
 
-  assert.equal(result, "failed");
-  assert.equal(harness.successes(), 0);
-  assert.deepEqual(harness.pending, [true, false]);
-  assert.deepEqual(harness.errors, [null, "Could not start a fresh session. Check the connection and try again."]);
+  expect(result).toBe("failed");
+  expect(harness.successes()).toBe(0);
+  expect(harness.pending).toStrictEqual([true, false]);
+  expect(harness.errors).toStrictEqual([null, "Could not start a fresh session. Check the connection and try again."]);
 });
 
 test("keeps a failed remove confirmation available for retry", async () => {
@@ -185,10 +184,10 @@ test("keeps a failed remove confirmation available for retry", async () => {
 
   const result = await runConfirmAction({ kind: "remove-pairing", label: "Pi on office / interactive", device }, harness.effects, harness.state);
 
-  assert.equal(result, "failed");
-  assert.equal(harness.successes(), 0);
-  assert.deepEqual(harness.errors, [null, "Could not delete pairing."]);
-  assert.equal(harness.pendingRef.current, false);
+  expect(result).toBe("failed");
+  expect(harness.successes()).toBe(0);
+  expect(harness.errors).toStrictEqual([null, "Could not delete pairing."]);
+  expect(harness.pendingRef.current).toBe(false);
 });
 
 test("invalidates, clears, and reloads local data in order", async () => {
@@ -201,8 +200,8 @@ test("invalidates, clears, and reloads local data in order", async () => {
 
   const result = await runConfirmAction({ kind: "clear-local-data" }, harness.effects, harness.state);
 
-  assert.equal(result, "completed");
-  assert.deepEqual(effects, ["invalidate", "clear", "reload"]);
-  assert.equal(harness.successes(), 0);
-  assert.deepEqual(harness.pending, [true, false]);
+  expect(result).toBe("completed");
+  expect(effects).toStrictEqual(["invalidate", "clear", "reload"]);
+  expect(harness.successes()).toBe(0);
+  expect(harness.pending).toStrictEqual([true, false]);
 });

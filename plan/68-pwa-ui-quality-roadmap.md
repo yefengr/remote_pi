@@ -32,7 +32,7 @@
 |---|---|---|---|
 | Plan 67 | Phase 1：基础设施与确认 Modal 试点 | 已完成 | Vitest Node/Browser Mode、Chromium provider、Browser render harness 和确认操作测试已建立。 |
 | Plan 67 | Phase 2：高风险交互组件 | 已完成 | Rename、Settings、Session Drawer、Composer、Mobile Menu、QR Scanner 和 Service Worker Notice UI 的 Browser 覆盖已完成。 |
-| Plan 67 | Phase 3：统一 Node 测试 API | 进行中，当前优先 | Plan 69 部分回退了此前“首批完成”状态。当前有 31 个 legacy 文件和 2 个 `*.node.test.ts` 文件：`crypto` 仅有 1 个真实 Vitest test，`protocol` 仍导入 `node:test` 且含 3 个 cases；默认 `pnpm test` 未纳入 `test:unit`。完成条件尚未达成。 |
+| Plan 67 | Phase 3：统一 Node 测试 API | 已完成 | 31 个 legacy 文件与仍使用 `node:test` 的 `protocol.node.test.ts` 已迁入 Vitest Node；当前 33 files、122 tests，legacy 与源码 `node:test` 导入均为 0。默认 `pnpm test` 串行运行 Node 122 与 Browser 75。 |
 | Plan 67 | Phase 4：`/app` E2E 基线 | 已完成 | 隔离 Playwright `/app` 基线、IndexedDB fixture、Settings、Session Drawer、Composer、清库确认、desktop/mobile viewport 与 Service Worker 注册覆盖已建立。 |
 | Plan 66 | Phase 0–2 | 已完成 | Mantine 基础设施、Overlay 和基础控件迁移当前有效完成。 |
 | Plan 66 | Phase 3：业务组件收敛 | 进行中 | Plan 69 已删除原 `PairingRecordCard`、`SessionList`、`PwaAppView`、startup 与 probes 边界；当前 `pwa-app.tsx` 约 748 行，须按 `device`/`endpoint` 模型重新收口。 |
@@ -40,7 +40,7 @@
 | Plan 66 | Phase 5：清理与长期维护 | 待开始 | `globals.css` 约 2321 行；PWA 前保留大量已删除站点 selector，待 Phase 3 新模型边界稳定后按消费者证据清理。 |
 | Plan 69 | PWA Owner Relay/session 恢复与 v7 E2E fixture | 自动化已完成；完整真实矩阵未完成 | 已有真实配对/Relay 重连和历史恢复局部证据：offline/online 3 轮、直接关闭 WebSocket 2 轮，清本地 timeline 后均从远端恢复 2 条并回到 Connected。daemon、两个 interactive Pi、双 PWA profile、supervisor/child crash、runtime takeover 与 `/new` 的完整矩阵仍待验收。 |
 
-当前实跑验证：legacy 118/118、Browser 75/75、coverage 共 76 个 Vitest tests、Playwright desktop/mobile 10/10、TypeScript、production build 与 `git diff --check` 均通过。全量 `pnpm lint` 的唯一 error 是生成文件 `site/public/sw.js` 的 `@typescript-eslint/no-this-alias`；另有生成文件和既有 img warnings。旧段落中的测试数字仅为对应提交时历史快照，不代表当前值。
+当前实跑验证：默认 `pnpm test` 串行运行 Vitest Node 33 files、122/122 与 Browser 11 files、75/75；coverage 44 files、197/197；Playwright desktop/mobile 10/10、全部 Node 测试专项 ESLint、TypeScript、production build 与 `git diff --check` 均通过。全量 `pnpm lint` 的唯一 error 是生成文件 `site/public/sw.js` 的 `@typescript-eslint/no-this-alias`；另有生成 coverage、Service Worker 和既有 img warnings。旧段落中的测试数字仅为对应提交时历史快照，不代表当前值。
 
 当前已形成的 Plan 67 Phase 2 本地提交：
 
@@ -74,9 +74,9 @@ Plan 67 Phase 4 `/app` E2E 基线本地提交：
 
 ### 阶段 A：Plan 67 Phase 3 — 统一 Node 测试 API
 
-**状态：进行中；首先执行**
+**状态：已完成**
 
-先盘点 31 个 legacy 文件与 2 个 `*.node.test.ts` 文件的真实 runner、测试数量和 scripts 消费者。优先把仍导入 `node:test` 的 `protocol.node.test.ts` 迁移为真正的 Vitest Node 测试，并逐批处理纯 TypeScript 与 SSR 测试。每批必须保持测试语义与数量可核对；在 `test:unit` 纳入默认 `pnpm test` 前，不得将默认测试表述为覆盖所有层。
+31 个 legacy 文件与仍导入 `node:test` 的 `protocol.node.test.ts` 已分批迁移为真正的 Vitest Node 测试；迁移前后的 Node/SSR 总量均为 122。legacy runner 和 Site 对 `tsx` 的直接依赖已移除，默认 `pnpm test` 现已串行覆盖 Vitest Node 与 Browser。
 
 切换门禁：
 
@@ -88,7 +88,7 @@ Plan 67 Phase 4 `/app` E2E 基线本地提交：
 
 ### 阶段 B：Plan 66 Phase 3 — 按 `device`/`endpoint` 模型重新收口
 
-**状态：待阶段 A 完成后继续**
+**状态：当前下一阶段；在独立任务中继续**
 
 Plan 69 已删除旧 `PairingRecordCard`、`SessionList`、`PwaAppView`、startup 与 probes 边界。基于当前约 748 行的 `pwa-app.tsx`，先确认 `device`/`endpoint` 模型下稳定的展示编排、启动与探测所有权，再抽取有独立 props/view model 证据的最小边界；不得恢复已删除的旧结构。
 
@@ -150,7 +150,7 @@ cd site && pnpm build
 cd .. && git diff --check
 ```
 
-当前 `pnpm test` 只运行 legacy 与 Browser；阶段冻结前必须显式运行 `pnpm test:unit`，直到默认 script 纳入该项目。
+当前 `pnpm test` 已串行运行 Vitest Node 与 Browser；`pnpm test:unit` 继续保留为 Node 层专项入口。
 
 全量 lint 若继续命中生成文件 `site/public/sw.js` 的既有 `@typescript-eslint/no-this-alias` 错误，必须保留该事实，不通过修改生成文件规避，并单独确认受影响文件没有新增错误。
 

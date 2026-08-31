@@ -1,6 +1,6 @@
 # PWA 自动化测试体系
 
-> 技术状态：Phase 1、2、4 的基础设施与覆盖当前有效；Phase 3 的完成标准尚未满足
+> 技术状态：Phase 1–4 的技术阶段当前有效；Plan 69 完整真实矩阵仍作为独立最终验收
 >
 > 创建日期：2026-08-29
 >
@@ -10,12 +10,12 @@
 
 ## 1. 背景
 
-Remote Pi PWA 当前已经具备两类验证：
+本计划建立前，Remote Pi PWA 只有两类验证：
 
 1. `node:test + tsx`：覆盖协议、状态机、数据逻辑以及 React 组件的 SSR 静态标记；
 2. 人工编排的真实浏览器 smoke：覆盖 Mantine Portal、焦点、Escape、层级和移动布局。
 
-现状能够阻止大量回归，但两层之间缺少可重复执行的客户端组件测试。SSR 测试无法运行 React 客户端生命周期、状态更新、Portal、Transition、真实键盘事件与焦点管理；人工浏览器 smoke 成本较高，也不适合作为每次改动的快速反馈。
+该历史基线能够阻止大量回归，但两层之间缺少可重复执行的客户端组件测试。SSR 测试无法运行 React 客户端生命周期、状态更新、Portal、Transition、真实键盘事件与焦点管理；人工浏览器 smoke 成本较高，也不适合作为每次改动的快速反馈。
 
 确认操作 Modal 迁移已经暴露过以下运行时问题：
 
@@ -31,11 +31,12 @@ Remote Pi PWA 当前已经具备两类验证：
 
 当前实跑结果：
 
-- legacy：118/118 通过；Browser：75/75 通过；coverage：共 76 个 Vitest tests 通过；
-- Playwright desktop/mobile：10/10 通过；TypeScript、production build 与 `git diff --check` 通过；
-- 全量 `pnpm lint` 的唯一 error 是生成文件 `site/public/sw.js` 的 `@typescript-eslint/no-this-alias`；另有生成文件和既有 img warnings；
-- 当前有 31 个 legacy 测试文件和 2 个 `*.node.test.ts` 文件；其中 `crypto` 只有 1 个真实 Vitest test，`protocol` 仍导入 `node:test` 且含 3 个 cases；
-- 默认 `pnpm test` 只运行 legacy 与 Browser，未纳入 `test:unit`，因此不能作为 Node 测试已完成的证据。
+- Vitest Node：33 files、122/122 通过；Browser：11 files、75/75 通过；默认 `pnpm test` 串行覆盖两层；
+- coverage：44 files、197/197 个 Vitest tests 通过；Playwright desktop/mobile：10/10 通过；
+- 全部 Node 测试专项 ESLint、TypeScript、production build 与 `git diff --check` 通过；
+- legacy 测试文件和源码 `node:test` / `node:assert` 导入均为 0；`test:legacy` 已移除；
+- Site 不再直接依赖 `tsx`；lock 中仅保留 Vite 的传递可选依赖关系；
+- 全量 `pnpm lint` 的唯一 error 是生成文件 `site/public/sw.js` 的 `@typescript-eslint/no-this-alias`；另有生成 coverage、Service Worker 与既有 img warnings。
 
 上述结果是本文件唯一的当前测试快照。下文出现的旧数字均为对应提交时的历史快照，不代表当前值。
 
@@ -48,7 +49,7 @@ Remote Pi PWA 当前已经具备两类验证：
 3. 使用 Vitest Browser Mode + Playwright Chromium 运行 React 客户端组件测试；
 4. 使用 Playwright Test 运行完整 `/app` PWA 流程；
 5. 保留真实设备验证，只覆盖浏览器自动化难以可靠模拟的能力；
-6. 分阶段迁移初始基线中的 32 个测试文件，不进行一次性重写；实际范围以后续盘点为准；
+6. 分批迁移实际盘点出的 31 个 legacy 文件，并修正 1 个仍使用 `node:test` 的伪 Vitest Node 文件，不进行一次性重写；
 7. 让本地、Agent 和后续 CI 使用相同的稳定命令。
 
 ## 3. 非目标
@@ -186,8 +187,8 @@ site/
 - `*.node.test.ts` / `*.node.test.tsx`：Vitest Node；
 - `*.browser.test.tsx`：Vitest Browser Mode；
 - `e2e/*.spec.ts`：Playwright Test；
-- 迁移期间现有 `*.test.ts` / `*.test.tsx` 继续由 `node:test + tsx` 执行；
-- 新测试不再使用 `node:test` API。
+- Site 的 Node/SSR 测试不再使用无环境后缀的 `*.test.ts` / `*.test.tsx`；
+- 新测试不得使用 `node:test` API。
 
 ## 7. Vitest 配置要求
 
@@ -387,6 +388,8 @@ SSR 测试继续覆盖初始结构，但不得把 SSR 断言表述为客户端�
 - 18 个 `.test.ts`；
 - 14 个 `.test.tsx`；
 - 共 32 个测试文件。
+
+最终盘点与完成结果：31 个 legacy 文件、1 个仍使用 `node:test` 的 `protocol.node.test.ts` 与 1 个既有真实 Vitest 文件；迁移后统一为 33 个 Vitest Node 文件、122 个 tests。
 
 ### 11.1 迁移阶段
 
@@ -597,9 +600,9 @@ site/CLAUDE.md
 
 ### Phase 3：统一 Node 测试 API
 
-**技术状态：完成标准尚未满足；何时执行以 Plan 68 为准**
+**技术状态：已完成；执行顺序以 Plan 68 为准**
 
-此前首批迁移的完成状态已被 Plan 69 的部分回退改变：当前仅保留 2 个 `*.node.test.ts` 文件，`crypto` 是 1 个真实 Vitest test，`protocol` 仍使用 `node:test` 并含 3 个 cases。下一批先盘点剩余 legacy 测试及直接消费者，再按纯 TypeScript、SSR 的既定分层逐批迁移；不因文件后缀而把仍使用 `node:test` 的测试计入 Vitest Node 完成量。
+31 个 legacy Node/SSR 文件与 `protocol.node.test.ts` 已分批迁移到 Vitest Node，测试语义与总量保持为 122；源码不再导入 `node:test` / `node:assert`。legacy runner 已移除，默认 `pnpm test` 串行运行 Vitest Node 与 Browser；Site 对 `tsx` 的直接依赖已删除。
 
 验收：
 
@@ -657,9 +660,7 @@ site/CLAUDE.md
 
 ### 18.3 两套 runner 的迁移期维护
 
-风险：legacy `node:test` 与 Vitest 并存导致命令混乱。
-
-缓解：所有命令收敛到 package scripts；明确文件后缀；设定 Phase 3 的移除条件，不无限期并存。
+历史风险已解除：legacy `node:test` runner 已移除，Node/SSR 测试统一由 Vitest Node 执行，默认 `pnpm test` 串行覆盖 Node 与 Browser。
 
 ### 18.4 重复覆盖
 
@@ -689,9 +690,9 @@ site/CLAUDE.md
 
 Phase 1 的原始检查项已完成，不能再作为当前待办。当前执行状态、跨计划顺序和切换门禁只在 Plan 68 维护；以下仅是本计划 Phase 3 的技术检查项。
 
-- [ ] 盘点 31 个 legacy 文件与 2 个 `*.node.test.ts` 的实际 runner、测试数和直接 scripts 消费者；
-- [ ] 将 `protocol.node.test.ts` 的 runner/API 迁移为真实 Vitest Node，且不改变 3 个 cases 的语义；
-- [ ] 每个批次记录迁移前后的分层测试数量，避免把历史快照当作当前值；
-- [ ] 在修改默认测试入口前，确认 `test:unit` 的可靠运行及与 Browser/legacy 的组合顺序；
-- [ ] 迁移全部现有 legacy Node/SSR 测试后移除 legacy runner，并让默认 `pnpm test` 串行覆盖 Vitest Node 与 Browser；
-- [ ] 运行受影响层验证，并保留全量 lint 的生成文件 error 与既有 warnings 的区分。
+- [x] 盘点 31 个 legacy 文件与 2 个 `*.node.test.ts` 的实际 runner、测试数和直接 scripts 消费者；
+- [x] 将 `protocol.node.test.ts` 的 runner/API 迁移为真实 Vitest Node，且不改变 3 个 cases 的语义；
+- [x] 每个批次记录迁移前后的分层测试数量，避免把历史快照当作当前值；
+- [x] 在修改默认测试入口前，确认 `test:unit` 的可靠运行及与 Browser/legacy 的组合顺序；
+- [x] 迁移全部现有 legacy Node/SSR 测试后移除 legacy runner，并让默认 `pnpm test` 串行覆盖 Vitest Node 与 Browser；
+- [x] 运行受影响层验证，并保留全量 lint 的生成文件 error 与既有 warnings 的区分。

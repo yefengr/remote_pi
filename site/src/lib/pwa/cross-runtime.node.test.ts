@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "vitest";
 import { decodeClientFrameV2, decodeServerFrameV2, encodeClientFrameV2, encodeServerFrameV2 } from "../remote-pi/protocol-v2/codec";
 import type { ClientFrame, ServerFrame } from "../remote-pi/protocol-v2/frames";
 import type { TimelineEvent, TimelinePartial } from "../remote-pi/protocol-v2/schema";
@@ -143,18 +142,18 @@ export class ExtensionPeerSimulator {
 
   flushHistoryChunk(requestId: string, index: number): void {
     const pending = this.pendingHistory.get(requestId);
-    assert.ok(pending, `unknown history request ${requestId}`);
-    const chunk = pending.chunks[index];
-    assert.ok(chunk, `unknown history chunk ${index}`);
-    this.sendHistoryChunk(chunk);
-    if (chunk.final_chunk) this.pendingHistory.delete(requestId);
+    expect(pending, `unknown history request ${requestId}`).toBeTruthy();
+    const chunk = pending!.chunks[index];
+    expect(chunk, `unknown history chunk ${index}`).toBeTruthy();
+    this.sendHistoryChunk(chunk!);
+    if (chunk!.final_chunk) this.pendingHistory.delete(requestId);
   }
 
   flushUserLifecycle(clientRequestId: string): void {
     const pending = this.pendingUserLifecycles.get(clientRequestId);
-    assert.ok(pending, `unknown user request ${clientRequestId}`);
+    expect(pending, `unknown user request ${clientRequestId}`).toBeTruthy();
     this.pendingUserLifecycles.delete(clientRequestId);
-    this.completeUserLifecycle(pending);
+    this.completeUserLifecycle(pending!);
   }
 
   emitEvent(event: TimelineEvent): void {
@@ -330,8 +329,8 @@ export class PwaHarnessClient {
 
   resendObserved(index = 0): void {
     const frame = this.observedFrames[index];
-    assert.ok(frame);
-    this.sendFrame(frame);
+    expect(frame).toBeTruthy();
+    this.sendFrame(frame!);
   }
 
   receiveRaw(raw: string): boolean {
@@ -477,8 +476,8 @@ test("routes two channel hello/direct responses separately and broadcasts owner 
   const { simulator, first, second } = setup();
   first.hello();
   second.hello();
-  assert.equal(first.runtime.currentScope?.channelId, "C1");
-  assert.equal(second.runtime.currentScope?.channelId, "C2");
+  expect(first.runtime.currentScope?.channelId).toBe("C1");
+  expect(second.runtime.currentScope?.channelId).toBe("C2");
 
   const scopeBefore = second.runtime.currentScope;
   const itemsBefore = second.currentItems();
@@ -488,33 +487,33 @@ test("routes two channel hello/direct responses separately and broadcasts owner 
     { protocol_version: 2, type: "session_history_chunk", target_channel_id: "C1", in_reply_to: "SYNC-C1", session_id: "SESSION", history_generation: "G1", snapshot_head: "HEAD", chunk_index: 0, events: [userEvent("WRONG")], fragments: [], final_chunk: true, eos: true },
     { protocol_version: 2, type: "reset", target_channel_id: "C1", session_id: "SESSION", history_generation: "G2", reason: "generation_changed" },
   ];
-  for (const frame of directFrames) assert.equal(second.receiveRaw(JSON.stringify(frame)), true);
-  assert.deepEqual(second.runtime.currentScope, scopeBefore);
-  assert.deepEqual(second.currentItems(), itemsBefore);
+  for (const frame of directFrames) expect(second.receiveRaw(JSON.stringify(frame))).toBe(true);
+  expect(second.runtime.currentScope).toStrictEqual(scopeBefore);
+  expect(second.currentItems()).toStrictEqual(itemsBefore);
 
   const sent = first.sendUser("hello");
-  assert.ok(sent);
-  assert.equal(first.receivedFrames.filter((frame) => frame.type === "user_message_status").length, 3);
-  assert.equal(second.receivedFrames.filter((frame) => frame.type === "user_message_status").length, 0);
-  assert.deepEqual(first.eventIds(), second.eventIds());
-  assert.equal(simulator.releasedRequests.get(sent.frame.client_request_id), 1);
+  expect(sent).toBeTruthy();
+  expect(first.receivedFrames.filter((frame) => frame.type === "user_message_status").length).toBe(3);
+  expect(second.receivedFrames.filter((frame) => frame.type === "user_message_status").length).toBe(0);
+  expect(first.eventIds()).toStrictEqual(second.eventIds());
+  expect(simulator.releasedRequests.get(sent!.frame.client_request_id)).toBe(1);
 });
 
 test("reconciles pending received/accepted/committed and records observed idempotently", () => {
   const { simulator, first } = setup({ deferUserLifecycle: true });
   first.hello();
   const sent = first.sendUser("precise");
-  assert.ok(sent);
-  assert.equal(first.currentItems().find((item) => item.kind === "pending")?.delivery, "received");
-  simulator.flushUserLifecycle(sent.frame.client_request_id);
-  const statuses = simulator.statusHistory.filter((frame) => frame.client_request_id === sent.frame.client_request_id);
-  assert.deepEqual(statuses.map((frame) => frame.status), ["received", "accepted", "committed"]);
-  assert.equal(simulator.startedHistory.some((frame) => frame.in_reply_to === sent.frame.id), true);
-  assert.equal(first.currentItems().some((item) => item.kind === "pending"), false);
-  assert.deepEqual(first.eventIds(), [`M-${sent.frame.client_request_id}`]);
-  assert.equal(simulator.releasedRequests.get(sent.frame.client_request_id), 1);
+  expect(sent).toBeTruthy();
+  expect(first.currentItems().find((item) => item.kind === "pending")?.delivery).toBe("received");
+  simulator.flushUserLifecycle(sent!.frame.client_request_id);
+  const statuses = simulator.statusHistory.filter((frame) => frame.client_request_id === sent!.frame.client_request_id);
+  expect(statuses.map((frame) => frame.status)).toStrictEqual(["received", "accepted", "committed"]);
+  expect(simulator.startedHistory.some((frame) => frame.in_reply_to === sent!.frame.id)).toBe(true);
+  expect(first.currentItems().some((item) => item.kind === "pending")).toBe(false);
+  expect(first.eventIds()).toStrictEqual([`M-${sent!.frame.client_request_id}`]);
+  expect(simulator.releasedRequests.get(sent!.frame.client_request_id)).toBe(1);
   first.resendObserved();
-  assert.equal(simulator.releasedRequests.get(sent.frame.client_request_id), 1);
+  expect(simulator.releasedRequests.get(sent!.frame.client_request_id)).toBe(1);
 });
 
 test("merges realtime journal into an in-flight history snapshot without duplicate window events", () => {
@@ -526,8 +525,8 @@ test("merges realtime journal into an in-flight history snapshot without duplica
   simulator.emitEvent(assistantEvent("REALTIME", "G1", 3));
   simulator.flushHistoryChunk(requestId, 1);
   const ids = first.eventIds();
-  assert.deepEqual(ids, ["H1", "H2", "REALTIME"]);
-  assert.equal(new Set(ids).size, ids.length);
+  expect(ids).toStrictEqual(["H1", "H2", "REALTIME"]);
+  expect(new Set(ids).size).toBe(ids.length);
 });
 
 test("reassembles an oversized formal event from v2 fragments before committing it", () => {
@@ -535,45 +534,45 @@ test("reassembles an oversized formal event from v2 fragments before committing 
   first.hello();
   const event = assistantEvent("FRAGMENTED", "G1", 4);
   simulator.emitFragmentedEvent(event, 9, 2);
-  assert.deepEqual(first.eventIds(), []);
+  expect(first.eventIds()).toStrictEqual([]);
   simulator.emitFragmentedEvent(event, 9, undefined, 2);
-  assert.deepEqual(first.eventIds(), [event.event_id]);
-  assert.equal(first.receivedFrames.filter((frame) => frame.type === "timeline_event_fragment").length > 2, true);
+  expect(first.eventIds()).toStrictEqual([event.event_id]);
+  expect(first.receivedFrames.filter((frame) => frame.type === "timeline_event_fragment").length > 2).toBe(true);
 });
 
 test("reset clears transient scope and partial fragments, rejects old generation, then accepts new hello", () => {
   const { simulator, first } = setup();
   first.hello();
   const pending = first.sendUser("will reset", false);
-  assert.ok(pending);
+  expect(pending).toBeTruthy();
   simulator.emitPartial({ protocol_version: 2, type: "timeline_partial", session_id: "SESSION", history_generation: "G1", group_id: "GROUP", partial_id: "PARTIAL", kind: "assistant", status: "running", delta: "old" });
   simulator.emitFragmentedEvent(assistantEvent("OLD-PARTIAL", "G1", 5), 8, 1);
-  assert.equal(first.currentItems().some((item) => item.kind === "partial"), true);
+  expect(first.currentItems().some((item) => item.kind === "partial")).toBe(true);
   simulator.resetGeneration("G2");
-  assert.equal(first.runtime.currentScope, null);
-  assert.equal(first.currentItems().some((item) => item.kind === "partial" || (item.kind === "pending" && item.delivery === "pending")), false);
+  expect(first.runtime.currentScope).toBe(null);
+  expect(first.currentItems().some((item) => item.kind === "partial" || (item.kind === "pending" && item.delivery === "pending"))).toBe(false);
 
   simulator.emitEvent(assistantEvent("OLD-EVENT", "G1", 6));
-  assert.deepEqual(first.eventIds(), []);
+  expect(first.eventIds()).toStrictEqual([]);
   first.hello();
   const newScope = first.runtime.currentScope as TimelineScope | null;
-  assert.equal(newScope?.historyGeneration, "G2");
+  expect(newScope?.historyGeneration).toBe("G2");
   simulator.emitEvent(assistantEvent("NEW-EVENT", "G2", 7));
-  assert.deepEqual(first.eventIds(), ["NEW-EVENT"]);
+  expect(first.eventIds()).toStrictEqual(["NEW-EVENT"]);
 });
 
 test("rejects unknown frames and preserves steer as an explicit v2 input", () => {
   const { simulator, first } = setup();
   first.hello();
-  assert.equal(first.receiveRaw(JSON.stringify({ protocol_version: 2, type: "unknown" })), false);
+  expect(first.receiveRaw(JSON.stringify({ protocol_version: 2, type: "unknown" }))).toBe(false);
   const sent = first.sendSteer("steer me");
-  assert.ok(sent);
-  assert.equal(simulator.userFrames.at(-1)?.streaming_behavior, "steer");
-  assert.equal(simulator.userFrames.at(-1)?.text, "steer me");
-  assert.deepEqual(simulator.statusHistory.filter((frame) => frame.client_request_id === sent.frame.client_request_id).map((frame) => frame.status), ["unknown_delivery"]);
-  assert.equal(first.currentItems().find((item) => item.kind === "pending")?.delivery, "unknown_delivery");
-  assert.equal(first.observedFrames.length, 0);
-  assert.deepEqual(first.eventIds(), []);
+  expect(sent).toBeTruthy();
+  expect(simulator.userFrames.at(-1)?.streaming_behavior).toBe("steer");
+  expect(simulator.userFrames.at(-1)?.text).toBe("steer me");
+  expect(simulator.statusHistory.filter((frame) => frame.client_request_id === sent!.frame.client_request_id).map((frame) => frame.status)).toStrictEqual(["unknown_delivery"]);
+  expect(first.currentItems().find((item) => item.kind === "pending")?.delivery).toBe("unknown_delivery");
+  expect(first.observedFrames.length).toBe(0);
+  expect(first.eventIds()).toStrictEqual([]);
 });
 
 test("converges broadcast thinking and tool partials to formal events on every PWA", () => {
@@ -583,14 +582,14 @@ test("converges broadcast thinking and tool partials to formal events on every P
   simulator.emitPartial({ protocol_version: 2, type: "timeline_partial", session_id: "SESSION", history_generation: "G1", group_id: "ASSISTANT-GROUP", partial_id: "THINKING", kind: "thinking", status: "delta", delta: "reasoning" });
   simulator.emitPartial({ protocol_version: 2, type: "timeline_partial", session_id: "SESSION", history_generation: "G1", group_id: "ASSISTANT-GROUP", partial_id: "ASSISTANT", kind: "assistant", status: "delta", delta: "answer" });
   simulator.emitPartial({ protocol_version: 2, type: "timeline_partial", session_id: "SESSION", history_generation: "G1", group_id: "TOOL-GROUP", partial_id: "TOOL", kind: "tool", status: "running", tool_call_id: "TOOL-CALL", tool: "Read", args: { path: "/tmp/example" } });
-  assert.equal(first.currentItems().filter((item) => item.kind === "partial").length, 3);
-  assert.equal(second.currentItems().filter((item) => item.kind === "partial").length, 3);
+  expect(first.currentItems().filter((item) => item.kind === "partial").length).toBe(3);
+  expect(second.currentItems().filter((item) => item.kind === "partial").length).toBe(3);
 
   simulator.emitEvent({ event_id: "ASSISTANT-EVENT", session_id: "SESSION", history_generation: "G1", timestamp: 8, group_id: "ASSISTANT-GROUP", kind: "assistant", blocks: [{ type: "thinking", text: "reasoning" }, { type: "text", text: "answer" }], status: "complete" });
   simulator.emitEvent({ event_id: "TOOL-EVENT", session_id: "SESSION", history_generation: "G1", timestamp: 9, group_id: "TOOL-GROUP", kind: "tool", tool_call_id: "TOOL-CALL", tool: "Read", args: { path: "/tmp/example" }, truncated: false, status: "complete", result: "tool complete" });
 
   for (const client of [first, second]) {
-    assert.equal(client.currentItems().some((item) => item.kind === "partial"), false);
-    assert.deepEqual(client.eventIds(), ["ASSISTANT-EVENT", "TOOL-EVENT"]);
+    expect(client.currentItems().some((item) => item.kind === "partial")).toBe(false);
+    expect(client.eventIds()).toStrictEqual(["ASSISTANT-EVENT", "TOOL-EVENT"]);
   }
 });

@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "vitest";
 import { StreamDisplayBuffer } from "./stream-display-buffer";
 import type { TimelineEvent, TimelinePartial } from "../remote-pi/protocol-v2/schema";
 import type { TimelineViewItem } from "./timeline-runtime";
@@ -24,72 +23,72 @@ test("shows only a small burst initially and drains within eight ticks", () => {
   const buffer = new StreamDisplayBuffer();
   const target = partial("p", "g", "abcdefghijklmnop");
   const first = buffer.ingest([target]);
-  assert.equal(text(first.items[0]), "ab");
+  expect(text(first.items[0])).toBe("ab");
   let ticks = 0;
   while (buffer.hasPending() && ticks < 8) {
     buffer.advance();
     ticks += 1;
   }
-  assert.equal(ticks <= 8, true);
-  assert.equal(text(buffer.snapshot()[0]), "abcdefghijklmnop");
+  expect(ticks <= 8).toBe(true);
+  expect(text(buffer.snapshot()[0])).toBe("abcdefghijklmnop");
 });
 
 test("does not split emoji graphemes", () => {
   const buffer = new StreamDisplayBuffer();
   const change = buffer.ingest([partial("p", "g", "👨‍👩‍👧‍👦👍🏽ok")]);
-  assert.equal(text(change.items[0]), "👨‍👩‍👧‍👦👍🏽");
+  expect(text(change.items[0])).toBe("👨‍👩‍👧‍👦👍🏽");
   while (buffer.hasPending()) buffer.advance();
-  assert.equal(text(buffer.snapshot()[0]), "👨‍👩‍👧‍👦👍🏽ok");
+  expect(text(buffer.snapshot()[0])).toBe("👨‍👩‍👧‍👦👍🏽ok");
 });
 
 test("resegments the previous grapheme when an emoji modifier arrives", () => {
   const buffer = new StreamDisplayBuffer();
   buffer.ingest([partial("p", "g", "👍")]);
   const appended = buffer.ingest([partial("p", "g", "👍🏽ok")]);
-  assert.equal(appended.shouldRender, false);
+  expect(appended.shouldRender).toBe(false);
   const advanced = buffer.advance();
-  assert.equal(text(advanced.items[0]), "👍🏽o");
+  expect(text(advanced.items[0])).toBe("👍🏽o");
   while (buffer.hasPending()) buffer.advance();
-  assert.equal(text(buffer.snapshot()[0]), "👍🏽ok");
+  expect(text(buffer.snapshot()[0])).toBe("👍🏽ok");
 });
 
 test("keeps independent partial lanes separate", () => {
   const buffer = new StreamDisplayBuffer();
   const change = buffer.ingest([partial("a", "ga", "alpha"), partial("b", "gb", "bravo")]);
-  assert.deepEqual(change.items.filter((item) => item.kind === "partial").map(text), ["al", "br"]);
+  expect(change.items.filter((item) => item.kind === "partial").map(text)).toEqual(["al", "br"]);
 });
 
 test("hides matching formal event until the partial drains", () => {
   const buffer = new StreamDisplayBuffer();
   buffer.ingest([partial("p", "g", "long answer")]);
   const withFormal = buffer.ingest([assistantEvent("e", "g", "long answer"), partial("p", "g", "long answer")]);
-  assert.equal(withFormal.items.some((item) => item.kind === "event"), false);
+  expect(withFormal.items.some((item) => item.kind === "event")).toBe(false);
   while (buffer.hasPending()) buffer.advance();
   const drained = buffer.snapshot();
-  assert.equal(drained.some((item) => item.kind === "event"), true);
-  assert.equal(drained.some((item) => item.kind === "partial"), false);
+  expect(drained.some((item) => item.kind === "event")).toBe(true);
+  expect(drained.some((item) => item.kind === "partial")).toBe(false);
 });
 
 test("removes a partial immediately when its group has no formal event", () => {
   const buffer = new StreamDisplayBuffer();
   buffer.ingest([partial("p", "g", "answer")]);
   const cleared = buffer.ingest([]);
-  assert.equal(cleared.items.length, 0);
-  assert.equal(buffer.hasPending(), false);
+  expect(cleared.items.length).toBe(0);
+  expect(buffer.hasPending()).toBe(false);
 });
 
 test("tool partials are shown in full immediately", () => {
   const buffer = new StreamDisplayBuffer();
   const change = buffer.ingest([partial("tool", "g", "tool output", "tool")]);
-  assert.equal(text(change.items[0]), "tool output");
-  assert.equal(change.hasPending, false);
+  expect(text(change.items[0])).toBe("tool output");
+  expect(change.hasPending).toBe(false);
 });
 
 test("same partial target does not require another render", () => {
   const buffer = new StreamDisplayBuffer();
   buffer.ingest([partial("p", "g", "abcdef")]);
   const repeated = buffer.ingest([partial("p", "g", "abcdef")]);
-  assert.equal(repeated.shouldRender, false);
+  expect(repeated.shouldRender).toBe(false);
 });
 
 test("keeps the full text after many small deltas", () => {
@@ -99,7 +98,7 @@ test("keeps the full text after many small deltas", () => {
     buffer.ingest([partial("p", "g", target.slice(0, length))]);
   }
   while (buffer.hasPending()) buffer.advance();
-  assert.equal(text(buffer.snapshot()[0]), target);
+  expect(text(buffer.snapshot()[0])).toBe(target);
 });
 
 test("caps a new large burst after the lane has drained", () => {
@@ -107,22 +106,22 @@ test("caps a new large burst after the lane has drained", () => {
   buffer.ingest([partial("p", "g", "ok")]);
   const target = `ok${"x".repeat(1000)}`;
   const appended = buffer.ingest([partial("p", "g", target)]);
-  assert.equal(appended.shouldRender, false);
+  expect(appended.shouldRender).toBe(false);
   const firstTick = buffer.advance();
   const firstText = text(firstTick.items[0]);
-  assert.ok(firstText);
-  assert.ok(firstText.length < target.length);
-  assert.ok(firstText.length <= 66);
+  expect(firstText).toBeTruthy();
+  expect(firstText!.length).toBeLessThan(target.length);
+  expect(firstText!.length).toBeLessThanOrEqual(66);
   while (buffer.hasPending()) buffer.advance();
-  assert.equal(text(buffer.snapshot()[0]), target);
+  expect(text(buffer.snapshot()[0])).toBe(target);
 });
 
 test("reset renders the latest authoritative formal event in full", () => {
   const buffer = new StreamDisplayBuffer();
   buffer.ingest([partial("p", "g", "a long response")]);
   const change = buffer.reset([assistantEvent("e", "g", "a long response")]);
-  assert.equal(change.shouldRender, true);
-  assert.equal(change.items.some((item) => item.kind === "partial"), false);
-  assert.equal(change.items.some((item) => item.kind === "event"), true);
-  assert.equal(buffer.hasPending(), false);
+  expect(change.shouldRender).toBe(true);
+  expect(change.items.some((item) => item.kind === "partial")).toBe(false);
+  expect(change.items.some((item) => item.kind === "event")).toBe(true);
+  expect(buffer.hasPending()).toBe(false);
 });

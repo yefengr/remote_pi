@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
-import assert from "node:assert/strict";
-import { test } from "node:test";
+import { expect, test } from "vitest";
 import {
   DecodeError,
   decodeClientFrameV2,
@@ -35,26 +34,29 @@ function parseFixture(fixture: FixtureCase): unknown {
 }
 
 test("loads the shared Protocol v2 manifest", () => {
-  assert.equal(manifest.schema_version, 2);
-  assert.ok(manifest.cases.length > 0);
+  expect(manifest.schema_version).toBe(2);
+  expect(manifest.cases.length > 0).toBe(true);
   const ids = manifest.cases.map((fixture) => fixture.id);
-  assert.equal(new Set(ids).size, ids.length);
-  assert.ok(manifest.cases.some((fixture) => fixture.direction === "marker"));
+  expect(new Set(ids).size).toBe(ids.length);
+  expect(manifest.cases.some((fixture) => fixture.direction === "marker")).toBe(true);
 });
 
 test("accepts every valid non-marker fixture through its direction-specific parser", () => {
   for (const fixture of manifest.cases.filter((candidate) => candidate.valid && candidate.direction !== "marker")) {
-    assert.doesNotThrow(() => parseFixture(fixture), fixture.id);
+    expect(() => parseFixture(fixture), fixture.id).not.toThrow();
   }
 });
 
 test("rejects every invalid non-marker fixture with its manifest error code", () => {
   for (const fixture of manifest.cases.filter((candidate) => !candidate.valid && candidate.direction !== "marker")) {
-    assert.ok(fixture.expected_code, `${fixture.id} must declare expected_code`);
-    assert.throws(
-      () => parseFixture(fixture),
-      (error: unknown) => error instanceof DecodeError && error.code === fixture.expected_code,
-      fixture.id,
-    );
+    expect(fixture.expected_code, `${fixture.id} must declare expected_code`).toBeTruthy();
+    let thrown: unknown;
+    try {
+      parseFixture(fixture);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown, fixture.id).toBeInstanceOf(DecodeError);
+    expect((thrown as DecodeError).code, fixture.id).toBe(fixture.expected_code);
   }
 });

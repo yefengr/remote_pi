@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
+import { expect, test } from "vitest";
 import { encodeBase64, encodeUtf8 } from "./encoding";
 import { PeerChannel } from "./peer-channel";
 import type { RelayClient } from "./relay-client";
@@ -53,8 +52,8 @@ test("rejects pairing-purpose routes carrying session frames", () => {
   };
 
   relay.emit(route("pairing", pong));
-  assert.deepEqual(received, []);
+  expect(received).toEqual([]);
   relay.emit(route("session", pong));
-  assert.deepEqual(received, ["pong"]);
+  expect(received).toEqual(["pong"]);
   channel.close();
 });

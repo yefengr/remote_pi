@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { PairingDialog, StartupErrorView } from "./pwa-startup";
 import { PwaUiProvider } from "./pwa-ui-provider";
@@ -15,13 +14,13 @@ test("renders the startup error with a Mantine reload action", () => {
   );
   const reloadButton = html.match(/<button\b[^>]*>(?:(?!<\/button>).)*Reload(?:(?!<\/button>).)*<\/button>/)?.[0] ?? "";
 
-  assert.match(html, /Local workspace is busy/);
-  assert.match(html, /Close the other tab\./);
-  assert.match(html, /Reload the app/);
-  assert.match(reloadButton, /pwa-button/);
-  assert.match(reloadButton, /data-tone="primary"/);
-  assert.match(reloadButton, /type="button"/);
-  assert.match(reloadButton, /data-position="left"/);
+  expect(html).toMatch(/Local workspace is busy/);
+  expect(html).toMatch(/Close the other tab\./);
+  expect(html).toMatch(/Reload the app/);
+  expect(reloadButton).toMatch(/pwa-button/);
+  expect(reloadButton).toMatch(/data-tone="primary"/);
+  expect(reloadButton).toMatch(/type="button"/);
+  expect(reloadButton).toMatch(/data-position="left"/);
 });
 
 test("manual pairing retains a secure Mantine textarea and disabled pasted-code action", () => {
@@ -31,13 +30,13 @@ test("manual pairing retains a secure Mantine textarea and disabled pasted-code 
     </PwaUiProvider>,
   );
 
-  assert.match(html, /pwa-textarea/);
-  assert.match(html, /aria-label="Pairing code"/);
-  assert.match(html, /rows="3"/);
-  assert.match(html, /autoCapitalize="none"/);
-  assert.match(html, /autoCorrect="off"/);
-  assert.match(html, /spellCheck="false"/);
-  assert.match(html, /pwa-button/);
-  assert.match(html, /Use pasted code/);
-  assert.match(html, /disabled=""/);
+  expect(html).toMatch(/pwa-textarea/);
+  expect(html).toMatch(/aria-label="Pairing code"/);
+  expect(html).toMatch(/rows="3"/);
+  expect(html).toMatch(/autoCapitalize="none"/);
+  expect(html).toMatch(/autoCorrect="off"/);
+  expect(html).toMatch(/spellCheck="false"/);
+  expect(html).toMatch(/pwa-button/);
+  expect(html).toMatch(/Use pasted code/);
+  expect(html).toMatch(/disabled=""/);
 });

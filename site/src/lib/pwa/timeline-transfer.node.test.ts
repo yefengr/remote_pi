@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "vitest";
 import { HistoryWindowAssembler, TimelineEventFragmentAssembler } from "./timeline-transfer";
 import type { HistoryChunkFrame, TimelineEventFragmentFrame } from "./timeline-transfer";
 import type { TimelineEvent } from "../remote-pi/protocol-v2/schema";
@@ -99,8 +98,8 @@ test("assembles out-of-order history chunks in chunk order", () => {
   const first = historyChunk("REQ1", 0, { events: [userEvent("U1")] });
   const tail = historyChunk("REQ1", 1, { events: [assistantEvent()], final_chunk: true, eos: false, next_before: "NEXT" });
 
-  assert.deepEqual(assembler.accept(tail), { status: "pending" });
-  assert.deepEqual(assembler.accept(first), {
+  expect(assembler.accept(tail)).toEqual({ status: "pending" });
+  expect(assembler.accept(first)).toEqual({
     status: "complete",
     events: [userEvent("U1"), assistantEvent()],
     eos: false,
@@ -110,20 +109,20 @@ test("assembles out-of-order history chunks in chunk order", () => {
 
 test("discards missing, duplicate, and wrong-generation history windows", () => {
   const missing = new HistoryWindowAssembler("REQ1");
-  assert.deepEqual(missing.accept(historyChunk("REQ1", 1, { final_chunk: true, eos: true })), { status: "pending" });
-  assert.deepEqual(missing.finalize(), { status: "discarded", reason: "history_chunk_gap" });
+  expect(missing.accept(historyChunk("REQ1", 1, { final_chunk: true, eos: true }))).toEqual({ status: "pending" });
+  expect(missing.finalize()).toEqual({ status: "discarded", reason: "history_chunk_gap" });
 
   const duplicate = new HistoryWindowAssembler("REQ1");
-  assert.deepEqual(duplicate.accept(historyChunk("REQ1", 0)), { status: "pending" });
-  assert.deepEqual(duplicate.accept(historyChunk("REQ1", 0)), { status: "discarded", reason: "duplicate_chunk" });
+  expect(duplicate.accept(historyChunk("REQ1", 0))).toEqual({ status: "pending" });
+  expect(duplicate.accept(historyChunk("REQ1", 0))).toEqual({ status: "discarded", reason: "duplicate_chunk" });
 
   const generation = new HistoryWindowAssembler("REQ1");
-  assert.deepEqual(generation.accept(historyChunk("REQ1", 0, { events: [userEvent("G1")] })), { status: "pending" });
-  assert.deepEqual(generation.accept(historyChunk("REQ1", 1, {
+  expect(generation.accept(historyChunk("REQ1", 0, { events: [userEvent("G1")] }))).toEqual({ status: "pending" });
+  expect(generation.accept(historyChunk("REQ1", 1, {
     final_chunk: true,
     eos: true,
     history_generation: "G2",
-  })), { status: "discarded", reason: "history_scope_mismatch" });
+  }))).toEqual({ status: "discarded", reason: "history_scope_mismatch" });
 });
 
 test("reassembles a realtime fragment event across chunks and rejects invalid JSON", () => {
@@ -132,24 +131,24 @@ test("reassembles a realtime fragment event across chunks and rejects invalid JS
   const split = Math.floor(encoded.length / 2);
   const assembler = new TimelineEventFragmentAssembler(scope);
 
-  assert.deepEqual(assembler.accept(fragmentFrame("A1", 0, encodeBytes(encoded.slice(0, split)), false)), { status: "pending" });
-  assert.deepEqual(assembler.accept(fragmentFrame("A1", 1, encodeBytes(encoded.slice(split)), true)), { status: "complete", event });
+  expect(assembler.accept(fragmentFrame("A1", 0, encodeBytes(encoded.slice(0, split)), false))).toEqual({ status: "pending" });
+  expect(assembler.accept(fragmentFrame("A1", 1, encodeBytes(encoded.slice(split)), true))).toEqual({ status: "complete", event });
 
   const invalid = new TimelineEventFragmentAssembler(scope);
-  assert.deepEqual(invalid.accept(fragmentFrame("BAD", 0, encodeJson("invalid"), true)), { status: "discarded", reason: "fragment_event_invalid" });
+  expect(invalid.accept(fragmentFrame("BAD", 0, encodeJson("invalid"), true))).toEqual({ status: "discarded", reason: "fragment_event_invalid" });
 });
 
 test("discards duplicate or missing fragment indexes and scope violations", () => {
   const event = assistantEvent("A2");
   const encoded = encodeJson(event);
   const assembler = new TimelineEventFragmentAssembler(scope);
-  assert.deepEqual(assembler.accept(fragmentFrame("A2", 0, encoded.slice(0, 4), false)), { status: "pending" });
-  assert.deepEqual(assembler.accept(fragmentFrame("A2", 0, encodeJson("different"), false)), { status: "discarded", reason: "invalid_fragment_sequence" });
+  expect(assembler.accept(fragmentFrame("A2", 0, encoded.slice(0, 4), false))).toEqual({ status: "pending" });
+  expect(assembler.accept(fragmentFrame("A2", 0, encodeJson("different"), false))).toEqual({ status: "discarded", reason: "invalid_fragment_sequence" });
 
   const missing = new TimelineEventFragmentAssembler(scope);
-  assert.deepEqual(missing.accept(fragmentFrame("A2", 1, encoded.slice(4), true)), { status: "pending" });
+  expect(missing.accept(fragmentFrame("A2", 1, encoded.slice(4), true))).toEqual({ status: "pending" });
   const wrongScope = new TimelineEventFragmentAssembler(scope);
-  assert.deepEqual(wrongScope.accept(fragmentFrame("A2", 0, encoded, true, { history_generation: "G2" })), { status: "discarded", reason: "fragment_scope_mismatch" });
+  expect(wrongScope.accept(fragmentFrame("A2", 0, encoded, true, { history_generation: "G2" }))).toEqual({ status: "discarded", reason: "fragment_scope_mismatch" });
 });
 
 test("enforces the 32 MiB decoded window budget", () => {
@@ -166,6 +165,6 @@ test("enforces the 32 MiB decoded window budget", () => {
     final_chunk: true,
     eos: true,
   });
-  for (const chunk of chunks.slice(0, -1)) assert.deepEqual(assembler.accept(chunk), { status: "pending" });
-  assert.deepEqual(assembler.accept(chunks[72]), { status: "discarded", reason: "window_too_large" });
+  for (const chunk of chunks.slice(0, -1)) expect(assembler.accept(chunk)).toEqual({ status: "pending" });
+  expect(assembler.accept(chunks[72])).toEqual({ status: "discarded", reason: "window_too_large" });
 });

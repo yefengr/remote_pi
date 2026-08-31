@@ -1,14 +1,13 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "vitest";
 import { ReconnectState } from "./reconnect-state";
 
 test("replacement close and delayed onclose schedule at most once", () => {
   const state = new ReconnectState();
   const scheduled: string[] = [];
   state.replacementBye();
-  assert.equal(state.request("closed", (trigger) => scheduled.push(trigger)), true);
-  assert.equal(state.request("closed", (trigger) => scheduled.push(trigger)), false);
-  assert.deepEqual(scheduled, ["closed"]);
+  expect(state.request("closed", (trigger) => scheduled.push(trigger))).toBe(true);
+  expect(state.request("closed", (trigger) => scheduled.push(trigger))).toBe(false);
+  expect(scheduled).toEqual(["closed"]);
 });
 
 test("terminal close, error, and connect rejection schedule nothing", () => {
@@ -16,9 +15,9 @@ test("terminal close, error, and connect rejection schedule nothing", () => {
   const scheduled: string[] = [];
   state.terminalBye();
   for (const trigger of ["closed", "error", "connect_rejected"] as const) {
-    assert.equal(state.request(trigger, (next) => scheduled.push(next)), false);
+    expect(state.request(trigger, (next) => scheduled.push(next))).toBe(false);
   }
-  assert.deepEqual(scheduled, []);
+  expect(scheduled).toEqual([]);
 });
 
 test("stale connection callbacks cannot schedule for a newer connection", () => {
@@ -26,8 +25,8 @@ test("stale connection callbacks cannot schedule for a newer connection", () => 
   const scheduled: string[] = [];
   const staleToken = state.beginConnection();
   state.beginConnection();
-  assert.equal(state.request("connect_rejected", (trigger) => scheduled.push(trigger), staleToken), false);
-  assert.deepEqual(scheduled, []);
+  expect(state.request("connect_rejected", (trigger) => scheduled.push(trigger), staleToken)).toBe(false);
+  expect(scheduled).toEqual([]);
 });
 
 test("user recovery clears terminal gate and permits one new schedule", () => {
@@ -35,18 +34,18 @@ test("user recovery clears terminal gate and permits one new schedule", () => {
   const scheduled: string[] = [];
   state.terminalBye();
   state.userRecover();
-  assert.equal(state.request("closed", (trigger) => scheduled.push(trigger)), true);
-  assert.equal(state.request("error", (trigger) => scheduled.push(trigger)), false);
-  assert.deepEqual(scheduled, ["closed"]);
+  expect(state.request("closed", (trigger) => scheduled.push(trigger))).toBe(true);
+  expect(state.request("error", (trigger) => scheduled.push(trigger))).toBe(false);
+  expect(scheduled).toEqual(["closed"]);
 });
 
 test("cancel invalidates a queued callback without opening a recovery gate", () => {
   const state = new ReconnectState();
   const scheduled: string[] = [];
   const token = state.beginConnection();
-  assert.equal(state.request("closed", (trigger) => scheduled.push(trigger), token), true);
+  expect(state.request("closed", (trigger) => scheduled.push(trigger), token)).toBe(true);
   state.cancel();
-  assert.equal(state.request("error", (trigger) => scheduled.push(trigger), token), false);
-  assert.equal(state.request("error", (trigger) => scheduled.push(trigger)), true);
-  assert.deepEqual(scheduled, ["closed", "error"]);
+  expect(state.request("error", (trigger) => scheduled.push(trigger), token)).toBe(false);
+  expect(state.request("error", (trigger) => scheduled.push(trigger))).toBe(true);
+  expect(scheduled).toEqual(["closed", "error"]);
 });

@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "vitest";
 import type { ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ComposerImageMenu, MessageComposer, type MessageComposerAttachment } from "./message-composer";
@@ -60,27 +59,27 @@ test("renders the Mantine textarea, image menu, and action icons without changin
   const commandTrigger = buttonWithAriaLabel(html, "Pi commands");
   const sendAction = buttonWithAriaLabel(html, "Send message");
 
-  assert.match(html, /pwa-textarea/);
-  assert.match(html, /pwa-composer-input/);
-  assert.match(html, /rows="1"/);
-  assert.match(html, /placeholder="Message your agent…"/);
-  assert.match(imageTrigger, /pwa-icon-button/);
-  assert.match(imageTrigger, /pwa-composer-icon/);
-  assert.match(imageTrigger, /aria-haspopup="menu"/);
-  assert.match(imageTrigger, /aria-expanded="false"/);
-  assert.match(imageTrigger, /title="Add image"/);
-  assert.doesNotMatch(html, /pwa-composer-menu-panel/);
-  assert.match(commandTrigger, /pwa-icon-button/);
-  assert.match(commandTrigger, /pwa-composer-icon/);
-  assert.match(commandTrigger, /aria-haspopup="menu"/);
-  assert.match(commandTrigger, /aria-expanded="false"/);
-  assert.match(commandTrigger, /title="Pi commands"/);
-  assert.match(sendAction, /pwa-icon-button/);
-  assert.match(sendAction, /data-tone="primary"/);
-  assert.match(sendAction, /type="submit"/);
-  assert.match(sendAction, /disabled=""/);
-  assert.doesNotMatch(html, /pwa-command-menu-panel/);
-  assert.doesNotMatch(html, /value="\/"/);
+  expect(html).toMatch(/pwa-textarea/);
+  expect(html).toMatch(/pwa-composer-input/);
+  expect(html).toMatch(/rows="1"/);
+  expect(html).toMatch(/placeholder="Message your agent…"/);
+  expect(imageTrigger).toMatch(/pwa-icon-button/);
+  expect(imageTrigger).toMatch(/pwa-composer-icon/);
+  expect(imageTrigger).toMatch(/aria-haspopup="menu"/);
+  expect(imageTrigger).toMatch(/aria-expanded="false"/);
+  expect(imageTrigger).toMatch(/title="Add image"/);
+  expect(html).not.toMatch(/pwa-composer-menu-panel/);
+  expect(commandTrigger).toMatch(/pwa-icon-button/);
+  expect(commandTrigger).toMatch(/pwa-composer-icon/);
+  expect(commandTrigger).toMatch(/aria-haspopup="menu"/);
+  expect(commandTrigger).toMatch(/aria-expanded="false"/);
+  expect(commandTrigger).toMatch(/title="Pi commands"/);
+  expect(sendAction).toMatch(/pwa-icon-button/);
+  expect(sendAction).toMatch(/data-tone="primary"/);
+  expect(sendAction).toMatch(/type="submit"/);
+  expect(sendAction).toMatch(/disabled=""/);
+  expect(html).not.toMatch(/pwa-command-menu-panel/);
+  expect(html).not.toMatch(/value="\/"/);
 });
 
 test("renders the opened Mantine image menu without disabling its focus trap", () => {
@@ -94,15 +93,15 @@ test("renders the opened Mantine image menu without disabling its focus trap", (
   const useCamera = menuItemWithText(html, "Use camera");
   const imageMenu = html.match(/<div[^>]*pwa-composer-menu-panel[^>]*>/)?.[0] ?? "";
 
-  assert.match(imageTrigger, /aria-expanded="true"/);
-  assert.match(imageMenu, /bottom:auto/);
-  assert.match(chooseImage, /mantine-Menu-item/);
-  assert.match(chooseImage, /role="menuitem"/);
-  assert.match(chooseImage, /data-position="left"/);
-  assert.match(useCamera, /mantine-Menu-item/);
-  assert.match(useCamera, /role="menuitem"/);
-  assert.match(useCamera, /data-position="left"/);
-  assert.doesNotMatch(html, /display:none/);
+  expect(imageTrigger).toMatch(/aria-expanded="true"/);
+  expect(imageMenu).toMatch(/bottom:auto/);
+  expect(chooseImage).toMatch(/mantine-Menu-item/);
+  expect(chooseImage).toMatch(/role="menuitem"/);
+  expect(chooseImage).toMatch(/data-position="left"/);
+  expect(useCamera).toMatch(/mantine-Menu-item/);
+  expect(useCamera).toMatch(/role="menuitem"/);
+  expect(useCamera).toMatch(/data-position="left"/);
+  expect(html).not.toMatch(/display:none/);
 });
 
 test("disables the Mantine textarea, Pi commands trigger, and Send action while offline", () => {
@@ -111,10 +110,10 @@ test("disables the Mantine textarea, Pi commands trigger, and Send action while 
   const trigger = buttonWithAriaLabel(html, "Pi commands");
   const sendAction = buttonWithAriaLabel(html, "Send message");
 
-  assert.match(textarea, /disabled=""/);
-  assert.match(trigger, /disabled=""/);
-  assert.match(sendAction, /pwa-icon-button/);
-  assert.match(sendAction, /disabled=""/);
+  expect(textarea).toMatch(/disabled=""/);
+  expect(trigger).toMatch(/disabled=""/);
+  expect(sendAction).toMatch(/pwa-icon-button/);
+  expect(sendAction).toMatch(/disabled=""/);
 });
 
 test("renders a disabled Mantine remove-image action while an image sends", () => {
@@ -122,24 +121,24 @@ test("renders a disabled Mantine remove-image action while an image sends", () =
   const removeAction = buttonWithAriaLabel(html, "Remove image");
   const sendAction = buttonWithAriaLabel(html, "Send message");
 
-  assert.match(removeAction, /pwa-icon-button/);
-  assert.match(removeAction, /pwa-composer-remove/);
-  assert.match(removeAction, /title="Remove image"/);
-  assert.match(removeAction, /disabled=""/);
-  assert.match(sendAction, /disabled=""/);
+  expect(removeAction).toMatch(/pwa-icon-button/);
+  expect(removeAction).toMatch(/pwa-composer-remove/);
+  expect(removeAction).toMatch(/title="Remove image"/);
+  expect(removeAction).toMatch(/disabled=""/);
+  expect(sendAction).toMatch(/disabled=""/);
 });
 
 test("shows a primary Mantine Stop button as the only action while working with an empty draft", () => {
   const html = renderComposer({ isWorking: true });
   const stopButton = buttonWithAriaLabel(html, "Stop current task");
 
-  assert.match(stopButton, /pwa-button/);
-  assert.match(stopButton, /data-tone="danger"/);
-  assert.match(stopButton, /pwa-stop-button/);
-  assert.match(stopButton, /primary/);
-  assert.match(stopButton, /type="button"/);
-  assert.match(stopButton, /data-position="left"/);
-  assert.doesNotMatch(html, /aria-label="Send message"/);
+  expect(stopButton).toMatch(/pwa-button/);
+  expect(stopButton).toMatch(/data-tone="danger"/);
+  expect(stopButton).toMatch(/pwa-stop-button/);
+  expect(stopButton).toMatch(/primary/);
+  expect(stopButton).toMatch(/type="button"/);
+  expect(stopButton).toMatch(/data-position="left"/);
+  expect(html).not.toMatch(/aria-label="Send message"/);
 });
 
 test("keeps the Mantine Stop button and Send action together when a draft exists", () => {
@@ -147,29 +146,29 @@ test("keeps the Mantine Stop button and Send action together when a draft exists
   const stopButton = buttonWithAriaLabel(html, "Stop current task");
   const sendAction = buttonWithAriaLabel(html, "Send message");
 
-  assert.match(stopButton, /pwa-button/);
-  assert.match(stopButton, /pwa-stop-button/);
-  assert.match(sendAction, /pwa-icon-button/);
-  assert.match(sendAction, /data-tone="primary"/);
-  assert.match(sendAction, /type="submit"/);
-  assert.doesNotMatch(sendAction, /disabled=""/);
+  expect(stopButton).toMatch(/pwa-button/);
+  expect(stopButton).toMatch(/pwa-stop-button/);
+  expect(sendAction).toMatch(/pwa-icon-button/);
+  expect(sendAction).toMatch(/data-tone="primary"/);
+  expect(sendAction).toMatch(/type="submit"/);
+  expect(sendAction).not.toMatch(/disabled=""/);
 });
 
 test("shows the pending Mantine stop state without exposing another Stop action", () => {
   const html = renderComposer({ isWorking: true, stopping: true });
   const stopButton = buttonWithAriaLabel(html, "Stopping current task");
 
-  assert.match(stopButton, /pwa-button/);
-  assert.match(stopButton, /disabled=""/);
-  assert.match(stopButton, /Stopping…/);
-  assert.match(stopButton, /title="Stopping current task"/);
-  assert.equal((html.match(/aria-label="(?:Stopping|Stop) current task"/g) ?? []).length, 1);
+  expect(stopButton).toMatch(/pwa-button/);
+  expect(stopButton).toMatch(/disabled=""/);
+  expect(stopButton).toMatch(/Stopping…/);
+  expect(stopButton).toMatch(/title="Stopping current task"/);
+  expect((html.match(/aria-label="(?:Stopping|Stop) current task"/g) ?? []).length).toBe(1);
 });
 
 test("disables Send when an attachment cannot be sent", () => {
   const html = renderComposer({ attachment: imageAttachment(), canAttachImage: false });
   const sendAction = buttonWithAriaLabel(html, "Send message");
 
-  assert.match(sendAction, /pwa-icon-button/);
-  assert.match(sendAction, /disabled=""/);
+  expect(sendAction).toMatch(/pwa-icon-button/);
+  expect(sendAction).toMatch(/disabled=""/);
 });

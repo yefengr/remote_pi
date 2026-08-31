@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { RenamePairingDialog } from "./rename-pairing-dialog";
 import { PwaUiProvider } from "./pwa-ui-provider";
@@ -16,15 +15,15 @@ const device: PwaDeviceRecord = {
 test("renders the rename dialog with Mantine controls instead of a browser prompt", () => {
   const html = renderToStaticMarkup(<PwaUiProvider><RenamePairingDialog device={device} onSave={async () => {}} onClose={() => {}} /></PwaUiProvider>);
 
-  assert.match(html, /mantine-Modal-content/);
-  assert.match(html, /pwa-input/);
-  assert.match(html, /pwa-button/);
-  assert.match(html, /Rename pairing/);
-  assert.match(html, /Pairing name/);
-  assert.match(html, /Choose a local name for/);
-  assert.match(html, /This only changes the label in this browser/);
-  assert.match(html, /value="Pi on office"/);
-  assert.match(html, />Cancel</);
-  assert.match(html, />Save</);
-  assert.doesNotMatch(html, /Name this pairing/);
+  expect(html).toMatch(/mantine-Modal-content/);
+  expect(html).toMatch(/pwa-input/);
+  expect(html).toMatch(/pwa-button/);
+  expect(html).toMatch(/Rename pairing/);
+  expect(html).toMatch(/Pairing name/);
+  expect(html).toMatch(/Choose a local name for/);
+  expect(html).toMatch(/This only changes the label in this browser/);
+  expect(html).toMatch(/value="Pi on office"/);
+  expect(html).toMatch(/>Cancel</);
+  expect(html).toMatch(/>Save</);
+  expect(html).not.toMatch(/Name this pairing/);
 });

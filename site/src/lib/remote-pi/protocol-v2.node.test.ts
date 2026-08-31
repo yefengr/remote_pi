@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
+import { expect, test } from "vitest";
 import {
   DecodeError,
   MAX_ARRAY_ITEMS,
@@ -49,7 +48,14 @@ function toolEvent(status: "complete" | "error" | "interrupted" = "complete") {
 }
 
 function expectCode(action: () => unknown, code: DecodeError["code"]): void {
-  assert.throws(action, (error: unknown) => error instanceof DecodeError && error.code === code);
+  let thrown: unknown;
+  try {
+    action();
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(DecodeError);
+  expect((thrown as DecodeError).code).toBe(code);
 }
 
 const ask = {
@@ -70,22 +76,22 @@ const ask = {
 };
 
 test("exports the frozen limits and validates scalar/event invariants", () => {
-  assert.equal(MAX_FRAME_BYTES, 2 * 1024 * 1024);
-  assert.equal(MAX_HISTORY_CHUNK_BYTES, 512 * 1024);
-  assert.equal(MAX_WINDOW_BYTES, 32 * 1024 * 1024);
-  assert.equal(MAX_FRAGMENT_BYTES, 50 * 1024);
-  assert.equal(MAX_ID_CHARS, 256);
-  assert.equal(MAX_STRING_CHARS, 1024 * 1024);
-  assert.equal(MAX_ARRAY_ITEMS, 4096);
+  expect(MAX_FRAME_BYTES).toBe(2 * 1024 * 1024);
+  expect(MAX_HISTORY_CHUNK_BYTES).toBe(512 * 1024);
+  expect(MAX_WINDOW_BYTES).toBe(32 * 1024 * 1024);
+  expect(MAX_FRAGMENT_BYTES).toBe(50 * 1024);
+  expect(MAX_ID_CHARS).toBe(256);
+  expect(MAX_STRING_CHARS).toBe(1024 * 1024);
+  expect(MAX_ARRAY_ITEMS).toBe(4096);
 
-  assert.deepEqual(parseTimelineEventV2(userEvent()), userEvent());
+  expect(parseTimelineEventV2(userEvent())).toEqual(userEvent());
   for (const event of [assistantEvent(), toolEvent("complete"), toolEvent("error"), toolEvent("interrupted")]) {
-    assert.equal(parseTimelineEventV2(event).event_id, event.event_id);
+    expect(parseTimelineEventV2(event).event_id).toBe(event.event_id);
   }
-  assert.deepEqual(parseTimelineEventV2({
+  expect(parseTimelineEventV2({
     event_id: "SYS1", session_id: "S1", history_generation: "G1", timestamp: 103,
     kind: "custom", payload: { ok: true }, truncated: false,
-  }), {
+  })).toEqual({
     event_id: "SYS1", session_id: "S1", history_generation: "G1", timestamp: 103,
     kind: "custom", payload: { ok: true }, truncated: false,
   });
@@ -96,14 +102,14 @@ test("exports the frozen limits and validates scalar/event invariants", () => {
 
 test("enforces image MIME/data/omitted and sender identity rules", () => {
   const image = { type: "image", mime_type: "image/png", data: "abc", byte_length: 3 };
-  assert.deepEqual(parseTimelineEventV2(userEvent({ blocks: [image] })), userEvent({ blocks: [image] }));
-  assert.deepEqual(parseTimelineEventV2(userEvent({ blocks: [{ type: "image", mime_type: "image/png", byte_length: 0, omitted: true }] })), userEvent({ blocks: [{ type: "image", mime_type: "image/png", byte_length: 0, omitted: true }] }));
+  expect(parseTimelineEventV2(userEvent({ blocks: [image] }))).toEqual(userEvent({ blocks: [image] }));
+  expect(parseTimelineEventV2(userEvent({ blocks: [{ type: "image", mime_type: "image/png", byte_length: 0, omitted: true }] }))).toEqual(userEvent({ blocks: [{ type: "image", mime_type: "image/png", byte_length: 0, omitted: true }] }));
   expectCode(() => parseTimelineEventV2(userEvent({ blocks: [{ ...image, mime_type: "image" }] })), "schema");
   expectCode(() => parseTimelineEventV2(userEvent({ blocks: [{ ...image, data: "" }] })), "schema");
   expectCode(() => parseTimelineEventV2(userEvent({ blocks: [{ ...image, data: "abc", omitted: true }] })), "schema");
   expectCode(() => parseTimelineEventV2(userEvent({ sender_ref: undefined })), "schema");
   expectCode(() => parseTimelineEventV2(userEvent({ origin: "extension", sender_ref: "forged" })), "schema");
-  assert.deepEqual(parseTimelineEventV2(userEvent({ origin: "extension", sender_ref: undefined })), userEvent({ origin: "extension", sender_ref: undefined }));
+  expect(parseTimelineEventV2(userEvent({ origin: "extension", sender_ref: undefined }))).toEqual(userEvent({ origin: "extension", sender_ref: undefined }));
 });
 
 test("accepts the closed client catalog, including queue, approval and strict ask frames", () => {
@@ -124,12 +130,12 @@ test("accepts the closed client catalog, including queue, approval and strict as
     { ...version, type: "queued_message_clear", id: "N7", ...channel },
     { ...version, type: "approve_tool", id: "N8", ...channel, tool_call_id: "TC1", decision: "allow" },
   ];
-  for (const frame of frames) assert.equal(decodeClientFrameV2(frame).protocol_version, 2);
+  for (const frame of frames) expect(decodeClientFrameV2(frame).protocol_version).toBe(2);
 
   const askResponse: Extract<ClientFrame, { type: "extension_ui_response" }> = { ...version, type: "extension_ui_response", id: "UI1", ...channel, ask: { flow_id: "F1", kind: "answer", answers: { q1: { values: ["yes"], customText: "extra", optionNotes: { yes: "note" } } } } };
   const encoded = encodeClientFrameV2(askResponse);
-  assert(encoded instanceof Uint8Array);
-  assert.deepEqual(decodeClientFrameV2(encoded), askResponse);
+  expect(encoded).toBeInstanceOf(Uint8Array);
+  expect(decodeClientFrameV2(encoded)).toEqual(askResponse);
   expectCode(() => decodeClientFrameV2({ ...askResponse, ask: { ...askResponse.ask, answers: { q1: { custom_text: "wrong" } } } }), "schema");
   expectCode(() => decodeClientFrameV2({ ...askResponse, ask: { ...askResponse.ask, answers: { q1: { optionNotes: { yes: "note" }, extra: true } } } }), "schema");
   expectCode(() => decodeClientFrameV2({ ...version, type: "user_message", id: "U2", ...channel, client_request_id: "R2", text: "", images: [{ data: "abc", mime: "image/png" }, { data: "def", mime: "image/jpeg" }] }), "schema");
@@ -168,7 +174,7 @@ test("accepts server frames while rejecting old wrappers and direction drift", (
     { ...version, type: "extension_ui_request", ...direct, id: "UI1", method: "select", title: "Pick", options: ["one"], ask },
     { ...version, type: "bye", ...session, reason: "shutdown" },
   ];
-  for (const frame of frames) assert.equal(decodeServerFrameV2(frame).protocol_version, 2);
+  for (const frame of frames) expect(decodeServerFrameV2(frame).protocol_version).toBe(2);
   expectCode(() => decodeClientFrameV2({ ...version, type: "timeline_event", ...session, event: userEvent() }), "direction");
   expectCode(() => decodeServerFrameV2({ ...version, type: "ping", id: "Q1", ...channel }), "direction");
   expectCode(() => decodeServerFrameV2({ ...version, type: "timeline_partial", ...session, group_id: "GR1", partial_id: "PA1", kind: "assistant", status: "running", partial: {} }), "schema");
@@ -179,11 +185,11 @@ test("accepts server frames while rejecting old wrappers and direction drift", (
 
 test("validates fragments and history chunk overlap/final rules", () => {
   const fragment = { ...version, type: "timeline_event_fragment", ...session, event_id: "A1", index: 0, data_base64: "eA==", final: true };
-  assert.equal(validateFragmentSizeV2(fragment), 1);
+  expect(validateFragmentSizeV2(fragment)).toBe(1);
   const base = { ...version, type: "session_history_chunk", ...direct, in_reply_to: "Y1", ...session, snapshot_head: "HEAD", chunk_index: 0, events: [], fragments: [] };
-  assert.equal(decodeServerFrameV2({ ...base, final_chunk: true, eos: true }).type, "session_history_chunk");
-  assert.equal(decodeServerFrameV2({ ...base, final_chunk: true, eos: false, next_before: "NEXT" }).type, "session_history_chunk");
-  assert.equal(validateHistoryChunkSizeV2({ ...base, final_chunk: true, eos: true }), getUtf8Size({ ...base, final_chunk: true, eos: true }));
+  expect(decodeServerFrameV2({ ...base, final_chunk: true, eos: true }).type).toBe("session_history_chunk");
+  expect(decodeServerFrameV2({ ...base, final_chunk: true, eos: false, next_before: "NEXT" }).type).toBe("session_history_chunk");
+  expect(validateHistoryChunkSizeV2({ ...base, final_chunk: true, eos: true })).toBe(getUtf8Size({ ...base, final_chunk: true, eos: true }));
   expectCode(() => decodeServerFrameV2({ ...base, final_chunk: false, eos: true }), "schema");
   expectCode(() => decodeServerFrameV2({ ...base, final_chunk: true }), "schema");
   expectCode(() => decodeServerFrameV2({ ...base, final_chunk: true, eos: false }), "schema");
