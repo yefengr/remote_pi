@@ -1,7 +1,7 @@
 # 计划 66 — Site UI 组件库引入与 PWA 迁移
 
-**状态：进行中（Phase 0–4 已完成）**
-**跨计划调度：见 [Plan 68 — PWA UI 与自动化测试交付路线](68-pwa-ui-quality-roadmap.md)**
+**技术状态：Phase 0–2、4 的实现当前有效；Phase 3 需按新模型重新收口；Phase 5 尚未实施**
+**当前核对：2026-08-31；当前执行状态、跨计划顺序和切换门禁以 [Plan 68 — PWA UI 与自动化测试交付路线](68-pwa-ui-quality-roadmap.md) 为唯一真源**
 **范围：`site/` 前端，优先 PWA**
 **基线：Next.js 16、React 19、TypeScript、Tailwind CSS 4**
 
@@ -19,6 +19,13 @@
 
 这些问题表明，长期项目不应继续手写所有基础交互组件。
 
+## 当前检查点
+
+- Phase 0–2 与 Phase 4 的完成状态当前有效；历史验收段中的测试数字均为对应提交时的快照，不代表当前值。
+- Plan 69 删除了原 `PairingRecordCard`、`SessionList`、`PwaAppView`、startup 与 probes 的既有边界；当前 `site/src/components/pwa/pwa-app.tsx` 约 748 行，Phase 3 必须按 `device`/`endpoint` 模型重新收口，不能沿用旧抽取完成结论。
+- Phase 5 尚未开始；`site/src/app/globals.css` 约 2321 行，且 PWA 之前仍保留大量已删除站点 selector，须在业务组件边界稳定后按证据清理。
+- 当前全量验证快照见 Plan 68：legacy 118/118、Browser 75/75、coverage 共 76 个 Vitest tests、Playwright desktop/mobile 10/10、TypeScript、production build 和 `git diff --check` 通过；全量 lint 的唯一 error 是生成文件 `site/public/sw.js` 的 `@typescript-eslint/no-this-alias`，另有生成文件和既有 img warnings。
+
 ## 2. 目标
 
 1. 在 PWA 范围建立正式、可持续升级的 React UI 组件基础；
@@ -33,7 +40,7 @@
 
 本计划不包含：
 
-- 不修改 Relay、`pi-extension`、协议字段、`room_id`、Pairing 数据语义或 IndexedDB 数据模型；
+- Plan 66 原批次不修改 Relay、`pi-extension`、协议字段、`room_id`、Pairing 数据语义或 IndexedDB 数据模型；Plan 69 已在其独立范围内取代该跨端边界；
 - 不重建已删除的 Landing、Docs、Tutorials 或 Legal 页面；
 - 不一次性重写所有 PWA 业务组件；
 - 不引入大型全局状态管理库；
@@ -208,19 +215,21 @@ wrapper 必须保持轻量。简单的 `Button` 或 `Badge` 可以直接导出 M
 - 所有 icon-only 操作有可访问名称；
 - 状态文本不能只依赖颜色。
 
-**验收：**已在 `site/src/components/ui/` 建立 Button、IconButton、Input、Textarea、Select、Badge 和 Tooltip 薄 wrapper，PWA 生产消费者不再直接导入对应 Mantine 基础控件；共享 tone、状态、44px 触摸目标和输入尺寸已收敛，重复基础 Button/Input/Badge 行为样式已删除。legacy 128/128、Browser Mode 64/64、coverage 64/64、TypeScript、受影响 ESLint、production build、桌面与 `390×844` 测试环境 smoke 和独立审查均通过；全量 Lint 仍仅受既有生成文件 `site/public/sw.js` 的 `@typescript-eslint/no-this-alias` 阻断。实现提交：`b06f15d`。
+**验收：**已在 `site/src/components/ui/` 建立 Button、IconButton、Input、Textarea、Select、Badge 和 Tooltip 薄 wrapper，PWA 生产消费者不再直接导入对应 Mantine 基础控件；共享 tone、状态、44px 触摸目标和输入尺寸已收敛，重复基础 Button/Input/Badge 行为样式已删除。以下测试数字是实现提交 `b06f15d` 对应的历史快照，非当前值：legacy 128/128、Browser Mode 64/64、coverage 64/64、TypeScript、受影响 ESLint、production build、桌面与 `390×844` 测试环境 smoke 和独立审查均通过；全量 Lint 仍仅受既有生成文件 `site/public/sw.js` 的 `@typescript-eslint/no-this-alias` 阻断。
 
 ### Phase 3 — 业务组件收敛
 
-**状态：已完成（2026-08-30）**
+**技术状态：原批次的当前边界已被 Plan 69 取代，需按 `device`/`endpoint` 模型重新收口；何时执行以 Plan 68 为准**
 
-1. 抽取 `PairingRecordCard`，统一桌面侧栏和移动端 Drawer 中的配对记录展示；
-2. 抽取 `SessionList` / `SessionRow`，统一 Session 状态、工作目录、技术标识和 CURRENT 展示；
-3. 将 `pwa-app.tsx` 中的弹窗和 UI 状态 callback 减少为明确的 view model；
-4. 保持在线探测、连接重试和本地存储逻辑在 hooks/controller，不放入视觉组件；
-5. 在不改变行为的前提下，为连接、配对、Session 和 Timeline 状态逐步建立 feature hooks。
+此前已完成的 `PairingRecordCard`、`SessionList` / `SessionRow`、`PwaAppView`、PWA startup 与非当前配对 probes 抽取，是 Plan 69 前的历史实现快照；Plan 69 已删除这些边界，不能再作为当前完成结论。当前 `pwa-app.tsx` 约 748 行，下一批必须先基于 `device`/`endpoint` 模型重新划分稳定的展示编排、启动与探测所有权，再以最小独立批次收口。
 
-**验收：**已通过四个独立批次完成 Pairing/Session 展示组件、`PwaAppView` 展示编排、PWA 启动边界和非当前配对探测边界抽取；当前会话连接、Session Selection 与 Timeline generation 因共享连接失效、stale guard、持久化和流式状态边界，明确保留在 `PwaApp` controller，后续仅在出现新的重复实现或所有权证据时单独拆分。Node 23/23、legacy 119/119、Browser Mode 64/64、coverage 87/87、Playwright E2E 8/8、TypeScript、受影响 ESLint、production build、`git diff --check` 和独立审查均通过；全量 Lint 仍仅受既有生成文件 `site/public/sw.js` 的 `@typescript-eslint/no-this-alias` 阻断。实现提交：`c5e3cce`、`7e8f35d`、`6785b64`、`f579ee7`。
+1. 盘点当前 `pwa-app.tsx` 与直接消费者，确认 device、endpoint、连接、Session 与 Timeline 的真实边界；
+2. 优先抽取有独立 props/view model 证据的展示或编排边界，不恢复已删除的旧组件结构；
+3. 保持在线探测、连接重试和本地存储逻辑在 hooks/controller，不放入视觉组件；
+4. 仅在不改变 `device`/`endpoint` 语义的前提下，为连接、配对、Session 和 Timeline 状态逐步建立 feature hooks；
+5. 每个结构调整批次独立验证，完成标准以当前模型下可核对的所有权改善为准。
+
+**验收：**当前模型下的业务组件只接收稳定的 props/view model，`PwaApp` 的 UI 编排与领域逻辑边界有可核对改善，且不恢复 Plan 69 已删除的 Pairing/Session/PwaAppView/startup/probes 边界。下文旧验收数字和提交（`c5e3cce`、`7e8f35d`、`6785b64`、`f579ee7`）仅记录 Plan 69 前历史批次，非当前状态。
 
 ### Phase 4 — 遗留站点移除与低收益组件评估
 
@@ -235,15 +244,17 @@ wrapper 必须保持轻量。简单的 `Button` 或 `Badge` 可以直接导出 M
 
 ### Phase 5 — 清理与长期维护
 
-**状态：待开始**
+**技术状态：尚未实施；执行顺序以 Plan 68 为准**
 
-1. 删除已被组件库完全替代的重复基础样式；
+`globals.css` 当前约 2321 行，PWA 前仍保留大量已删除站点 selector。本阶段在不改变 PWA 业务布局、消息流、终端视觉和 safe-area 特殊样式的前提下，按实际消费者删除无效的遗留站点与已被组件库替代的重复基础样式。
+
+1. 先基于实际消费者盘点 selector，再删除无消费者的遗留站点样式；
 2. 保留 PWA 业务布局、消息流、终端视觉和 safe-area 特殊样式；
 3. 将全局 token、PWA token 和 Mantine theme 的关系记录在同一处；
 4. 记录 Mantine 版本、升级窗口和兼容验证命令；
 5. 每次 Mantine 升级先在 PWA smoke 和构建中验证，再扩大到全部受影响消费者。
 
-**验收：**没有遗留两套同名基础行为；未迁移的自定义 CSS 都能明确对应业务布局或品牌视觉。
+**验收：**没有遗留两套同名基础行为；未迁移的自定义 CSS 都能明确对应业务布局或品牌视觉；已删除站点 selector 不再无证据保留。
 
 ## 8. 主题与样式约束
 
@@ -313,7 +324,11 @@ cd .. && git diff --check
 - 迁移期间保留旧组件测试，直到新组件通过桌面、移动端和生产构建验证；
 - 不通过删除旧 CSS 或改变业务状态来掩盖视觉问题。
 
-## 12. 后续决策点
+## 12. 调度引用
+
+当前执行状态、跨计划顺序和切换门禁只在 Plan 68 维护。本文只记录 Plan 66 的技术范围、当前实现事实和验收标准；不得以旧 Phase 3 的历史完成记录跳过当前 `device`/`endpoint` 模型收口。
+
+## 13. 后续决策点
 
 以下事项在对应 Phase 开始前单独确认，不在本计划中提前扩大范围：
 
@@ -324,15 +339,16 @@ cd .. && git diff --check
 5. 是否引入 `@mantine/notifications`；
 6. 是否在 Phase 3 同时拆分 `PwaApp` hooks，还是作为独立计划执行。
 
-## 13. 完成定义
+## 14. 完成定义
 
 本计划完成需满足：
 
 - PWA 基础 Dialog、Drawer、Menu、Button、Input、Badge 等能力由 Mantine 提供；
 - Session 管理在移动端使用稳定的左侧 Drawer；
 - 重命名、Settings、Menu 的层级、焦点、Escape 和滚动行为统一；
-- Pairing、Session、Timeline、Relay 和 IndexedDB 业务行为不变；
+- 当前 `device`/`endpoint` 模型下的 Pairing、Session、Timeline、Relay 与本地数据语义保持正确，且 `pwa-app.tsx` 的业务组件边界已按该模型重新收口；
 - `/` 的服务端重定向和 `/app` PWA 启动行为正确；
+- `globals.css` 中无消费者的已删除站点 selector 与被组件库替代的重复基础样式已按证据清理；
 - 相关 TypeScript、Lint、测试、构建和浏览器验收通过；
 - 迁移后的旧 `.pwa-*` 样式只保留业务布局、消息渲染和品牌特有视觉；
 - 版本、升级和回滚方式已由项目文档记录。

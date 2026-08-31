@@ -1,10 +1,12 @@
 # PWA 自动化测试体系
 
-> 状态：待实施
+> 技术状态：Phase 1、2、4 的基础设施与覆盖当前有效；Phase 3 的完成标准尚未满足
 >
 > 创建日期：2026-08-29
 >
-> 适用范围：`site/` 中的浏览器 PWA；不改变 Relay、Pi Extension、Protocol v2 或生产部署契约。
+> 当前核对：2026-08-31；当前执行状态、跨计划顺序和切换门禁以 [Plan 68](68-pwa-ui-quality-roadmap.md) 为唯一真源
+>
+> 适用范围：`site/` 中的浏览器 PWA。Plan 66/67 原批次不改变 Relay、Pi Extension、Protocol v2 或生产部署契约；Plan 69 已在其独立范围内取代该跨端边界。
 
 ## 1. 背景
 
@@ -25,6 +27,18 @@ Remote Pi PWA 当前已经具备两类验证：
 
 这些问题需要真实 DOM、浏览器事件、焦点与 CSS 才能可靠验证。
 
+## 当前检查点
+
+当前实跑结果：
+
+- legacy：118/118 通过；Browser：75/75 通过；coverage：共 76 个 Vitest tests 通过；
+- Playwright desktop/mobile：10/10 通过；TypeScript、production build 与 `git diff --check` 通过；
+- 全量 `pnpm lint` 的唯一 error 是生成文件 `site/public/sw.js` 的 `@typescript-eslint/no-this-alias`；另有生成文件和既有 img warnings；
+- 当前有 31 个 legacy 测试文件和 2 个 `*.node.test.ts` 文件；其中 `crypto` 只有 1 个真实 Vitest test，`protocol` 仍导入 `node:test` 且含 3 个 cases；
+- 默认 `pnpm test` 只运行 legacy 与 Browser，未纳入 `test:unit`，因此不能作为 Node 测试已完成的证据。
+
+上述结果是本文件唯一的当前测试快照。下文出现的旧数字均为对应提交时的历史快照，不代表当前值。
+
 ## 2. 目标
 
 建立长期可维护的 PWA 自动化测试分层：
@@ -34,7 +48,7 @@ Remote Pi PWA 当前已经具备两类验证：
 3. 使用 Vitest Browser Mode + Playwright Chromium 运行 React 客户端组件测试；
 4. 使用 Playwright Test 运行完整 `/app` PWA 流程；
 5. 保留真实设备验证，只覆盖浏览器自动化难以可靠模拟的能力；
-6. 分阶段迁移现有 32 个测试文件，不进行一次性重写；
+6. 分阶段迁移初始基线中的 32 个测试文件，不进行一次性重写；实际范围以后续盘点为准；
 7. 让本地、Agent 和后续 CI 使用相同的稳定命令。
 
 ## 3. 非目标
@@ -368,7 +382,7 @@ SSR 测试继续覆盖初始结构，但不得把 SSR 断言表述为客户端�
 
 ## 11. 现有 Node 测试迁移
 
-当前基线：
+历史基线（计划创建时快照，非当前值）：
 
 - 18 个 `.test.ts`；
 - 14 个 `.test.tsx`；
@@ -542,6 +556,8 @@ src/**/*.node.test.*
 
 ### Phase 1：基础设施与确认 Modal 试点
 
+**技术状态：基础设施与试点已实现**
+
 预计修改：
 
 ```text
@@ -569,6 +585,8 @@ site/CLAUDE.md
 
 ### Phase 2：高风险交互组件
 
+**技术状态：高风险交互组件的 Browser 覆盖已实现**
+
 迁移 Rename、Settings、Session Drawer、Composer Menu 和 Mobile Menu 的客户端交互测试。
 
 验收：
@@ -579,17 +597,22 @@ site/CLAUDE.md
 
 ### Phase 3：统一 Node 测试 API
 
-分批迁移 18 个纯 TS 和 14 个 SSR 测试到 Vitest Node。
+**技术状态：完成标准尚未满足；何时执行以 Plan 68 为准**
+
+此前首批迁移的完成状态已被 Plan 69 的部分回退改变：当前仅保留 2 个 `*.node.test.ts` 文件，`crypto` 是 1 个真实 Vitest test，`protocol` 仍使用 `node:test` 并含 3 个 cases。下一批先盘点剩余 legacy 测试及直接消费者，再按纯 TypeScript、SSR 的既定分层逐批迁移；不因文件后缀而把仍使用 `node:test` 的测试计入 Vitest Node 完成量。
 
 验收：
 
-- 每批迁移前后测试数量和行为一致；
+- 每批迁移前后测试数量和行为一致，并明确 legacy、Vitest Node、Browser 三层各自数量；
 - 不改变 Protocol v2 fixture 语义；
+- `test:unit` 纳入默认 `pnpm test` 前，不能宣称默认测试覆盖所有测试层；
 - 所有 legacy 测试迁完后移除旧 runner。
 
 ### Phase 4：Playwright E2E
 
-建立隔离 `/app` E2E、IndexedDB fixture 和 Service Worker 流程。
+**技术状态：基础 E2E 已实现**
+
+已建立隔离 `/app` E2E、IndexedDB fixture 和 Service Worker 流程。当前 Playwright desktop/mobile 10/10 的通过结果见“当前检查点”；此前阶段记录中的 E2E 数字均为对应提交时的历史快照。
 
 验收：
 
@@ -655,24 +678,20 @@ site/CLAUDE.md
 本方案整体完成需要满足：
 
 - 新增组件交互测试统一使用 Vitest Browser Mode；
-- 现有 Node 测试统一迁移到 Vitest Node；
-- legacy `node:test` 入口已移除；
+- 现有 Node 测试统一迁移到 Vitest Node，legacy `node:test` 入口已移除；
+- 默认 `pnpm test` 纳入 Vitest Node 与 Browser，Package scripts 成为本地、Agent 和 CI 的单一测试入口；
 - PWA 核心 Overlay、Composer、Session、Settings 和 QR UI 有 Browser Mode 覆盖；
-- `/app` 具备隔离 Playwright E2E；
-- Package scripts 成为本地、Agent 和 CI 的单一测试入口；
-- Production build 与现有真实 Relay/Pi 验收继续保留；
+- `/app` 隔离 Playwright E2E 保持可运行；
+- Production build 与现有真实 Relay/Pi 验收继续保留；Plan 69 的 daemon、两个 interactive Pi、双 PWA profile、supervisor/child crash、runtime takeover 与 `/new` 完整真实矩阵须作为独立的最终跨端验收完成，不能由本计划的组件或基础 E2E 替代；
 - 测试层职责和剩余真实设备风险在 `site/CLAUDE.md` 中保持简明、准确。
 
-## 20. Phase 1 开始前检查清单
+## 20. Phase 3 技术检查清单
 
-- [ ] 确认当前 Node、pnpm 和 React/Next/Mantine 版本；
-- [ ] 核对精确依赖版本与 peer dependencies；
-- [ ] 确认 Playwright Chromium 是否已在共享缓存中可用；
-- [ ] 冻结 Phase 1 文件范围；
-- [ ] 记录现有测试数量和命令基线；
-- [ ] 验证 `postcss.config.mjs` 能被 Vite Browser Mode 使用；
-- [ ] 建立统一 PWA render helper；
-- [ ] 完成确认 Modal Browser 测试；
-- [ ] 运行 legacy tests、Vitest Browser、TypeScript、ESLint、build 和 diff check；
-- [ ] 独立审查配置、测试真实性和测试层边界；
-- [ ] 本地提交前确认未引入浏览器二进制或生成产物。
+Phase 1 的原始检查项已完成，不能再作为当前待办。当前执行状态、跨计划顺序和切换门禁只在 Plan 68 维护；以下仅是本计划 Phase 3 的技术检查项。
+
+- [ ] 盘点 31 个 legacy 文件与 2 个 `*.node.test.ts` 的实际 runner、测试数和直接 scripts 消费者；
+- [ ] 将 `protocol.node.test.ts` 的 runner/API 迁移为真实 Vitest Node，且不改变 3 个 cases 的语义；
+- [ ] 每个批次记录迁移前后的分层测试数量，避免把历史快照当作当前值；
+- [ ] 在修改默认测试入口前，确认 `test:unit` 的可靠运行及与 Browser/legacy 的组合顺序；
+- [ ] 迁移全部现有 legacy Node/SSR 测试后移除 legacy runner，并让默认 `pnpm test` 串行覆盖 Vitest Node 与 Browser；
+- [ ] 运行受影响层验证，并保留全量 lint 的生成文件 error 与既有 warnings 的区分。

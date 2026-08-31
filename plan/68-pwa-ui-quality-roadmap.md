@@ -4,6 +4,8 @@
 >
 > 创建日期：2026-08-29
 >
+> 更新日期：2026-08-31
+>
 > 适用范围：`site/` 中的 PWA UI、组件库迁移和自动化测试建设。
 
 ## 1. 文档职责
@@ -24,19 +26,21 @@
 
 ## 2. 当前检查点
 
-更新时间：2026-08-30
+更新时间：2026-08-31
 
 | 计划 | 阶段 | 状态 | 事实与出口条件 |
 |---|---|---|---|
-| Plan 67 | Phase 1：基础设施与确认 Modal 试点 | 已完成 | Vitest Node/Browser Mode、Chromium provider、Browser render harness 和确认操作测试已建立并通过验证。 |
-| Plan 67 | Phase 2：高风险交互组件 | 已完成 | Rename、Settings、Session Drawer、Composer、Mobile Menu、QR Scanner 和 Service Worker Notice UI 覆盖已完成；Browser 56/56，legacy 128/128，coverage 56/56，TypeScript、受影响 ESLint、production build 和 diff check 已通过。 |
-| Plan 66 | Phase 0–1 | 已完成 | Mantine 基础设施和 Overlay 迁移已完成。 |
-| Plan 66 | Phase 2：基础控件 | 已完成 | 项目 UI wrapper、生产消费者迁移、共享样式收敛和 44px/Select Browser 覆盖已完成；legacy 128/128、Browser/coverage 64/64、TypeScript、受影响 ESLint、production build、测试环境 QA 和独立审查通过。实现提交：`b06f15d`。 |
-| Plan 67 | Phase 3：统一 Node 测试 API | 已完成首批 | 4 个纯 TypeScript 测试文件、9 项测试已迁移到 Vitest Node；legacy 119/119、Node 9/9、Browser 64/64、coverage 73/73、TypeScript、受影响 ESLint、production build 和独立审查通过。实现提交：`88f875a`。 |
-| Plan 67 | Phase 4：`/app` E2E 基线 | 已完成 | 独立 Playwright Test 基线覆盖 production standalone 启动、IndexedDB 隔离 fixture、Settings、Session Drawer、Composer、清库确认、desktop/mobile viewport 和真实 Service Worker 注册。E2E 8/8，重复运行 16/16；TypeScript、受影响 ESLint、现有 Node/legacy/Browser/coverage、production build、diff check 和独立审查通过。实现提交：`79922cc`。 |
-| Plan 66 | Phase 3：业务组件收敛 | 已完成 | Pairing/Session 展示层、`PwaAppView` 展示编排、PWA 启动边界和非当前配对探测边界已抽取；当前会话连接、Session Selection 与 Timeline generation 按证据保留在 controller。Node 23/23、legacy 119/119、Browser 64/64、coverage 87/87、E2E 8/8、TypeScript、受影响 ESLint、production build、diff check 和独立审查通过。实现提交：`c5e3cce`、`7e8f35d`、`6785b64`、`f579ee7`。 |
-| Plan 66 | Phase 4：遗留站点移除与低收益组件评估 | 已完成 | 已移除遗留官网、文档、教程、法律页面、上游 OG image 及仅有消费者；`/` 改为服务端重定向到唯一产品路由 `/app`，以保持 Docker 根路径 healthcheck。Tabs 消费者已随遗留页面删除，迁移决策不再适用；ScrollArea、Tooltip、Popover 按证据保持现状。 |
-| Plan 69 | PWA Owner Relay/session 恢复与 v7 E2E fixture | 自动化已完成，真实跨端链路待持续验收 | Site 已实现 Relay 退避重连、重新认证/订阅、offline/online 门控、session reset/bye 恢复、稳定 channelId、stale socket/frame/request 防护；E2E fixture 已切换 `devices/endpoints/settings`。Site legacy 118/118、Browser 72/72、coverage 73/73、Playwright desktop/mobile 10/10、TypeScript 和受影响 ESLint 通过；test 环境部署与 `/app`、`/`、Service Worker、console/network smoke 通过。 |
+| Plan 67 | Phase 1：基础设施与确认 Modal 试点 | 已完成 | Vitest Node/Browser Mode、Chromium provider、Browser render harness 和确认操作测试已建立。 |
+| Plan 67 | Phase 2：高风险交互组件 | 已完成 | Rename、Settings、Session Drawer、Composer、Mobile Menu、QR Scanner 和 Service Worker Notice UI 的 Browser 覆盖已完成。 |
+| Plan 67 | Phase 3：统一 Node 测试 API | 进行中，当前优先 | Plan 69 部分回退了此前“首批完成”状态。当前有 31 个 legacy 文件和 2 个 `*.node.test.ts` 文件：`crypto` 仅有 1 个真实 Vitest test，`protocol` 仍导入 `node:test` 且含 3 个 cases；默认 `pnpm test` 未纳入 `test:unit`。完成条件尚未达成。 |
+| Plan 67 | Phase 4：`/app` E2E 基线 | 已完成 | 隔离 Playwright `/app` 基线、IndexedDB fixture、Settings、Session Drawer、Composer、清库确认、desktop/mobile viewport 与 Service Worker 注册覆盖已建立。 |
+| Plan 66 | Phase 0–2 | 已完成 | Mantine 基础设施、Overlay 和基础控件迁移当前有效完成。 |
+| Plan 66 | Phase 3：业务组件收敛 | 进行中 | Plan 69 已删除原 `PairingRecordCard`、`SessionList`、`PwaAppView`、startup 与 probes 边界；当前 `pwa-app.tsx` 约 748 行，须按 `device`/`endpoint` 模型重新收口。 |
+| Plan 66 | Phase 4：遗留站点移除与低收益组件评估 | 已完成 | 已移除遗留官网、文档、教程、法律页面、上游 OG image 及仅有消费者；`/` 服务端重定向到唯一产品路由 `/app`。 |
+| Plan 66 | Phase 5：清理与长期维护 | 待开始 | `globals.css` 约 2321 行；PWA 前保留大量已删除站点 selector，待 Phase 3 新模型边界稳定后按消费者证据清理。 |
+| Plan 69 | PWA Owner Relay/session 恢复与 v7 E2E fixture | 自动化已完成；完整真实矩阵未完成 | 已有真实配对/Relay 重连和历史恢复局部证据：offline/online 3 轮、直接关闭 WebSocket 2 轮，清本地 timeline 后均从远端恢复 2 条并回到 Connected。daemon、两个 interactive Pi、双 PWA profile、supervisor/child crash、runtime takeover 与 `/new` 的完整矩阵仍待验收。 |
+
+当前实跑验证：legacy 118/118、Browser 75/75、coverage 共 76 个 Vitest tests、Playwright desktop/mobile 10/10、TypeScript、production build 与 `git diff --check` 均通过。全量 `pnpm lint` 的唯一 error 是生成文件 `site/public/sw.js` 的 `@typescript-eslint/no-this-alias`；另有生成文件和既有 img warnings。旧段落中的测试数字仅为对应提交时历史快照，不代表当前值。
 
 当前已形成的 Plan 67 Phase 2 本地提交：
 
@@ -64,96 +68,54 @@ Plan 67 Phase 4 `/app` E2E 基线本地提交：
 
 - `79922cc`：建立独立 Playwright Test 配置、standalone server、IndexedDB fixture 及 desktop/mobile 关键流程覆盖。
 
-`plan/67-pwa-automated-testing.md` 保持原样和未跟踪状态，不作为本次调度文档变更的一部分。
+三份计划的当前状态与后续顺序以本轮同步内容为准；旧提交、测试数量和验收记录仅保留为历史快照。
 
-## 3. 执行顺序
+## 3. 后续执行顺序
 
-### 阶段 A：Plan 66 Phase 2 收口
+### 阶段 A：Plan 67 Phase 3 — 统一 Node 测试 API
 
-**状态：已完成（2026-08-29）**
+**状态：进行中；首先执行**
 
-工作范围：
-
-- 全面盘点基础控件迁移消费者；
-- 核对组件库已覆盖行为与残留 `.pwa-*` 基础样式；
-- 验证 44px 触摸目标、ARIA、状态文本、移动布局和业务行为不变；
-- 只修复直接阻塞 Phase 2 验收的缺口；
-- 完成独立验证后，将 Plan 66 Phase 2 标记为已完成。
+先盘点 31 个 legacy 文件与 2 个 `*.node.test.ts` 文件的真实 runner、测试数量和 scripts 消费者。优先把仍导入 `node:test` 的 `protocol.node.test.ts` 迁移为真正的 Vitest Node 测试，并逐批处理纯 TypeScript 与 SSR 测试。每批必须保持测试语义与数量可核对；在 `test:unit` 纳入默认 `pnpm test` 前，不得将默认测试表述为覆盖所有层。
 
 切换门禁：
 
-- 盘点结果明确，没有遗漏的 P0/P1 基础控件；
-- 受影响 TypeScript、ESLint、测试、production build 和 `git diff --check` 通过；
-- 迁移范围形成独立、可回退的本地提交；
-- 未改变 Relay、Protocol v2、IndexedDB 数据模型和 PWA 业务语义。
+- 31 个 legacy 文件与 2 个 `*.node.test.ts` 文件的 runner、数量和直接 scripts 消费者均已核对；
+- 现有 legacy Node/SSR 测试全部迁入 Vitest Node，源码不再导入 `node:test`，且迁移前后测试语义与数量可核对；
+- legacy runner 已移除，默认 `pnpm test` 明确串行运行 Vitest Node 与 Browser；
+- Node、Browser、coverage、Playwright、TypeScript、受影响 ESLint、production build 和 `git diff --check` 通过；
+- 全量 lint 的生成文件 error 与既有 warnings 仍被明确区分。
 
-### 阶段 B：Plan 67 Phase 3 首批 Node 迁移
+### 阶段 B：Plan 66 Phase 3 — 按 `device`/`endpoint` 模型重新收口
 
-**状态：已完成（2026-08-29）**
+**状态：待阶段 A 完成后继续**
 
-首批范围固定为：
-
-```text
-site/src/lib/remote-pi/encoding.test.ts  → encoding.node.test.ts
-site/src/lib/remote-pi/crypto.test.ts    → crypto.node.test.ts
-site/src/lib/remote-pi/pairing.test.ts  → pairing.node.test.ts
-site/src/lib/remote-pi/protocol.test.ts → protocol.node.test.ts
-```
-
-只转换测试 runner 和断言 API：
-
-- `node:test` → Vitest `test`；
-- `node:assert/strict` → Vitest `expect`；
-- 保持输入、期望值、异常语义和测试数量不变；
-- 不同时迁移大型 fixture、Timeline、数据库或 SSR 组件测试。
+Plan 69 已删除旧 `PairingRecordCard`、`SessionList`、`PwaAppView`、startup 与 probes 边界。基于当前约 748 行的 `pwa-app.tsx`，先确认 `device`/`endpoint` 模型下稳定的展示编排、启动与探测所有权，再抽取有独立 props/view model 证据的最小边界；不得恢复已删除的旧结构。
 
 切换门禁：
 
-- Node project 9/9 通过；
-- legacy 测试从 128 降为 119；
-- 总测试量保持 192：119 legacy + 9 Node + 64 Browser；
-- coverage、TypeScript、受影响 ESLint、production build 和 `git diff --check` 通过；
-- 独立只读审查确认迁移未改变测试语义。
+- `device`/`endpoint`、连接、Session 与 Timeline 的直接消费者和所有权已盘点；
+- 业务组件只接收稳定 props/view model；
+- `PwaApp` 的 UI 编排与领域逻辑边界有可核对改善；
+- 每个结构调整批次独立验证。
 
-### 阶段 C：Plan 67 Phase 4 `/app` E2E 基线
+### 阶段 C：Plan 66 Phase 5 — CSS 清理与长期维护
 
-**状态：已完成（2026-08-29）**
+**状态：待阶段 B 完成后开始**
 
-建立最小 Playwright Test 基线，覆盖：
-
-- `/app` 启动和 PWA Provider 集成；
-- IndexedDB 隔离 fixture；
-- Settings、Session Drawer、Composer 和确认流程的完整应用路径；
-- Desktop 与移动 viewport；
-- 可自动化的 Service Worker 行为。
-
-真实 Relay/Pi 链路、真实 Service Worker lifecycle、摄像头授权、Standalone 和软键盘仍按 Plan 67 的 E2E/真实设备边界逐步加入，不在基础 E2E 建设中扩大协议或生产部署范围。
+在 `globals.css` 约 2321 行的当前基线上，按实际消费者清理 PWA 前无消费者的已删除站点 selector 与已被组件库替代的重复基础样式；保留 PWA 业务布局、消息流、终端视觉和 safe-area 特殊样式。不得重新纳入已删除官网页面或 Tabs。
 
 切换门禁：
 
-- Chromium E2E 可重复运行且数据隔离；
-- 不执行真实用户数据删除或生产清库；
-- `/app` 关键路径有稳定失败诊断；
-- 真实设备仍保留 Safari/Standalone、摄像头、软键盘和安全区验收。
+- 每个删除的 selector 均有无消费者证据；
+- PWA token、Mantine theme 和保留的业务 CSS 边界可核对；
+- 受影响 UI、测试、TypeScript、production build 和 `git diff --check` 通过。
 
-### 阶段 D：Plan 66 Phase 3 业务组件收敛
+### 阶段 D：Plan 69 — 完整真实矩阵
 
-**状态：已完成（2026-08-30）**
+**状态：最后执行**
 
-已按 Plan 66 的范围完成 `PairingRecordCard`、`SessionList`/`SessionRow`、`PwaAppView`、PWA 启动边界和非当前配对探测边界抽取。连接、Session Selection 与 Timeline generation 的进一步 hook 拆分没有足够独立所有权证据，保留在 controller，不作为阶段未完成项。
-
-切换门禁：
-
-- Pairing、Session、Timeline、Relay 和 IndexedDB 行为回归通过；
-- 业务组件只接收整理后的 props/view model；
-- `PwaApp` 的 UI 编排与领域逻辑边界有可核对的改善；
-- 每个结构调整批次独立提交和验证。
-
-### 阶段 E：Plan 66 Phase 5 清理与长期维护
-
-**当前优先级：待开始**
-
-Phase 4 已完成遗留站点移除；后续只在独立批次按证据清理 `globals.css` 中已无消费者的遗留样式，并维护 PWA token、Mantine theme 与升级验证。不得把已删除的官网页面或 Tabs 迁移重新纳入范围。
+Plan 69 自动化已完成，且已有 offline/online 三轮和直接关闭 WebSocket 两轮的局部真实恢复证据：清本地 timeline 后均从远端恢复 2 条并回到 Connected。最后才执行 daemon、两个 interactive Pi、双 PWA profile、supervisor/child crash、runtime takeover 与 `/new` 的完整真实矩阵；该矩阵未完成前，不得宣称跨端恢复验收完成。
 
 ## 4. 调度规则
 
@@ -180,12 +142,15 @@ cd .. && git diff --check
 
 ```bash
 cd site && pnpm test
+cd site && pnpm test:unit
 cd site && pnpm test:coverage
 cd site && pnpm exec tsc --noEmit --pretty false
 cd site && pnpm lint
 cd site && pnpm build
 cd .. && git diff --check
 ```
+
+当前 `pnpm test` 只运行 legacy 与 Browser；阶段冻结前必须显式运行 `pnpm test:unit`，直到默认 script 纳入该项目。
 
 全量 lint 若继续命中生成文件 `site/public/sw.js` 的既有 `@typescript-eslint/no-this-alias` 错误，必须保留该事实，不通过修改生成文件规避，并单独确认受影响文件没有新增错误。
 
@@ -200,7 +165,7 @@ cd .. && git diff --check
 
 本调度不改变以下边界：
 
-- 不修改 Relay、Pi Extension、Protocol v2、IndexedDB 数据模型或生产部署契约；
+- Plan 66/67 原批次不修改 Relay、Pi Extension、Protocol v2、IndexedDB 数据模型或生产部署契约；Plan 69 已在其独立范围内取代该限制；
 - 不把 Browser Mode 作为 Playwright `/app` E2E 或真实设备验收的替代品；
 - 不为 Settings 保存失败擅自定义新的 UI、回滚或错误展示语义；
 - 不为真实 QR 摄像头、Service Worker lifecycle、Standalone 和软键盘能力制造虚假的组件测试结论；
@@ -214,6 +179,6 @@ cd .. && git diff --check
 阶段完成时按以下顺序更新：
 
 1. 先把仍有效的技术事实同步到 Plan 66 或 Plan 67 的对应章节；
-2. 再在本文档更新阶段状态、实际提交和验证结果；
-3. 最后切换下一阶段，并明确其前置条件；
+2. 再在本文档更新阶段状态、当前实跑结果与历史快照的区分；
+3. 按“Plan 67 Phase 3 → Plan 66 Phase 3 新模型收口 → Plan 66 Phase 5 → Plan 69 完整真实矩阵”切换下一阶段，并明确其前置条件；
 4. 不在三份文档中重复维护同一份详细测试或实现清单。
