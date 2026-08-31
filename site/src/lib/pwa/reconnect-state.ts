@@ -17,16 +17,26 @@ export class ReconnectState {
   }
 
   replacementBye(): void {
+    this.connectionToken += 1;
     this.terminal = false;
+    this.scheduled = false;
   }
 
   terminalBye(): void {
+    this.connectionToken += 1;
     this.terminal = true;
     this.scheduled = true;
   }
 
   userRecover(): void {
+    this.connectionToken += 1;
     this.terminal = false;
+    this.scheduled = false;
+  }
+
+  /** Invalidates pending callbacks without changing whether recovery is terminal. */
+  cancel(): void {
+    this.connectionToken += 1;
     this.scheduled = false;
   }
 

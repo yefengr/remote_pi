@@ -33,6 +33,7 @@ export class RelayClient {
   private authenticated = false;
   private connectPromise: Promise<void> | null = null;
   private connectReject: ((reason?: unknown) => void) | null = null;
+  private connectionGeneration = 0;
   private currentState: RelayClientState = "idle";
   private readonly listeners: { [K in EventName]: Set<EventCallback<K>> } = {
     state: new Set(), authenticated: new Set(), route: new Set(), control: new Set(), error: new Set(), close: new Set(),
@@ -49,33 +50,44 @@ export class RelayClient {
     if (this.currentState === "open") return;
     if (this.connectPromise) return this.connectPromise;
     this.setState("connecting");
-    this.connectPromise = new Promise<void>((resolve, reject) => {
+    const generation = ++this.connectionGeneration;
+    const promise = new Promise<void>((resolve, reject) => {
       this.connectReject = reject;
       const factory = this.options.webSocketFactory ?? ((url: string) => new WebSocket(url));
       let socket: WebSocketLike;
-      try { socket = factory(toWebSocketUrl(this.options.relayUrl)); } catch (error) { this.clearConnectionState(); this.setState("closed"); reject(error); return; }
+      try { socket = factory(toWebSocketUrl(this.options.relayUrl)); } catch (error) { this.setState("closed"); reject(error); return; }
       this.socket = socket;
       this.authenticated = false;
+      const isCurrent = () => this.socket === socket && this.connectionGeneration === generation;
       socket.onopen = () => {
+        if (!isCurrent()) return;
         this.setState("authenticating");
-        try { socket.send(JSON.stringify({ type: "hello", protocol_version: 2, role: "owner", pubkey: this.ownerId })); } catch (error) { this.failConnection(error, reject); }
+        try { socket.send(JSON.stringify({ type: "hello", protocol_version: 2, role: "owner", pubkey: this.ownerId })); } catch (error) { this.failConnection(socket, error, reject); }
       };
-      socket.onmessage = (event) => { void this.handleMessage(event.data, resolve, reject); };
+      socket.onmessage = (event) => { if (isCurrent()) void this.handleMessage(socket, generation, event.data, resolve, reject); };
       socket.onerror = () => {
+        if (!isCurrent()) return;
         const error = new Error("Relay WebSocket error");
-        this.emit("error", error);
-        if (!this.authenticated) this.failConnection(error, reject);
+        this.failConnection(socket, error, reject);
       };
       socket.onclose = (event) => {
+        if (!isCurrent()) return;
         const wasAuthenticated = this.authenticated;
         const pendingReject = this.connectReject;
-        this.clearConnectionState();
+        this.clearSocketState(socket);
+        this.connectionGeneration += 1;
         this.setState("closed");
         this.emit("close", event);
         if (!wasAuthenticated) pendingReject?.(new Error("Relay closed during authentication"));
       };
     });
-    try { await this.connectPromise; } finally { this.connectPromise = null; this.connectReject = null; }
+    this.connectPromise = promise;
+    try { await promise; } finally {
+      if (this.connectPromise === promise) {
+        this.connectPromise = null;
+        this.connectReject = null;
+      }
+    }
   }
   sendRoute(route: RouteFrame): boolean {
     if (!this.socket || this.socket.readyState !== OPEN || !this.authenticated) return false;
@@ -92,38 +104,50 @@ export class RelayClient {
   close(code = 1000, reason = "client closing"): void {
     const socket = this.socket;
     const reject = this.connectReject;
-    this.clearConnectionState();
+    this.connectionGeneration += 1;
+    this.clearSocketState(socket);
+    this.connectReject = null;
+    this.connectPromise = null;
     this.setState(socket ? "closing" : "closed");
     reject?.(new Error("Relay connection closed by client"));
     if (!socket) return;
     try { socket.close(code === 1002 ? APPLICATION_ERROR_CLOSE_CODE : code, truncateUtf8(reason, 123)); } catch (error) { this.emit("error", error instanceof Error ? error : new Error(String(error))); } finally { this.setState("closed"); }
   }
-  private async handleMessage(raw: unknown, resolve: () => void, reject: (reason?: unknown) => void): Promise<void> {
+  private async handleMessage(socket: WebSocketLike, generation: number, raw: unknown, resolve: () => void, reject: (reason?: unknown) => void): Promise<void> {
     const text = await toText(raw);
-    if (text === undefined) return;
+    if (text === undefined || this.socket !== socket || this.connectionGeneration !== generation) return;
     if (!this.authenticated) {
       const challenge = decodeChallenge(text);
-      if (!challenge) return this.failConnection(new Error("Expected Relay challenge"), reject);
+      if (!challenge) return this.failConnection(socket, new Error("Expected Relay challenge"), reject);
       try {
-        this.socket?.send(JSON.stringify({ type: "auth", sig: await signChallenge(this.options.identity.privateKey, challenge.nonce) }));
+        socket.send(JSON.stringify({ type: "auth", sig: await signChallenge(this.options.identity.privateKey, challenge.nonce) }));
+        if (this.socket !== socket || this.connectionGeneration !== generation) return;
         this.authenticated = true;
         this.setState("open");
         this.emit("authenticated");
         resolve();
-      } catch (error) { this.failConnection(error, reject); }
+      } catch (error) { this.failConnection(socket, error, reject); }
       return;
     }
     const frame = decodeRelayFrame(parseJson(text));
     if (frame?.kind === "route") this.emit("route", frame.route);
     else if (frame?.kind === "control") this.emit("control", frame.frame);
   }
-  private failConnection(error: unknown, reject: (reason?: unknown) => void): void {
+  private failConnection(socket: WebSocketLike, error: unknown, reject: (reason?: unknown) => void): void {
+    if (this.socket !== socket) return;
     const normalized = error instanceof Error ? error : new Error(String(error));
-    const socket = this.socket;
-    this.clearConnectionState(); this.setState("closed"); this.emit("error", normalized); reject(normalized);
-    try { socket?.close(APPLICATION_ERROR_CLOSE_CODE, truncateUtf8(normalized.message, 123)); } catch (closeError) { this.emit("error", closeError instanceof Error ? closeError : new Error(String(closeError))); }
+    this.connectionGeneration += 1;
+    this.clearSocketState(socket);
+    this.setState("closed");
+    this.emit("error", normalized);
+    reject(normalized);
+    try { socket.close(APPLICATION_ERROR_CLOSE_CODE, truncateUtf8(normalized.message, 123)); } catch (closeError) { this.emit("error", closeError instanceof Error ? closeError : new Error(String(closeError))); }
   }
-  private clearConnectionState(): void { this.authenticated = false; this.socket = null; this.connectPromise = null; this.connectReject = null; }
+  private clearSocketState(socket: WebSocketLike | null): void {
+    if (socket !== null && this.socket !== socket) return;
+    this.authenticated = false;
+    this.socket = null;
+  }
   private setState(state: RelayClientState): void { if (this.currentState !== state) { this.currentState = state; this.emit("state", state); } }
   private emit<K extends EventName>(event: K, ...args: Parameters<RelayClientEventMap[K]>): void { for (const callback of this.listeners[event]) (callback as (...values: Parameters<RelayClientEventMap[K]>) => void)(...args); }
 }

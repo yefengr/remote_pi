@@ -23,6 +23,8 @@ import { getImageOutputMime, prepareImageAttachment } from "@/lib/pwa/image-uplo
 import { HistoryWindowAssembler, TimelineEventFragmentAssembler } from "@/lib/pwa/timeline-transfer";
 import { commitRealtime, loadRecent, replaceRecentWindow, TimelineStoreConflictError } from "@/lib/pwa/timeline-store";
 import { refreshPwaApp } from "@/lib/pwa/service-worker-update";
+import { ReconnectState, type ReconnectTrigger } from "@/lib/pwa/reconnect-state";
+import { recoverServerFrame } from "@/lib/pwa/server-frame-recovery";
 import type { ControlFrame, OwnerKeyPair, ThinkingLevel, WireImage, WireModel } from "@/lib/remote-pi/types";
 import type { ClientFrame, ServerFrame } from "@/lib/remote-pi/protocol-v2/frames";
 import type { TimelineEvent } from "@/lib/remote-pi/protocol-v2/schema";
@@ -48,6 +50,18 @@ const RETRY_DELAYS_MS = [1000, 2000, 5000, 10000, 30000] as const;
 type PairState = "idle" | "scanning" | "pairing";
 type StartupState = "loading" | "ready" | "error";
 type ImageAttachment = { source: Blob; previewUrl: string; label: string };
+
+function sameTimelineScope(current: TimelineScope | null, expected: TimelineScope): boolean {
+  return current !== null
+    && current.deviceId === expected.deviceId
+    && current.endpointId === expected.endpointId
+    && current.runtimeInstanceId === expected.runtimeInstanceId
+    && current.sessionId === expected.sessionId
+    && current.historyGeneration === expected.historyGeneration
+    && current.selfSenderRef === expected.selfSenderRef
+    && current.channelId === expected.channelId;
+}
+
 type ComposerCommandRequest =
   | { action: "session_new" | "session_compact" }
   | { action: "model_set"; provider: string; modelId: string }
@@ -110,6 +124,8 @@ export function PwaApp() {
   const [activeEndpointId, setActiveEndpointId] = useState<string | null>(null);
   const [connection, setConnection] = useState<ConnectionViewState>("offline");
   const [retryAttempt, setRetryAttempt] = useState(0);
+  const [relayConnectionGeneration, setRelayConnectionGeneration] = useState(0);
+  const [sessionRestartToken, setSessionRestartToken] = useState(0);
   const [relayUrl, setRelayUrl] = useState(DEFAULT_RELAY);
   const [timelineItems, setTimelineItems] = useState<TimelineViewItem[]>([]);
   const [lastSyncedAt, setLastSyncedAt] = useState<number>();
@@ -135,18 +151,25 @@ export function PwaApp() {
   const [startupError, setStartupError] = useState<StartupError | null>(null);
   const [followingOutput, setFollowingOutput] = useState(true);
   const [unreadOutput, setUnreadOutput] = useState(0);
+  const [realtimeOutputVersion, setRealtimeOutputVersion] = useState(0);
 
   const devicesRef = useRef(devices);
   const endpointsRef = useRef(endpoints);
   const endpointRuntimeHistoryRef = useRef(new Map<string, Set<string>>());
+  const endpointPersistEpochRef = useRef(0);
   const endpointPersistChainRef = useRef(Promise.resolve());
   const activeDeviceIdRef = useRef(activeDeviceId);
-  const activeEndpointIdRef = useRef(activeEndpointId);
   const relayRef = useRef<RelayClient | null>(null);
+  const relayReconnectNowRef = useRef<(() => void) | null>(null);
   const channelRef = useRef<PeerChannel | null>(null);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const intentionalRelayCloseRef = useRef(false);
+  const relayReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectionGenerationRef = useRef(0);
   const retryAttemptRef = useRef(0);
+  const sessionChannelIdRef = useRef(id());
+  const sessionRecoveryStateRef = useRef(new ReconnectState());
+  const sessionIdentityRef = useRef<string | null>(null);
+  const onlineRef = useRef(typeof navigator === "undefined" || navigator.onLine);
   const channelContextRef = useRef<ConnectionContext | null>(null);
   const timelineRuntimeRef = useRef(new TimelineRuntime());
   const historyAssemblerRef = useRef<HistoryWindowAssembler | null>(null);
@@ -154,21 +177,29 @@ export function PwaApp() {
   const fragmentAssemblerRef = useRef<TimelineEventFragmentAssembler | null>(null);
   const realtimeJournalRef = useRef(new Map<string, TimelineEvent>());
   const helloRequestRef = useRef<string | null>(null);
+  const modelRequestRef = useRef<string | null>(null);
   const confirmPendingRef = useRef(false);
   const pendingActionRef = useRef<{ id: string; action: ComposerCommandAction } | null>(null);
   const stopRequestIdRef = useRef<string | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const bottomSentinelRef = useRef<HTMLDivElement | null>(null);
+  const followScrollLockRef = useRef(false);
+  const followingOutputRef = useRef(followingOutput);
+  const realtimeOutputKeysRef = useRef(new Set<string>());
 
   useEffect(() => { devicesRef.current = devices; }, [devices]);
   useEffect(() => { endpointsRef.current = endpoints; }, [endpoints]);
   useEffect(() => { activeDeviceIdRef.current = activeDeviceId; }, [activeDeviceId]);
-  useEffect(() => { activeEndpointIdRef.current = activeEndpointId; }, [activeEndpointId]);
+  useEffect(() => { followingOutputRef.current = followingOutput; }, [followingOutput]);
   useEffect(() => () => { if (attachment) URL.revokeObjectURL(attachment.previewUrl); }, [attachment]);
 
   const activeDevice = useMemo(() => devices.find((device) => device.id === activeDeviceId) ?? null, [activeDeviceId, devices]);
   const activeEndpoint = useMemo(() => activeDevice && activeEndpointId ? endpoints.find((endpoint) => endpoint.deviceId === activeDevice.deviceId && endpoint.endpointId === activeEndpointId) ?? null : null, [activeDevice, activeEndpointId, endpoints]);
   const activeThinking = useMemo(() => safeThinkingLevel(activeEndpoint?.thinking), [activeEndpoint?.thinking]);
+  const sessionDeviceId = activeDevice?.deviceId ?? null;
+  const sessionEndpointId = activeEndpoint?.endpointId ?? null;
+  const sessionRuntimeInstanceId = activeEndpoint?.runtimeInstanceId ?? null;
+  const sessionOnline = activeEndpoint?.online === true;
   const pairingPresence = useMemo<Record<string, PairingPresence>>(() => Object.fromEntries(devices.map((device) => {
     const deviceEndpoints = endpoints.filter((endpoint) => endpoint.deviceId === device.deviceId);
     const onlineEndpoints = deviceEndpoints.filter((endpoint) => endpoint.online).length;
@@ -179,10 +210,31 @@ export function PwaApp() {
     setTimelineItems(change.items);
     for (const frame of change.observed) channelRef.current?.send(frame);
   }, []);
+  const resetOutputFollowing = useCallback(() => {
+    realtimeOutputKeysRef.current.clear();
+    followingOutputRef.current = true;
+    setFollowingOutput(true);
+    setUnreadOutput(0);
+  }, []);
+  const receiveRealtimeOutput = useCallback((key: string) => {
+    if (followingOutputRef.current) {
+      setRealtimeOutputVersion((version) => version + 1);
+      return;
+    }
+    if (realtimeOutputKeysRef.current.has(key)) return;
+    realtimeOutputKeysRef.current.add(key);
+    setUnreadOutput((count) => count + 1);
+  }, []);
+  useEffect(() => {
+    if (realtimeOutputVersion === 0 || !followingOutputRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      const list = messageListRef.current;
+      if (followingOutputRef.current && list) list.scrollTo({ top: list.scrollHeight, behavior: "auto" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [realtimeOutputVersion]);
   const clearSessionConnection = useCallback(() => {
     connectionGenerationRef.current += 1;
-    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-    reconnectTimerRef.current = null;
     channelRef.current?.close();
     channelRef.current = null;
     channelContextRef.current = null;
@@ -191,6 +243,7 @@ export function PwaApp() {
     fragmentAssemblerRef.current = null;
     realtimeJournalRef.current.clear();
     helloRequestRef.current = null;
+    modelRequestRef.current = null;
     pendingActionRef.current = null;
     stopRequestIdRef.current = null;
     setPendingAction(null);
@@ -200,29 +253,53 @@ export function PwaApp() {
     setCurrentModel(null);
     setNextBefore(null);
     setLoadingEarlier(false);
+    resetOutputFollowing();
     applyTimelineChange(timelineRuntimeRef.current.markDisconnected());
-  }, [applyTimelineChange]);
-  const scheduleReconnect = useCallback(() => {
-    const device = devicesRef.current.find((candidate) => candidate.id === activeDeviceIdRef.current);
-    const endpoint = device && endpointsRef.current.find((candidate) => candidate.deviceId === device.deviceId && candidate.endpointId === activeEndpointIdRef.current && candidate.online);
-    if (!device || !endpoint || reconnectTimerRef.current || retryAttemptRef.current >= RETRY_DELAYS_MS.length || !navigator.onLine) return;
-    const attempt = ++retryAttemptRef.current;
-    setRetryAttempt(attempt);
-    setConnection("retrying");
-    reconnectTimerRef.current = setTimeout(() => {
-      reconnectTimerRef.current = null;
-      setActiveEndpointId(endpoint.endpointId);
-    }, RETRY_DELAYS_MS[attempt - 1]);
-  }, []);
+  }, [applyTimelineChange, resetOutputFollowing]);
+  const restartSession = useCallback(() => {
+    sessionRecoveryStateRef.current.replacementBye();
+    clearSessionConnection();
+    if (!onlineRef.current) { setConnection("no_network"); return; }
+    setConnection("connecting");
+    setSessionRestartToken((token) => token + 1);
+  }, [clearSessionConnection]);
+  const disconnectSession = useCallback(() => {
+    sessionRecoveryStateRef.current.terminalBye();
+    clearSessionConnection();
+    setConnection(onlineRef.current ? "offline" : "no_network");
+  }, [clearSessionConnection]);
+  const retryCurrentSession = useCallback(() => {
+    sessionRecoveryStateRef.current.userRecover();
+    clearSessionConnection();
+    if (!onlineRef.current) { setConnection("no_network"); return; }
+    const relay = relayRef.current;
+    if (!relay || relay.state !== "open") {
+      setConnection("connecting");
+      relayReconnectNowRef.current?.();
+      return;
+    }
+    setConnection("connecting");
+    setSessionRestartToken((token) => token + 1);
+  }, [clearSessionConnection]);
 
   const persistEndpoints = useCallback((deviceId: string, next: PwaEndpointRecord[]) => {
+    const epoch = endpointPersistEpochRef.current;
     const operation = endpointPersistChainRef.current.then(async () => {
+      if (epoch !== endpointPersistEpochRef.current) return;
+      const database = getPwaDatabase();
+      const device = await database.devices.get(makePwaDeviceId(deviceId));
+      if (!device || epoch !== endpointPersistEpochRef.current) return;
       const persisted = next.map((endpoint) => { const record = { ...endpoint }; delete record.online; return record; });
-      await getPwaDatabase().endpoints.bulkPut(persisted);
+      await database.endpoints.bulkPut(persisted);
+      if (epoch !== endpointPersistEpochRef.current) return;
       setEndpoints((current) => mergeEndpoints(current.filter((endpoint) => endpoint.deviceId !== deviceId), next));
     });
     endpointPersistChainRef.current = operation.catch(() => undefined);
     return operation;
+  }, []);
+  const invalidateEndpointPersistence = useCallback(async () => {
+    endpointPersistEpochRef.current += 1;
+    await endpointPersistChainRef.current;
   }, []);
   const applyControl = useCallback((frame: ControlFrame) => {
     const device = devicesRef.current.find((candidate) => candidate.deviceId === frame.device_id);
@@ -255,44 +332,71 @@ export function PwaApp() {
   const handleServerFrame = useCallback((frame: ServerFrame, context: ConnectionContext) => {
     const current = channelContextRef.current;
     if (!current || current.generation !== context.generation || current.deviceId !== context.deviceId || current.endpointId !== context.endpointId || current.runtimeInstanceId !== context.runtimeInstanceId || channelRef.current !== context.channel || relayRef.current !== context.relay) return;
+    if (frame.type === "reset" || frame.type === "bye") {
+      const scope = timelineRuntimeRef.current.currentScope;
+      if (!scope || scope.sessionId !== frame.session_id) return;
+      if (frame.type === "bye" && scope.historyGeneration !== frame.history_generation) return;
+    }
+    const recoveryAction = recoverServerFrame(frame, {
+      invalidateScope: () => applyTimelineChange(timelineRuntimeRef.current.invalidateScope()),
+      rehello: restartSession,
+      reconnect: restartSession,
+      disconnect: disconnectSession,
+    });
+    if (recoveryAction !== "ignore") return;
     if (frame.type === "session_ready") {
       if (frame.in_reply_to !== helloRequestRef.current) return;
       helloRequestRef.current = null;
       const scope: TimelineScope = { deviceId: context.deviceId, endpointId: context.endpointId, runtimeInstanceId: context.runtimeInstanceId, sessionId: frame.session_id, historyGeneration: frame.history_generation, selfSenderRef: frame.self_sender_ref, channelId: context.channel.channelId };
+      resetOutputFollowing();
       applyTimelineChange(timelineRuntimeRef.current.setScope(scope));
       fragmentAssemblerRef.current = new TimelineEventFragmentAssembler({ session_id: scope.sessionId, history_generation: scope.historyGeneration });
       const historyRequestId = id();
       historyModeRef.current = "recent";
       historyAssemblerRef.current = new HistoryWindowAssembler(historyRequestId, { session_id: scope.sessionId, history_generation: scope.historyGeneration });
-      void loadRecent(scope).then((cached) => { if (timelineRuntimeRef.current.currentScope?.runtimeInstanceId === scope.runtimeInstanceId) applyTimelineChange(timelineRuntimeRef.current.replaceHistory(cached)); }).catch(() => setError("Could not read local history."));
+      void loadRecent(scope).then((cached) => { if (sameTimelineScope(timelineRuntimeRef.current.currentScope, scope)) applyTimelineChange(timelineRuntimeRef.current.replaceHistory(cached)); }).catch(() => setError("Could not read local history."));
       context.channel.send({ protocol_version: 2, type: "session_sync", id: historyRequestId, channel_id: scope.channelId, history_generation: scope.historyGeneration, before: null, limit: 5 });
       const modelRequestId = id();
+      modelRequestRef.current = modelRequestId;
       context.channel.send({ protocol_version: 2, type: "list_models", id: modelRequestId, channel_id: scope.channelId, history_generation: scope.historyGeneration });
       setConnection("online");
       return;
     }
-    if (frame.type === "models_list") { setModels(frame.models); setCurrentModel(frame.current ?? null); setVisionAvailable(frame.current?.vision ?? null); return; }
+    if (frame.type === "models_list") {
+      if (frame.in_reply_to !== modelRequestRef.current) return;
+      modelRequestRef.current = null;
+      setModels(frame.models); setCurrentModel(frame.current ?? null); setVisionAvailable(frame.current?.vision ?? null); return;
+    }
     if (frame.type === "action_ok" || frame.type === "action_error") {
       if (pendingActionRef.current?.id !== frame.in_reply_to) return;
       pendingActionRef.current = null; setPendingAction(null);
       if (frame.type === "action_error") setError(frame.error);
       return;
     }
-    if (frame.type === "cancelled") { stopRequestIdRef.current = null; setStopRequestId(null); return; }
-    if (frame.type === "reset") { applyTimelineChange(timelineRuntimeRef.current.invalidateScope()); clearSessionConnection(); scheduleReconnect(); return; }
+    if (frame.type === "cancelled") {
+      if (frame.in_reply_to !== stopRequestIdRef.current) return;
+      stopRequestIdRef.current = null; setStopRequestId(null); return;
+    }
     const changed = timelineRuntimeRef.current.receive(frame);
     if (frame.type === "protocol_error") setError(frame.message);
     if (frame.type === "timeline_event_fragment") {
       const scope = timelineRuntimeRef.current.currentScope;
       if (!scope) return;
       const result = (fragmentAssemblerRef.current ??= new TimelineEventFragmentAssembler({ session_id: scope.sessionId, history_generation: scope.historyGeneration })).accept(frame);
-      if (result.status === "complete") { realtimeJournalRef.current.set(result.event.event_id, result.event); applyTimelineChange(timelineRuntimeRef.current.commit(result.event)); void commitRealtime(scope, [result.event]).catch(() => setError("Could not update local history.")); }
+      if (result.status === "complete") {
+        if (result.event.kind === "assistant" || result.event.kind === "tool" || result.event.kind === "provider_error") receiveRealtimeOutput(result.event.group_id);
+        realtimeJournalRef.current.set(result.event.event_id, result.event);
+        applyTimelineChange(timelineRuntimeRef.current.commit(result.event));
+        void commitRealtime(scope, [result.event]).catch(() => setError("Could not update local history."));
+      }
       return;
     }
     if (frame.type === "timeline_event") {
+      if (frame.event.kind === "assistant" || frame.event.kind === "tool" || frame.event.kind === "provider_error") receiveRealtimeOutput(frame.event.group_id);
       const scope = timelineRuntimeRef.current.currentScope;
       if (scope) { realtimeJournalRef.current.set(frame.event.event_id, frame.event); void commitRealtime(scope, [frame.event]).catch((writeError) => { setError(writeError instanceof TimelineStoreConflictError ? "Local timeline changed unexpectedly." : "Could not update local history."); }); }
     }
+    if (frame.type === "timeline_partial") receiveRealtimeOutput(frame.group_id);
     if (frame.type === "session_history_chunk") {
       const result = historyAssemblerRef.current?.accept(frame);
       if (result?.status === "complete") {
@@ -308,7 +412,7 @@ export function PwaApp() {
       return;
     }
     applyTimelineChange(changed);
-  }, [applyTimelineChange, clearSessionConnection, scheduleReconnect]);
+  }, [applyTimelineChange, disconnectSession, receiveRealtimeOutput, resetOutputFollowing, restartSession]);
 
   useEffect(() => {
     let cancelled = false;
@@ -351,37 +455,160 @@ export function PwaApp() {
 
   useEffect(() => {
     if (!identity || startupState !== "ready" || devices.length === 0) return;
+    let cancelled = false;
+    let activeToken = 0;
+    const controller = new ReconnectState();
     const relay = new RelayClient({ relayUrl, identity });
     relayRef.current = relay;
+    let connectRelay: (token: number) => void = () => undefined;
+    const scheduleRelayReconnect = (trigger: ReconnectTrigger): boolean => {
+      if (cancelled || !onlineRef.current) { if (!onlineRef.current) setConnection("no_network"); return false; }
+      if (retryAttemptRef.current >= RETRY_DELAYS_MS.length) { setConnection("offline"); return false; }
+      const attempt = retryAttemptRef.current + 1;
+      const token = activeToken;
+      if (!controller.request(trigger, () => {
+        relayReconnectTimerRef.current = setTimeout(() => {
+          relayReconnectTimerRef.current = null;
+          if (cancelled || !onlineRef.current) { controller.cancel(); setConnection("no_network"); return; }
+          activeToken = controller.beginConnection();
+          connectRelay(activeToken);
+        }, RETRY_DELAYS_MS[attempt - 1]);
+      }, token)) return false;
+      retryAttemptRef.current = attempt;
+      setRetryAttempt(attempt);
+      setConnection("retrying");
+      return true;
+    };
+    connectRelay = (token: number) => {
+      if (cancelled || !onlineRef.current) return;
+      intentionalRelayCloseRef.current = false;
+      setConnection("connecting");
+      void relay.connect().then(() => {
+        if (cancelled || relayRef.current !== relay || !onlineRef.current || token !== activeToken) return;
+        activeToken = controller.beginConnection();
+        retryAttemptRef.current = 0;
+        setRetryAttempt(0);
+        if (!relay.subscribeEndpoints(devicesRef.current.map((device) => device.deviceId))) {
+          relay.close(1000, "Relay subscription failed");
+          return;
+        }
+        setRelayConnectionGeneration((generation) => generation + 1);
+      }).catch((connectError: unknown) => {
+        if (cancelled || relayRef.current !== relay) return;
+        setError(connectError instanceof Error ? connectError.message : "Relay connection failed");
+        scheduleRelayReconnect("connect_rejected");
+      });
+    };
+    const reconnectNow = () => {
+      if (cancelled || !onlineRef.current) { if (!onlineRef.current) setConnection("no_network"); return; }
+      if (relayReconnectTimerRef.current) { clearTimeout(relayReconnectTimerRef.current); relayReconnectTimerRef.current = null; }
+      controller.userRecover();
+      retryAttemptRef.current = 0;
+      setRetryAttempt(0);
+      activeToken = controller.beginConnection();
+      connectRelay(activeToken);
+    };
+    relayReconnectNowRef.current = reconnectNow;
     const unsubscribeControl = relay.on("control", applyControl);
-    const unsubscribeState = relay.on("state", (state) => { if (state === "closed" && relayRef.current === relay) setConnection("offline"); });
-    const unsubscribeError = relay.on("error", (eventError) => setError(eventError.message));
-    void relay.connect().then(() => relay.subscribeEndpoints(devices.map((device) => device.deviceId))).catch((connectError) => setError(connectError instanceof Error ? connectError.message : "Relay connection failed"));
-    return () => { unsubscribeControl(); unsubscribeState(); unsubscribeError(); if (relayRef.current === relay) relayRef.current = null; relay.close(); };
-  }, [applyControl, devices, identity, relayUrl, startupState]);
+    const unsubscribeState = relay.on("state", (state) => {
+      if (cancelled || relayRef.current !== relay) return;
+      if (state === "closed") {
+        clearSessionConnection();
+        if (!onlineRef.current) { intentionalRelayCloseRef.current = false; setConnection("no_network"); return; }
+        if (intentionalRelayCloseRef.current) {
+          intentionalRelayCloseRef.current = false;
+          setConnection("offline");
+          return;
+        }
+        setEndpoints((current) => current.map((endpoint) => endpoint.online ? { ...endpoint, online: false } : endpoint));
+        if (!scheduleRelayReconnect("closed") && !relayReconnectTimerRef.current) setConnection("offline");
+      }
+    });
+    const unsubscribeError = relay.on("error", (eventError) => {
+      if (cancelled || relayRef.current !== relay) return;
+      setError(eventError.message);
+      scheduleRelayReconnect("error");
+    });
+    const handleOffline = () => {
+      onlineRef.current = false;
+      intentionalRelayCloseRef.current = false;
+      controller.cancel();
+      if (relayReconnectTimerRef.current) { clearTimeout(relayReconnectTimerRef.current); relayReconnectTimerRef.current = null; }
+      clearSessionConnection();
+      relay.close(1000, "browser offline");
+      setConnection("no_network");
+    };
+    const handleOnline = () => {
+      onlineRef.current = true;
+      controller.userRecover();
+      retryAttemptRef.current = 0;
+      setRetryAttempt(0);
+      if (relay.state === "open") setRelayConnectionGeneration((generation) => generation + 1);
+      else reconnectNow();
+    };
+    window.addEventListener("offline", handleOffline);
+    window.addEventListener("online", handleOnline);
+    onlineRef.current = typeof navigator === "undefined" || navigator.onLine;
+    activeToken = controller.beginConnection();
+    if (onlineRef.current) connectRelay(activeToken);
+    else setConnection("no_network");
+    return () => {
+      cancelled = true;
+      controller.cancel();
+      if (relayReconnectTimerRef.current) { clearTimeout(relayReconnectTimerRef.current); relayReconnectTimerRef.current = null; }
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("online", handleOnline);
+      unsubscribeControl();
+      unsubscribeState();
+      unsubscribeError();
+      if (relayReconnectNowRef.current === reconnectNow) relayReconnectNowRef.current = null;
+      if (relayRef.current === relay) relayRef.current = null;
+      relay.close();
+    };
+  }, [applyControl, clearSessionConnection, devices.length, identity, relayUrl, startupState]);
+
+  useEffect(() => {
+    const relay = relayRef.current;
+    if (!relay || relay.state !== "open") return;
+    relay.subscribeEndpoints(devices.map((device) => device.deviceId));
+  }, [devices]);
 
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
+      const sessionIdentity = sessionDeviceId && sessionEndpointId && sessionRuntimeInstanceId
+        ? `${sessionDeviceId}\u0000${sessionEndpointId}\u0000${sessionRuntimeInstanceId}`
+        : null;
+      if (sessionIdentityRef.current !== sessionIdentity) {
+        sessionRecoveryStateRef.current.replacementBye();
+        sessionIdentityRef.current = sessionIdentity;
+      }
       clearSessionConnection();
-      if (!activeDevice || !activeEndpoint || !activeEndpoint.online || !identity) { setConnection("offline"); return; }
+      if (sessionRecoveryStateRef.current.isTerminal) { setConnection("offline"); return; }
+      if (!sessionDeviceId || !sessionEndpointId || !sessionRuntimeInstanceId || !sessionOnline || !identity) {
+        setConnection(onlineRef.current ? "offline" : "no_network");
+        return;
+      }
       const relay = relayRef.current;
-      if (!relay || relay.state !== "open") { setConnection("connecting"); return; }
+      if (!relay || relay.state !== "open") { setConnection(onlineRef.current ? "connecting" : "no_network"); return; }
       const generation = connectionGenerationRef.current;
-      const contextBase = { generation, deviceId: activeDevice.deviceId, endpointId: activeEndpoint.endpointId, runtimeInstanceId: activeEndpoint.runtimeInstanceId, relay };
-      const channel = new PeerChannel({ relay, endpoint: contextBase, onFrame: (frame) => {
-        const currentChannel = channelRef.current;
-        if (currentChannel) handleServerFrame(frame, { ...contextBase, channel: currentChannel });
+      const contextBase = { generation, deviceId: sessionDeviceId, endpointId: sessionEndpointId, runtimeInstanceId: sessionRuntimeInstanceId, relay };
+      let channel: PeerChannel | null = null;
+      channel = new PeerChannel({ relay, endpoint: contextBase, channelId: sessionChannelIdRef.current, onFrame: (frame) => {
+        if (channel) handleServerFrame(frame, { ...contextBase, channel });
       }, onMalformed: (reason) => setError(reason) });
       channelRef.current = channel;
       channelContextRef.current = { ...contextBase, channel };
       setConnection("connecting");
-      retryAttemptRef.current = 0; setRetryAttempt(0);
+      sessionRecoveryStateRef.current.beginConnection();
       const helloId = id();
       helloRequestRef.current = helloId;
-      if (!channel.send({ protocol_version: 2, type: "session_hello", id: helloId, channel_id: channel.channelId })) { setConnection("offline"); scheduleReconnect(); }
-      channelRef.current = channel;
+      if (!channel.send({ protocol_version: 2, type: "session_hello", id: helloId, channel_id: channel.channelId })) {
+        setConnection("offline");
+        intentionalRelayCloseRef.current = true;
+        relay.close(1000, "Session channel send failed");
+      }
     });
     return () => {
       cancelled = true;
@@ -389,11 +616,12 @@ export function PwaApp() {
       channel?.close();
       if (channelRef.current === channel) channelRef.current = null;
     };
-  }, [activeDevice, activeEndpoint, clearSessionConnection, handleServerFrame, identity, scheduleReconnect]);
+  }, [clearSessionConnection, handleServerFrame, identity, relayConnectionGeneration, sessionDeviceId, sessionEndpointId, sessionOnline, sessionRestartToken, sessionRuntimeInstanceId, startupState]);
 
   const selectDevice = useCallback((deviceId: string | null) => {
+    resetOutputFollowing();
     setActiveDeviceId(deviceId); setActiveEndpointId(null); setTimelineItems([]); setLastSyncedAt(undefined); setError(null);
-  }, []);
+  }, [resetOutputFollowing]);
   const selectEndpoint = useCallback((endpointId: string) => {
     if (!activeDevice) return;
     setActiveEndpointId(endpointId);
@@ -486,10 +714,15 @@ export function PwaApp() {
   }, [identity, relayUrl]);
   const removePairing = useCallback(async (device: PwaDeviceRecord) => {
     if (activeDeviceIdRef.current === device.id) clearSessionConnection();
+    await invalidateEndpointPersistence();
     await removePwaDeviceData(device.deviceId, device.id, `${ACTIVE_ENDPOINT_SETTING}${device.id}`);
     const remaining = await listPwaDevices(); setDevices(remaining);
     if (activeDeviceIdRef.current === device.id) selectDevice(remaining[0]?.id ?? null);
-  }, [clearSessionConnection, selectDevice]);
+  }, [clearSessionConnection, invalidateEndpointPersistence, selectDevice]);
+  const clearLocalData = useCallback(async () => {
+    await invalidateEndpointPersistence();
+    await clearPwaData();
+  }, [invalidateEndpointPersistence]);
   const saveDeviceNickname = useCallback(async (device: PwaDeviceRecord, nickname: string) => { await getPwaDatabase().devices.put({ ...device, nickname }); setDevices(await listPwaDevices()); }, []);
   const saveRelayUrl = useCallback(async (value: string) => {
     const normalized = value.trim().replace(/\/$/, "") || DEFAULT_RELAY;
@@ -500,13 +733,13 @@ export function PwaApp() {
   const setImageAttachment = useCallback((source: Blob, label: string) => { try { getImageOutputMime(source.type); setAttachment({ source, previewUrl: URL.createObjectURL(source), label }); } catch (imageError) { setError(imageError instanceof Error ? imageError.message : "Could not use that image."); } }, []);
   const confirmRequestedAction = useCallback(async () => {
     if (!confirmAction) return;
-    await runConfirmAction(confirmAction, { startNewSession: () => sendCommandAction({ action: "session_new" }), removePairing, invalidateConnection: clearSessionConnection, clearLocalData: clearPwaData, reload: () => window.location.reload() }, { pendingRef: confirmPendingRef, setPending: setConfirmPending, setError: setConfirmError, onSuccess: () => setConfirmAction(null) });
-  }, [clearSessionConnection, confirmAction, removePairing, sendCommandAction]);
+    await runConfirmAction(confirmAction, { startNewSession: () => sendCommandAction({ action: "session_new" }), removePairing, invalidateConnection: clearSessionConnection, clearLocalData, reload: () => window.location.reload() }, { pendingRef: confirmPendingRef, setPending: setConfirmPending, setError: setConfirmError, onSuccess: () => setConfirmAction(null) });
+  }, [clearLocalData, clearSessionConnection, confirmAction, removePairing, sendCommandAction]);
   if (startupState === "loading") return <StartupLoading />;
   if (startupState === "error") return <StartupErrorView error={startupError} onRetry={() => window.location.reload()} />;
   const canAttachImage = connection === "online" && visionAvailable === true && !sendingImage;
   return <div className="pwa-root"><header className="pwa-topbar"><div className="pwa-brand"><span className="pwa-brand-mark">π</span><span>Remote Pi</span><span className="pwa-brand-tag">BROWSER APP</span></div><div className="pwa-topbar-actions"><SessionSwitcherTrigger label={activeDevice && activeEndpoint ? `Endpoint: ${displayDevice(activeDevice)} / ${activeEndpoint.name || activeEndpoint.endpointId}` : null} expanded={sheetOpen} onOpen={() => setSheetOpen(true)} /><ConnectionStatus state={connection} retryAttempt={retryAttempt} /><DesktopTopbarActions onRefresh={refreshPwaApp} onToggleSettings={() => setSettingsOpen(true)} /><MobileTopbarMenu onRefresh={refreshPwaApp} onOpenSettings={() => setSettingsOpen(true)} /></div></header>
-    <div className="pwa-layout"><DesktopSidebar devices={devices} activeDeviceId={activeDeviceId} pairingPresence={pairingPresence} onPair={() => setPairState("scanning")} onSelect={selectDevice} onRename={setRenameDevice} onRemove={(device) => setConfirmAction({ kind: "remove-pairing", label: displayDevice(device), device })} onClearData={async () => setConfirmAction({ kind: "clear-local-data" })} /><main className="pwa-main">{activeDevice && activeEndpoint ? <><div className="pwa-chat-head"><div><span className="pwa-kicker">Active endpoint</span><h2>{activeEndpoint.name || activeEndpoint.endpointId}</h2><span className="pwa-chat-meta"><span className={connection === "online" ? "pwa-status-dot online" : "pwa-status-dot"} />{activeEndpoint.kind} <span className="pwa-separator">/</span> {activeEndpoint.cwd || "cwd unavailable"} <span className="pwa-separator">/</span> last synced <time dateTime={lastSyncedAt ? new Date(lastSyncedAt).toISOString() : undefined}>{formatSyncTime(lastSyncedAt)}</time></span></div></div><MessageList items={timelineItems} hasEarlier={nextBefore !== null} loadingEarlier={loadingEarlier} onLoadEarlier={loadEarlier} listRef={messageListRef} bottomSentinelRef={bottomSentinelRef} onScroll={() => setFollowingOutput(true)} onRetryUnknown={(requestId) => { const retry = timelineRuntimeRef.current.retryUnknown(requestId); if (retry && channelRef.current?.send(retry.frame)) applyTimelineChange(retry.change); }} onCancelQueued={(requestId) => { const scope = timelineRuntimeRef.current.currentScope; if (scope) channelRef.current?.send({ protocol_version: 2, type: "queued_message_clear", id: id(), channel_id: scope.channelId, history_generation: scope.historyGeneration, target_id: requestId }); }} /><div className="pwa-chat-footer"><PwaMessageActions show={connection === "offline" || !followingOutput || unreadOutput > 0} showRetry={connection === "offline"} showLatest={!followingOutput || unreadOutput > 0} unreadOutput={unreadOutput} onRetry={() => setActiveEndpointId(activeEndpoint.endpointId)} onLatest={() => { messageListRef.current?.scrollTo({ top: messageListRef.current.scrollHeight, behavior: "smooth" }); setFollowingOutput(true); setUnreadOutput(0); }} /><MessageComposer attachment={attachment} canAttachImage={canAttachImage} sendingImage={sendingImage} isOnline={connection === "online"} isWorking={activeEndpoint.working === true} stopping={stopRequestId !== null} draft={draft} onDraftChange={setDraft} onSend={sendMessage} onStop={stopCurrentTask} onSetAttachment={setImageAttachment} onClearAttachment={() => setAttachment(null)} commandModels={models} commandCurrentModel={currentModel} commandCurrentModelFallback={activeEndpoint.model ?? null} commandThinking={activeThinking} commandPendingAction={pendingAction?.action ?? null} onNewSession={() => setConfirmAction({ kind: "new-session" })} onCompactSession={() => sendCommandAction({ action: "session_compact" })} onSetModel={(model) => sendCommandAction({ action: "model_set", provider: model.provider, modelId: model.id })} onSetThinking={(level) => sendCommandAction({ action: "thinking_set", level })} onCommandsOpen={() => { const scope = timelineRuntimeRef.current.currentScope; if (scope) channelRef.current?.send({ protocol_version: 2, type: "list_models", id: id(), channel_id: scope.channelId, history_generation: scope.historyGeneration }); }} /></div></> : <EmptyWorkspace onPair={() => setPairState("scanning")} />}</main>{settingsOpen ? <SettingsPanel relayUrl={relayUrl} defaultRelayUrl={DEFAULT_RELAY} onSave={saveRelayUrl} onClose={() => setSettingsOpen(false)} onClearData={async () => setConfirmAction({ kind: "clear-local-data" })} onResetLayout={() => undefined} /> : null}</div>
+    <div className="pwa-layout"><DesktopSidebar devices={devices} activeDeviceId={activeDeviceId} pairingPresence={pairingPresence} onPair={() => setPairState("scanning")} onSelect={selectDevice} onRename={setRenameDevice} onRemove={(device) => setConfirmAction({ kind: "remove-pairing", label: displayDevice(device), device })} onClearData={async () => setConfirmAction({ kind: "clear-local-data" })} /><main className="pwa-main">{activeDevice && activeEndpoint ? <><div className="pwa-chat-head"><div><span className="pwa-kicker">Active endpoint</span><h2>{activeEndpoint.name || activeEndpoint.endpointId}</h2><span className="pwa-chat-meta"><span className={connection === "online" ? "pwa-status-dot online" : "pwa-status-dot"} />{activeEndpoint.kind} <span className="pwa-separator">/</span> {activeEndpoint.cwd || "cwd unavailable"} <span className="pwa-separator">/</span> last synced <time dateTime={lastSyncedAt ? new Date(lastSyncedAt).toISOString() : undefined}>{formatSyncTime(lastSyncedAt)}</time></span></div></div><MessageList items={timelineItems} hasEarlier={nextBefore !== null} loadingEarlier={loadingEarlier} onLoadEarlier={loadEarlier} listRef={messageListRef} bottomSentinelRef={bottomSentinelRef} onScroll={(nearBottom) => { if (nearBottom) { followScrollLockRef.current = false; resetOutputFollowing(); } else if (!followScrollLockRef.current) { if (followingOutputRef.current) realtimeOutputKeysRef.current.clear(); followingOutputRef.current = false; setFollowingOutput(false); } }} onRetryUnknown={(requestId) => { const retry = timelineRuntimeRef.current.retryUnknown(requestId); if (retry && channelRef.current?.send(retry.frame)) applyTimelineChange(retry.change); }} onCancelQueued={(requestId) => { const scope = timelineRuntimeRef.current.currentScope; if (scope) channelRef.current?.send({ protocol_version: 2, type: "queued_message_clear", id: id(), channel_id: scope.channelId, history_generation: scope.historyGeneration, target_id: requestId }); }} /><div className="pwa-chat-footer"><PwaMessageActions show={connection === "offline" || !followingOutput || unreadOutput > 0} showRetry={connection === "offline"} showLatest={!followingOutput || unreadOutput > 0} unreadOutput={unreadOutput} onRetry={retryCurrentSession} onLatest={() => { messageListRef.current?.scrollTo({ top: messageListRef.current.scrollHeight, behavior: "smooth" }); resetOutputFollowing(); }} /><MessageComposer attachment={attachment} canAttachImage={canAttachImage} sendingImage={sendingImage} isOnline={connection === "online"} isWorking={activeEndpoint.working === true} stopping={stopRequestId !== null} draft={draft} onDraftChange={setDraft} onSend={sendMessage} onStop={stopCurrentTask} onSetAttachment={setImageAttachment} onClearAttachment={() => setAttachment(null)} commandModels={models} commandCurrentModel={currentModel} commandCurrentModelFallback={activeEndpoint.model ?? null} commandThinking={activeThinking} commandPendingAction={pendingAction?.action ?? null} onNewSession={() => setConfirmAction({ kind: "new-session" })} onCompactSession={() => sendCommandAction({ action: "session_compact" })} onSetModel={(model) => sendCommandAction({ action: "model_set", provider: model.provider, modelId: model.id })} onSetThinking={(level) => sendCommandAction({ action: "thinking_set", level })} onCommandsOpen={() => { const scope = timelineRuntimeRef.current.currentScope; const channel = channelRef.current; if (scope && channel) { const requestId = id(); modelRequestRef.current = requestId; channel.send({ protocol_version: 2, type: "list_models", id: requestId, channel_id: scope.channelId, history_generation: scope.historyGeneration }); } }} /></div></> : <EmptyWorkspace onPair={() => setPairState("scanning")} />}</main>{settingsOpen ? <SettingsPanel relayUrl={relayUrl} defaultRelayUrl={DEFAULT_RELAY} onSave={saveRelayUrl} onClose={() => setSettingsOpen(false)} onClearData={async () => setConfirmAction({ kind: "clear-local-data" })} onResetLayout={() => undefined} /> : null}</div>
     {sheetOpen ? <SessionSheet devices={devices} endpoints={endpoints} activeDeviceId={activeDeviceId} activeEndpointId={activeEndpointId} pairingPresence={pairingPresence} onSelectDevice={selectDevice} onSelectEndpoint={selectEndpoint} onPair={() => setPairState("scanning")} onRename={setRenameDevice} onRemove={(device) => setConfirmAction({ kind: "remove-pairing", label: displayDevice(device), device })} onClose={() => setSheetOpen(false)} /> : null}
     {renameDevice ? <RenamePairingDialog device={renameDevice} onSave={(nickname) => saveDeviceNickname(renameDevice, nickname)} onClose={() => setRenameDevice(null)} /> : null}
     {pairState !== "idle" ? <div className="pwa-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && pairState === "scanning") setPairState("idle"); }} role="presentation">{pairState === "scanning" ? <PairingDialog onScan={pairFromQr} onClose={() => setPairState("idle")} /> : <div className="pwa-pairing-card"><Activity className="pwa-spin" /><span className="pwa-kicker">Pairing</span><h2>Connecting to your Pi</h2><p>Waiting for the endpoint to confirm this browser.</p></div>}</div> : null}

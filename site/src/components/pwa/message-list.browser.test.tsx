@@ -44,6 +44,33 @@ function renderMessageList(items: Parameters<typeof MessageList>[0]["items"]) {
   );
 }
 
+test("reports whether scrolling is within 32px of the latest output", async () => {
+  const positions: boolean[] = [];
+  const screen = await renderPwa(
+    <MessageList
+      items={[]}
+      hasEarlier={false}
+      listRef={createRef<HTMLDivElement>()}
+      bottomSentinelRef={createRef<HTMLDivElement>()}
+      onScroll={(nearBottom) => positions.push(nearBottom)}
+    />,
+  );
+  const list = document.querySelector<HTMLDivElement>(".pwa-message-list");
+  expect(list).not.toBeNull();
+  Object.defineProperties(list!, {
+    scrollHeight: { configurable: true, value: 1000 },
+    clientHeight: { configurable: true, value: 400 },
+    scrollTop: { configurable: true, writable: true, value: 560 },
+  });
+
+  list!.dispatchEvent(new Event("scroll", { bubbles: true }));
+  list!.scrollTop = 568;
+  list!.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+  expect(positions).toEqual([false, true]);
+  await screen.unmount();
+});
+
 test("message list icon controls keep 44px touch targets", async () => {
   const screen = await renderMessageList([
     { kind: "event", event: toolEvent },

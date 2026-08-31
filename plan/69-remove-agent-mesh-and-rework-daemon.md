@@ -869,25 +869,27 @@ Remote Pi extension 只有加载成功后才能发送结构化 readiness。若 P
 - [x] `daemon send` 等待 RPC accepted/error；
 - [x] Cron 只投递 desired running + runtime ready daemon，删除 `wake` 绕过语义；
 - [x] stopped/blocked Cron、catch-up 和手工 run 均有门禁与 audit 覆盖；
-- [ ] Pi Extension、Relay、Site 自动化验证和真实链路场景通过；
+- [x] Pi Extension、Relay、Site 自动化验证通过；
+- [ ] 真实 Relay、daemon、两个 interactive Pi 和两个独立 PWA profile 链路场景通过；
 - [x] `git diff --check` 通过；
 - [x] Plan 00、Protocol、README、daemon 文档和 PWA 文档与新架构一致。
 
 ## 22. 本轮收口记录
 
-实现范围已完成：Relay endpoint registry/ACL/opaque route、Pi Extension endpoint/runtime 与双门槛 readiness、daemon desired/blocked/preflight/retry/Cron/cwd reconcile、PWA device/endpoint/session timeline、pairing QR、共享 Protocol v2 contracts、发布文档和生产文件职责拆分。
+实现范围已完成：Relay endpoint registry/ACL/opaque route、Pi Extension endpoint/runtime 与双门槛 readiness、daemon desired/blocked/preflight/retry/Cron/cwd reconcile、PWA device/endpoint/session timeline、Owner Relay/session 重连恢复、pairing QR、共享 Protocol v2 contracts、发布文档和生产文件职责拆分。
 
 自动化验证：
 
 - `cd pi-extension && pnpm verify`：29 个测试文件，331 passed、3 skipped，typecheck/build 通过；
 - `cd relay && cargo fmt -- --check && cargo clippy --locked -- -D warnings && cargo test --locked`：全部通过；
-- `cd site && pnpm exec tsc --noEmit --pretty false && pnpm test:legacy && pnpm test:component && pnpm lint && pnpm build`：117 legacy、64 component、typecheck/build 通过，lint 0 errors（3 个既有 `<img>` warnings）；
+- `cd site && pnpm exec tsc --noEmit --pretty false`、`pnpm test`、`pnpm test:coverage`、`pnpm build`：legacy 118/118、Browser 72/72、coverage 73/73、typecheck/build 通过；`pnpm test:e2e` 在最终构建后 desktop/mobile 10/10 通过；
+- Site 受影响文件 ESLint 通过；全量 lint 仍仅因既有生成文件 `site/public/sw.js:1:3496` 的 `@typescript-eslint/no-this-alias` 失败，另有生成 coverage 和既有 `<img>` warnings；
 - 全部受影响生产 TypeScript/Rust 文件均不超过 600 行；`git diff --check` 通过；
 - 旧 Mesh/room/broker/Pi-to-Pi/wake 生产语义扫描仅保留明确的 strict-rejection 测试 fixture 与否定性项目规范说明。
 
 遗留风险：
 
-- 尚未在真实 Relay、daemon、两个 interactive Pi、两个独立 PWA profile 上执行跨端 E2E；需要部署环境后验证 supervisor 重启、child crash、Relay 中断、runtime takeover、`/new` 和真实 pairing；
+- 尚未在真实 Relay、daemon、两个 interactive Pi、两个独立 PWA profile 上完成完整跨端 E2E；测试 Site 已部署并完成 `/app`、`/`、Service Worker、console/network smoke，但仍需验证 supervisor 重启、child crash、Relay 中断、runtime takeover、`/new` 和真实 pairing；
 - 外部 `/Users/yefeng/Code/agent-tools` worktree manager 尚未接入 `unregister_cwd`，当前仓库通过 supervisor reconcile 提供兜底；
 - 当前环境 Rust 1.91.1 低于项目建议的 1.94+，但本轮 check/clippy/test 均通过。
 

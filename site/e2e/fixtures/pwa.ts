@@ -1,26 +1,29 @@
 import { expect, test as base, type Page } from "playwright/test";
 
 const DATABASE_NAME = "remote-pi-pwa";
-const DATABASE_VERSION = 60; // Dexie schema version 6 maps to IndexedDB version 60.
+const DATABASE_VERSION = 70;
 const FIXTURE_RELAY_URL = "http://127.0.0.1:9";
-const FIXTURE_REMOTE_EPK = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-const FIXTURE_ROOM_ID = "e2e-room";
-const FIXTURE_NAME = "E2E Pi";
+const FIXTURE_DEVICE_ID = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+const FIXTURE_ENDPOINT_ID = "e2e-endpoint";
+const FIXTURE_RUNTIME_INSTANCE_ID = "e2e-runtime-1";
+const FIXTURE_DEVICE_NAME = "E2E Pi";
+const FIXTURE_ENDPOINT_NAME = "E2E endpoint";
 
-type FixturePairing = {
+type FixtureDevice = {
   id: string;
-  remoteEpk: string;
-  sessionName: string;
-  nickname: string;
+  deviceId: string;
   relayUrl: string;
   pairedAt: string;
-  roomId: string;
+  hostname: string;
+  nickname: string;
 };
 
-type FixtureRoom = {
+type FixtureEndpoint = {
   id: string;
-  peerEpk: string;
-  roomId: string;
+  deviceId: string;
+  endpointId: string;
+  runtimeInstanceId: string;
+  kind: "daemon";
   name: string;
   cwd: string;
   updatedAt: number;
@@ -32,10 +35,11 @@ type FixtureSetting = {
 };
 
 export type SeededWorkspace = {
-  pairingId: string;
+  deviceId: string;
+  deviceRecordId: string;
+  endpointId: string;
+  runtimeInstanceId: string;
   relayUrl: string;
-  remoteEpk: string;
-  roomId: string;
 };
 
 type PwaFixture = {
@@ -44,43 +48,46 @@ type PwaFixture = {
 };
 
 function fixtureWorkspace(): {
-  pairing: FixturePairing;
-  room: FixtureRoom;
+  device: FixtureDevice;
+  endpoint: FixtureEndpoint;
   settings: FixtureSetting[];
   seeded: SeededWorkspace;
 } {
-  const pairingId = `${encodeURIComponent(FIXTURE_REMOTE_EPK)}:${encodeURIComponent(FIXTURE_ROOM_ID)}`;
-  const pairing: FixturePairing = {
-    id: pairingId,
-    remoteEpk: FIXTURE_REMOTE_EPK,
-    sessionName: FIXTURE_NAME,
-    nickname: FIXTURE_NAME,
+  const deviceRecordId = encodeURIComponent(FIXTURE_DEVICE_ID);
+  const endpointRecordId = `${deviceRecordId}:${encodeURIComponent(FIXTURE_ENDPOINT_ID)}`;
+  const device: FixtureDevice = {
+    id: deviceRecordId,
+    deviceId: FIXTURE_DEVICE_ID,
     relayUrl: FIXTURE_RELAY_URL,
     pairedAt: "2026-01-01T00:00:00.000Z",
-    roomId: FIXTURE_ROOM_ID,
+    hostname: FIXTURE_DEVICE_NAME,
+    nickname: FIXTURE_DEVICE_NAME,
   };
-  const room: FixtureRoom = {
-    id: `${FIXTURE_REMOTE_EPK}:${FIXTURE_ROOM_ID}`,
-    peerEpk: FIXTURE_REMOTE_EPK,
-    roomId: FIXTURE_ROOM_ID,
-    name: "E2E session",
+  const endpoint: FixtureEndpoint = {
+    id: endpointRecordId,
+    deviceId: FIXTURE_DEVICE_ID,
+    endpointId: FIXTURE_ENDPOINT_ID,
+    runtimeInstanceId: FIXTURE_RUNTIME_INSTANCE_ID,
+    kind: "daemon",
+    name: FIXTURE_ENDPOINT_NAME,
     cwd: "/workspace/e2e",
     updatedAt: 1,
   };
 
   return {
-    pairing,
-    room,
+    device,
+    endpoint,
     settings: [
       { key: "relay_url", value: FIXTURE_RELAY_URL },
-      { key: "active_peer", value: pairingId },
-      { key: `active_room:${pairingId}`, value: FIXTURE_ROOM_ID },
+      { key: "active_device", value: deviceRecordId },
+      { key: `active_endpoint:${deviceRecordId}`, value: FIXTURE_ENDPOINT_ID },
     ],
     seeded: {
-      pairingId,
+      deviceId: FIXTURE_DEVICE_ID,
+      deviceRecordId,
+      endpointId: FIXTURE_ENDPOINT_ID,
+      runtimeInstanceId: FIXTURE_RUNTIME_INSTANCE_ID,
       relayUrl: FIXTURE_RELAY_URL,
-      remoteEpk: FIXTURE_REMOTE_EPK,
-      roomId: FIXTURE_ROOM_ID,
     },
   };
 }
@@ -94,7 +101,7 @@ function assertLocalTestOrigin(baseURL: string | undefined, pageURL: string) {
 
 async function openPwa(page: Page) {
   await page.goto("/app");
-  await expect(page.getByRole("heading", { name: "Your agents, within reach." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your endpoints, within reach." })).toBeVisible();
 }
 
 export const test = base.extend<{ pwa: PwaFixture }>({
@@ -106,7 +113,7 @@ export const test = base.extend<{ pwa: PwaFixture }>({
         assertLocalTestOrigin(baseURL, page.url());
         const workspace = fixtureWorkspace();
 
-        await page.evaluate(async ({ databaseName, databaseVersion, pairing, room, settings }) => {
+        await page.evaluate(async ({ databaseName, databaseVersion, device, endpoint, settings }) => {
           const hostname = window.location.hostname;
           if (hostname !== "127.0.0.1" && hostname !== "localhost") {
             throw new Error(`Refusing to write E2E IndexedDB outside localhost: ${hostname}`);
@@ -119,13 +126,19 @@ export const test = base.extend<{ pwa: PwaFixture }>({
           });
           if (database.version !== databaseVersion) {
             database.close();
-            throw new Error(`Expected PWA Dexie v6 IndexedDB schema, received version ${database.version}.`);
+            throw new Error(`Expected PWA Dexie v7 IndexedDB schema, received version ${database.version}.`);
+          }
+          const endpointIndexes = Array.from(database.transaction("endpoints", "readonly").objectStore("endpoints").indexNames);
+          const requiredEndpointIndexes = ["deviceId", "[deviceId+endpointId]", "endpointId", "updatedAt"];
+          if (requiredEndpointIndexes.some((index) => !endpointIndexes.includes(index))) {
+            database.close();
+            throw new Error(`Expected PWA endpoint indexes, received ${endpointIndexes.join(", ")}.`);
           }
 
           await new Promise<void>((resolve, reject) => {
-            const transaction = database.transaction(["pairings", "rooms", "settings"], "readwrite");
-            transaction.objectStore("pairings").put(pairing);
-            transaction.objectStore("rooms").put(room);
+            const transaction = database.transaction(["devices", "endpoints", "settings"], "readwrite");
+            transaction.objectStore("devices").put(device);
+            transaction.objectStore("endpoints").put(endpoint);
             for (const setting of settings) transaction.objectStore("settings").put(setting);
             transaction.oncomplete = () => {
               database.close();
@@ -137,13 +150,14 @@ export const test = base.extend<{ pwa: PwaFixture }>({
         }, {
           databaseName: DATABASE_NAME,
           databaseVersion: DATABASE_VERSION,
-          pairing: workspace.pairing,
-          room: workspace.room,
+          device: workspace.device,
+          endpoint: workspace.endpoint,
           settings: workspace.settings,
         });
 
         await page.reload();
-        await expect(page.getByPlaceholder("Reconnect to send a message")).toBeVisible();
+        await expect(page.getByText(FIXTURE_ENDPOINT_NAME, { exact: true })).toHaveCount(1);
+        await expect(page.getByPlaceholder("Reconnect to send a message")).toBeDisabled();
         return workspace.seeded;
       },
     });

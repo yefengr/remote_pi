@@ -51,6 +51,19 @@ function challenge(): string {
   return JSON.stringify({ type: "challenge", nonce: encodeBase64(new Uint8Array(32)) });
 }
 
+test("cleans up when the WebSocket factory throws synchronously", async () => {
+  const identity = await generateOwnerKeyPair();
+  const client = new RelayClient({
+    relayUrl: "https://relay.example.test",
+    identity,
+    webSocketFactory: () => { throw new Error("factory failed"); },
+  });
+
+  await assert.rejects(client.connect(), /factory failed/);
+  assert.equal(client.state, "closed");
+  assert.equal(client.sendControl({ type: "subscribe_endpoints", device_ids: [] }), false);
+});
+
 test("closes with an application code and a UTF-8 byte-limited reason on invalid challenge", async () => {
   const socket = new FakeWebSocket();
   const client = await createClient(socket);
@@ -106,4 +119,32 @@ test("truncates a multibyte close reason without splitting UTF-8", async () => {
   assert.ok(new TextEncoder().encode(reason).length <= 123);
   assert.doesNotThrow(() => new TextDecoder("utf-8", { fatal: true }).decode(encodeUtf8(reason)));
   assert.notEqual(socket.closeCalls[0]?.code, 1002);
+});
+
+test("ignores delayed callbacks from an old socket after a new connection starts", async () => {
+  const first = new FakeWebSocket();
+  const second = new FakeWebSocket();
+  const identity = await generateOwnerKeyPair();
+  const sockets = [first, second];
+  const client = new RelayClient({
+    relayUrl: "https://relay.example.test",
+    identity,
+    webSocketFactory: () => sockets.shift() ?? second,
+  });
+  const firstConnection = client.connect();
+  first.open();
+  first.message(challenge());
+  await firstConnection;
+
+  client.close();
+  const secondConnection = client.connect();
+  second.open();
+  first.error();
+  first.onclose?.(new Event("close") as CloseEvent);
+  second.message(challenge());
+  await secondConnection;
+
+  assert.equal(client.state, "open");
+  assert.equal(client.sendControl({ type: "subscribe_endpoints", device_ids: ["device"] }), true);
+  assert.equal(first.sent.filter((frame) => frame.includes("subscribe_endpoints")).length, 0);
 });

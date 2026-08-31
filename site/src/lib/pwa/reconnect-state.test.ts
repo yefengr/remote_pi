@@ -39,3 +39,14 @@ test("user recovery clears terminal gate and permits one new schedule", () => {
   assert.equal(state.request("error", (trigger) => scheduled.push(trigger)), false);
   assert.deepEqual(scheduled, ["closed"]);
 });
+
+test("cancel invalidates a queued callback without opening a recovery gate", () => {
+  const state = new ReconnectState();
+  const scheduled: string[] = [];
+  const token = state.beginConnection();
+  assert.equal(state.request("closed", (trigger) => scheduled.push(trigger), token), true);
+  state.cancel();
+  assert.equal(state.request("error", (trigger) => scheduled.push(trigger), token), false);
+  assert.equal(state.request("error", (trigger) => scheduled.push(trigger)), true);
+  assert.deepEqual(scheduled, ["closed", "error"]);
+});

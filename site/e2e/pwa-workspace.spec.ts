@@ -11,31 +11,24 @@ async function openSettings(page: Page, mobile: boolean) {
   await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
 }
 
-async function expectSeededPeer(page: Page, mobile: boolean) {
-  if (mobile) {
-    await expect(page.getByRole("button", { name: "Open session switcher" })).toBeVisible();
-    return;
-  }
-  await expect(page.getByRole("heading", { name: "E2E Pi" })).toBeVisible();
+async function openEndpointSwitcher(page: Page) {
+  await page.getByRole("button", { name: "Open endpoint switcher" }).click();
+  const endpoints = page.getByRole("dialog").filter({ hasText: "Endpoints" });
+  await expect(endpoints).toBeVisible();
+  return endpoints;
 }
 
 test("shows a seeded offline workspace and session controls", async ({ page, pwa }, testInfo) => {
   const mobile = testInfo.project.name === "mobile";
   const workspace = await pwa.seedWorkspace();
 
-  await expectSeededPeer(page, mobile);
   if (mobile) {
-    await page.getByRole("button", { name: "Open session switcher" }).click();
-    const sessions = page.getByRole("dialog").filter({ has: page.getByRole("heading", { name: "Sessions" }) });
-    await expect(sessions).toBeVisible();
-    await expect(sessions.getByText(`session ID ${workspace.roomId}`, { exact: true })).toBeVisible();
-    await sessions.getByRole("button", { name: "Close sessions" }).click();
-    await expect(sessions).toHaveCount(0);
+    const endpoints = await openEndpointSwitcher(page);
+    await expect(endpoints.getByText(`endpoint ID ${workspace.endpointId}`, { exact: true })).toBeVisible();
+    await endpoints.getByRole("button", { name: "Close endpoints" }).click();
+    await expect(endpoints).toHaveCount(0);
   } else {
-    const sessionSelect = page.getByRole("combobox", { name: "Session" });
-    await expect(sessionSelect).toBeVisible();
-    await expect(sessionSelect).toHaveValue(workspace.roomId);
-    await expect(sessionSelect).toBeDisabled();
+    await expect(page.getByRole("heading", { name: "E2E endpoint" })).toBeVisible();
   }
 
   await expect(page.getByPlaceholder("Reconnect to send a message")).toBeDisabled();
@@ -55,14 +48,13 @@ test("cancels and confirms clear-local-data in an isolated seeded workspace", as
   await expect(confirmation).toHaveCount(0);
   await page.getByRole("button", { name: "Close settings" }).click();
   if (mobile) {
-    await page.getByRole("button", { name: "Open session switcher" }).click();
-    const sessions = page.getByRole("dialog").filter({ has: page.getByRole("heading", { name: "Sessions" }) });
-    await expect(sessions.getByText("E2E Pi", { exact: true })).toBeVisible();
-    await expect(sessions.getByText(`session ID ${workspace.roomId}`, { exact: true })).toBeVisible();
-    await sessions.getByRole("button", { name: "Close sessions" }).click();
-    await expect(sessions).toHaveCount(0);
+    const endpoints = await openEndpointSwitcher(page);
+    await expect(endpoints.getByText("E2E Pi", { exact: true })).toBeVisible();
+    await expect(endpoints.getByText(`endpoint ID ${workspace.endpointId}`, { exact: true })).toBeVisible();
+    await endpoints.getByRole("button", { name: "Close endpoints" }).click();
+    await expect(endpoints).toHaveCount(0);
   } else {
-    await expect(page.getByRole("heading", { name: "E2E Pi" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "E2E endpoint" })).toBeVisible();
   }
 
   await openSettings(page, mobile);
@@ -70,6 +62,6 @@ test("cancels and confirms clear-local-data in an isolated seeded workspace", as
   const navigation = page.waitForEvent("framenavigated", (frame) => frame === page.mainFrame());
   await confirmation.getByRole("button", { name: "Clear local data" }).click();
   await navigation;
-  await expect(page.getByRole("heading", { name: "Your agents, within reach." })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "E2E Pi" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Your endpoints, within reach." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "E2E endpoint" })).toHaveCount(0);
 });

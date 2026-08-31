@@ -24,7 +24,7 @@
 
 ## 2. 当前检查点
 
-更新时间：2026-08-29
+更新时间：2026-08-30
 
 | 计划 | 阶段 | 状态 | 事实与出口条件 |
 |---|---|---|---|
@@ -36,6 +36,7 @@
 | Plan 67 | Phase 4：`/app` E2E 基线 | 已完成 | 独立 Playwright Test 基线覆盖 production standalone 启动、IndexedDB 隔离 fixture、Settings、Session Drawer、Composer、清库确认、desktop/mobile viewport 和真实 Service Worker 注册。E2E 8/8，重复运行 16/16；TypeScript、受影响 ESLint、现有 Node/legacy/Browser/coverage、production build、diff check 和独立审查通过。实现提交：`79922cc`。 |
 | Plan 66 | Phase 3：业务组件收敛 | 已完成 | Pairing/Session 展示层、`PwaAppView` 展示编排、PWA 启动边界和非当前配对探测边界已抽取；当前会话连接、Session Selection 与 Timeline generation 按证据保留在 controller。Node 23/23、legacy 119/119、Browser 64/64、coverage 87/87、E2E 8/8、TypeScript、受影响 ESLint、production build、diff check 和独立审查通过。实现提交：`c5e3cce`、`7e8f35d`、`6785b64`、`f579ee7`。 |
 | Plan 66 | Phase 4：遗留站点移除与低收益组件评估 | 已完成 | 已移除遗留官网、文档、教程、法律页面、上游 OG image 及仅有消费者；`/` 改为服务端重定向到唯一产品路由 `/app`，以保持 Docker 根路径 healthcheck。Tabs 消费者已随遗留页面删除，迁移决策不再适用；ScrollArea、Tooltip、Popover 按证据保持现状。 |
+| Plan 69 | PWA Owner Relay/session 恢复与 v7 E2E fixture | 自动化已完成，真实跨端链路待持续验收 | Site 已实现 Relay 退避重连、重新认证/订阅、offline/online 门控、session reset/bye 恢复、稳定 channelId、stale socket/frame/request 防护；E2E fixture 已切换 `devices/endpoints/settings`。Site legacy 118/118、Browser 72/72、coverage 73/73、Playwright desktop/mobile 10/10、TypeScript 和受影响 ESLint 通过；test 环境部署与 `/app`、`/`、Service Worker、console/network smoke 通过。 |
 
 当前已形成的 Plan 67 Phase 2 本地提交：
 

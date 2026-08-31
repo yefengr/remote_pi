@@ -15,7 +15,7 @@ type MessageListProps = {
   onLoadEarlier?: () => void;
   listRef: RefObject<HTMLDivElement | null>;
   bottomSentinelRef: RefObject<HTMLDivElement | null>;
-  onScroll: () => void;
+  onScroll: (nearBottom: boolean) => void;
   onRetryUnknown?: (clientRequestId: string) => void;
   onCancelQueued?: (clientRequestId: string) => void;
 };
@@ -69,7 +69,10 @@ function PartialCard({ partial }: { partial: TimelinePartial }) {
 }
 
 export function MessageList({ items, hasEarlier, loadingEarlier, onLoadEarlier, listRef, bottomSentinelRef, onScroll, onRetryUnknown, onCancelQueued }: MessageListProps) {
-  return <div className="pwa-message-list" ref={listRef} onScroll={onScroll}>
+  return <div className="pwa-message-list" ref={listRef} onScroll={(event) => {
+    const { scrollHeight, scrollTop, clientHeight } = event.currentTarget;
+    onScroll(scrollHeight - scrollTop - clientHeight <= 32);
+  }}>
     {hasEarlier ? <Button tone="secondary" className="pwa-earlier-button" type="button" onClick={onLoadEarlier} disabled={loadingEarlier}>{loadingEarlier ? "Loading earlier records…" : "Load earlier records"}</Button> : null}
     {items.length === 0 ? <div className="pwa-chat-empty"><div className="pwa-chat-empty-icon"><MessageSquare size={21} /></div><h3>Ready when you are.</h3><p>Your local session history will appear here.</p></div> : items.map((item) => item.kind === "event" ? <EventCard event={item.event} key={item.event.event_id} /> : item.kind === "pending" ? <PendingCard pending={item} key={item.id} onRetryUnknown={onRetryUnknown} onCancelQueued={onCancelQueued} /> : <PartialCard partial={item.partial} key={item.partial.partial_id} />)}
     <div ref={bottomSentinelRef} aria-hidden="true" className="pwa-bottom-sentinel" />

@@ -24,7 +24,7 @@ test("opens, persists a local relay URL, and closes settings", async ({ page, pw
   await expect(page.getByRole("dialog", { name: "Settings" })).toHaveCount(0);
 
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Your agents, within reach." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your endpoints, within reach." })).toBeVisible();
   await openSettings(page, mobile);
   await expect(page.getByRole("textbox", { name: "Relay URL" })).toHaveValue(TEST_RELAY_URL);
   await page.getByRole("button", { name: "Close settings" }).click();

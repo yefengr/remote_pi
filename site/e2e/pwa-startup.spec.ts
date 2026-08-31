@@ -4,7 +4,7 @@ test("redirects the root route to the PWA", async ({ page }) => {
   await page.goto("/");
 
   await expect(page).toHaveURL(/\/app$/);
-  await expect(page.getByRole("heading", { name: "Your agents, within reach." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your endpoints, within reach." })).toBeVisible();
 });
 
 test("opens an empty PWA without horizontal overflow and activates the app service worker", async ({ context, page, pwa }) => {
