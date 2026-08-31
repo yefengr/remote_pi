@@ -19,6 +19,7 @@ import { generateOwnerKeyPair } from "@/lib/remote-pi/crypto";
 import { assertBrowserCapabilities, fromStoredKey, migrateLegacyDefaultRelay, toStoredKey, type ConnectionContext } from "@/lib/pwa/runtime";
 import { useEndpointRegistry } from "@/lib/pwa/use-endpoint-registry";
 import { useDevicePairing, type DevicePairingResult } from "@/lib/pwa/use-device-pairing";
+import { ACTIVE_DEVICE_SETTING, activeEndpointSettingKey, useActiveEndpointSelection } from "@/lib/pwa/use-active-endpoint-selection";
 import { useTimelineViewport } from "@/lib/pwa/use-timeline-viewport";
 import { TimelineRuntime, type TimelineScope, type TimelineViewItem } from "@/lib/pwa/timeline-runtime";
 import { getImageOutputMime, prepareImageAttachment } from "@/lib/pwa/image-upload";
@@ -41,8 +42,6 @@ import {
 
 const LEGACY_DEFAULT_RELAY = "https://relay-rp1.jacobmoura.work";
 const DEFAULT_RELAY = "https://relay-pi.yefengr.cn";
-const ACTIVE_DEVICE_SETTING = "active_device";
-const ACTIVE_ENDPOINT_SETTING = "active_endpoint:";
 const RELAY_SETTING = "relay_url";
 const RETRY_DELAYS_MS = [1000, 2000, 5000, 10000, 30000] as const;
 type StartupState = "loading" | "ready" | "error";
@@ -108,8 +107,6 @@ function safeThinkingLevel(value: unknown): ThinkingLevel { return typeof value 
 export function PwaApp() {
   const [identity, setIdentity] = useState<OwnerKeyPair | null>(null);
   const [devices, setDevices] = useState<PwaDeviceRecord[]>([]);
-  const [activeDeviceId, setActiveDeviceId] = useState<string | null>(null);
-  const [activeEndpointId, setActiveEndpointId] = useState<string | null>(null);
   const [connection, setConnection] = useState<ConnectionViewState>("offline");
   const [retryAttempt, setRetryAttempt] = useState(0);
   const [relayConnectionGeneration, setRelayConnectionGeneration] = useState(0);
@@ -138,7 +135,6 @@ export function PwaApp() {
   const [startupError, setStartupError] = useState<StartupError | null>(null);
 
   const devicesRef = useRef(devices);
-  const activeDeviceIdRef = useRef(activeDeviceId);
   const relayRef = useRef<RelayClient | null>(null);
   const relayReconnectNowRef = useRef<(() => void) | null>(null);
   const channelRef = useRef<PeerChannel | null>(null);
@@ -172,11 +168,26 @@ export function PwaApp() {
     reset: resetOutputFollowing,
   } = useTimelineViewport();
 
+  const onDeviceSelected = useCallback(() => {
+    resetOutputFollowing();
+    setTimelineItems([]);
+    setLastSyncedAt(undefined);
+    setError(null);
+  }, [resetOutputFollowing]);
+  const {
+    activeDeviceId,
+    activeEndpointId,
+    activeDevice,
+    selectDevice,
+    selectEndpoint,
+    restoreActiveDevice,
+    activatePairedDevice,
+    isActiveDevice,
+  } = useActiveEndpointSelection({ devices, onDeviceSelected });
+
   useEffect(() => { devicesRef.current = devices; }, [devices]);
-  useEffect(() => { activeDeviceIdRef.current = activeDeviceId; }, [activeDeviceId]);
   useEffect(() => () => { if (attachment) URL.revokeObjectURL(attachment.previewUrl); }, [attachment]);
 
-  const activeDevice = useMemo(() => devices.find((device) => device.id === activeDeviceId) ?? null, [activeDeviceId, devices]);
   const { endpoints, applyControl, markAllOffline, invalidatePersistence } = useEndpointRegistry({ devices, activeDevice, onError: setError });
   const activeEndpoint = useMemo(() => activeDevice && activeEndpointId ? endpoints.find((endpoint) => endpoint.deviceId === activeDevice.deviceId && endpoint.endpointId === activeEndpointId) ?? null : null, [activeDevice, activeEndpointId, endpoints]);
   const activeThinking = useMemo(() => safeThinkingLevel(activeEndpoint?.thinking), [activeEndpoint?.thinking]);
@@ -343,24 +354,11 @@ export function PwaApp() {
       setIdentity(nextIdentity);
       setDevices(storedDevices);
       setRelayUrl(migrateLegacyDefaultRelay(storedRelay?.value, LEGACY_DEFAULT_RELAY, DEFAULT_RELAY));
-      setActiveDeviceId(storedDevices.find((device) => device.id === storedActive?.value)?.id ?? storedDevices[0]?.id ?? null);
+      restoreActiveDevice(storedDevices.find((device) => device.id === storedActive?.value)?.id ?? storedDevices[0]?.id ?? null);
       setStartupState("ready");
     })().catch((failure: unknown) => { if (!cancelled) { setStartupError(describeStartupFailure(failure)); setStartupState("error"); } });
     return () => { cancelled = true; removeFailure(); };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!activeDevice) {
-      queueMicrotask(() => {
-        if (!cancelled) setActiveEndpointId(null);
-      });
-      return () => { cancelled = true; };
-    }
-    void getPwaDatabase().settings.get(`${ACTIVE_ENDPOINT_SETTING}${activeDevice.id}`).then((setting) => { if (!cancelled) setActiveEndpointId(setting?.value ?? null); });
-    void getPwaDatabase().settings.put({ key: ACTIVE_DEVICE_SETTING, value: activeDevice.id });
-    return () => { cancelled = true; };
-  }, [activeDevice]);
+  }, [restoreActiveDevice]);
 
   useEffect(() => {
     if (!identity || startupState !== "ready" || devices.length === 0) return;
@@ -527,15 +525,6 @@ export function PwaApp() {
     };
   }, [clearSessionConnection, handleServerFrame, identity, relayConnectionGeneration, sessionDeviceId, sessionEndpointId, sessionOnline, sessionRestartToken, sessionRuntimeInstanceId, startupState]);
 
-  const selectDevice = useCallback((deviceId: string | null) => {
-    resetOutputFollowing();
-    setActiveDeviceId(deviceId); setActiveEndpointId(null); setTimelineItems([]); setLastSyncedAt(undefined); setError(null);
-  }, [resetOutputFollowing]);
-  const selectEndpoint = useCallback((endpointId: string) => {
-    if (!activeDevice) return;
-    setActiveEndpointId(endpointId);
-    void getPwaDatabase().settings.put({ key: `${ACTIVE_ENDPOINT_SETTING}${activeDevice.id}`, value: endpointId });
-  }, [activeDevice]);
   const sendMessage = useCallback(async () => {
     const scope = timelineRuntimeRef.current.currentScope;
     const channel = channelRef.current;
@@ -582,21 +571,20 @@ export function PwaApp() {
     await db.transaction("rw", [db.devices, db.settings], async () => {
       await Promise.all([
         db.devices.put(device),
-        db.settings.put({ key: `${ACTIVE_ENDPOINT_SETTING}${device.id}`, value: endpointId }),
+        db.settings.put({ key: activeEndpointSettingKey(device.id), value: endpointId }),
       ]);
     });
     setDevices(await listPwaDevices());
-    setActiveDeviceId(device.id);
-    setActiveEndpointId(endpointId);
-  }, []);
+    activatePairedDevice(device.id, endpointId);
+  }, [activatePairedDevice]);
   const pairing = useDevicePairing({ identity, relayUrl, onPaired: persistPairedDevice, onError: setError });
   const removePairing = useCallback(async (device: PwaDeviceRecord) => {
-    if (activeDeviceIdRef.current === device.id) clearSessionConnection();
+    if (isActiveDevice(device.id)) clearSessionConnection();
     await invalidatePersistence();
-    await removePwaDeviceData(device.deviceId, device.id, `${ACTIVE_ENDPOINT_SETTING}${device.id}`);
+    await removePwaDeviceData(device.deviceId, device.id, activeEndpointSettingKey(device.id));
     const remaining = await listPwaDevices(); setDevices(remaining);
-    if (activeDeviceIdRef.current === device.id) selectDevice(remaining[0]?.id ?? null);
-  }, [clearSessionConnection, invalidatePersistence, selectDevice]);
+    if (isActiveDevice(device.id)) selectDevice(remaining[0]?.id ?? null);
+  }, [clearSessionConnection, invalidatePersistence, isActiveDevice, selectDevice]);
   const clearLocalData = useCallback(async () => {
     await invalidatePersistence();
     await clearPwaData();
