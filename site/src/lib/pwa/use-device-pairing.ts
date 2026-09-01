@@ -61,13 +61,15 @@ export function useDevicePairing({ identity, relayUrl, onPaired, onError }: UseD
     attempt.relay.close();
     if (attemptRef.current === attempt) attemptRef.current = null;
   }, []);
-  useEffect(() => () => {
-    const attempt = attemptRef.current;
-    if (!attempt) return;
+  const cancelAttempt = useCallback((attempt: PairingAttempt, message: string) => {
     attempt.cancelled = true;
-    attempt.reject?.(new Error("Pairing cancelled because the PWA was unmounted."));
+    attempt.reject?.(new Error(message));
     cleanupAttempt(attempt);
   }, [cleanupAttempt]);
+  useEffect(() => () => {
+    const attempt = attemptRef.current;
+    if (attempt) cancelAttempt(attempt, "Pairing cancelled because the PWA was unmounted.");
+  }, [cancelAttempt]);
 
   const open = useCallback(() => { setState("scanning"); }, []);
   const close = useCallback(() => {
@@ -82,6 +84,8 @@ export function useDevicePairing({ identity, relayUrl, onPaired, onError }: UseD
       onErrorRef.current(payload ? "This QR belongs to a different Relay." : "That is not a valid endpoint pairing QR.");
       return;
     }
+    const previousAttempt = attemptRef.current;
+    if (previousAttempt) cancelAttempt(previousAttempt, "Pairing cancelled by a newer pairing attempt.");
     setState("pairing");
     onErrorRef.current(null);
     const deviceId = normalizePairDeviceId(payload.deviceId);
@@ -111,6 +115,7 @@ export function useDevicePairing({ identity, relayUrl, onPaired, onError }: UseD
           if (!attempt.channel?.sendPairRequest(createPairRequest(payload.token, browserName(), globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`))) throw new Error("Relay is not ready for pairing.");
         }).catch(reject);
       });
+      if (!isActive()) return;
       await onPairedRef.current({ device: paired, endpointId: payload.endpointId });
       if (isActive()) setState("idle");
     } catch (pairingError) {
@@ -121,7 +126,7 @@ export function useDevicePairing({ identity, relayUrl, onPaired, onError }: UseD
     } finally {
       cleanupAttempt(attempt);
     }
-  }, [cleanupAttempt]);
+  }, [cancelAttempt, cleanupAttempt]);
 
   return { state, open, close, pairFromQr };
 }

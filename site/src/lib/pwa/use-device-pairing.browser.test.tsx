@@ -207,6 +207,46 @@ test("pairs a device, waits for onPaired, and cleans up temporary transport", as
   }
 });
 
+test("cancels and cleans an active attempt before starting a newer pairing", async () => {
+  vi.useFakeTimers();
+  const onPaired = vi.fn<(result: DevicePairingResult) => Promise<void>>(async () => undefined);
+  const { controller, errors, screen } = await renderController(onPaired);
+  try {
+    controller().open();
+    const firstPairing = controller().pairFromQr(pairingUri());
+    await vi.waitFor(() => expect(channelHarness.channels).toHaveLength(1));
+    const firstChannel = channelHarness.channels[0];
+    const firstRelay = relayHarness.instances[0];
+
+    const secondPairing = controller().pairFromQr(pairingUri());
+    await vi.waitFor(() => expect(channelHarness.channels).toHaveLength(2));
+    const secondChannel = channelHarness.channels[1];
+    const secondRelay = relayHarness.instances[1];
+    await firstPairing;
+
+    expect(firstChannel?.closeCalls).toBe(1);
+    expect(firstRelay?.closeCalls).toBe(1);
+    expect(vi.getTimerCount()).toBe(1);
+    firstChannel?.emitPairOk({ protocol_version: 2, type: "pair_ok", in_reply_to: "cancelled-request", session_name: "cancelled-session", session_started_at: Date.now(), endpoint_id: endpointId, hostname: "cancelled-host" });
+    expect(onPaired).not.toHaveBeenCalled();
+    expect(errors.filter((message) => message !== null)).toEqual([]);
+
+    const secondRequestId = secondChannel?.pairRequestFrames[0]?.id ?? "missing-request";
+    secondChannel?.emitPairOk({ protocol_version: 2, type: "pair_ok", in_reply_to: secondRequestId, session_name: "current-session", session_started_at: Date.now(), endpoint_id: endpointId, hostname: "current-host" });
+    await secondPairing;
+
+    expect(onPaired).toHaveBeenCalledTimes(1);
+    expect(onPaired.mock.calls[0]?.[0].device.hostname).toBe("current-host");
+    expect(controller().state).toBe("idle");
+    expect(secondChannel?.closeCalls).toBe(1);
+    expect(secondRelay?.closeCalls).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    await screen.unmount();
+    vi.useRealTimers();
+  }
+});
+
 test("returns to scanning and cleans up after endpoint mismatch and pair error", async () => {
   const { controller, errors, screen } = await renderController(async () => undefined);
   try {
