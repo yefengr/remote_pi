@@ -165,9 +165,6 @@ a {
 }
 .pwa-root,
 .pwa-runtime-notice {
-  --pwa-bg: #050708;
-  --pwa-panel: rgba(11, 15, 17, 0.88);
-  --pwa-panel-strong: #0d1215;
   --pwa-line: rgba(255, 255, 255, 0.09);
   --pwa-line-strong: rgba(255, 255, 255, 0.16);
   --pwa-ink: #f4f8f9;
@@ -281,11 +278,6 @@ a {
 .pwa-chat-head h2 { min-width: 0; overflow-wrap: anywhere; font-size: clamp(25px, 3vw, 38px); }
 .pwa-chat-meta { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--pwa-dim); font: 11px var(--ff-mono); }
 .pwa-separator { color: #536268; }
-.pwa-room-control { display: grid; gap: 5px; min-width: 130px; color: var(--pwa-dim); font: 10px var(--ff-mono); text-transform: uppercase; letter-spacing: .1em; }
-.pwa-room-control .mantine-Select-label { color: inherit; font: inherit; }
-.pwa-room-control .mantine-Select-input { min-width: 130px; min-height: 44px; border-color: var(--pwa-line); color: var(--pwa-ink); background: var(--pwa-panel-strong); font: 12px var(--ff-mono); }
-.pwa-room-control .mantine-Select-input:focus { border-color: var(--pwa-accent); }
-.pwa-room-control .mantine-Select-input:disabled { color: var(--pwa-dim); }
 .pwa-message-list { box-sizing: border-box; flex: 1 1 auto; min-width: 0; min-height: 0; max-width: 100%; width: min(900px, 100%); margin: 0 auto; padding: 30px clamp(22px, 5vw, 70px) 88px; display: grid; align-content: start; gap: 24px; overflow-x: hidden; overflow-y: auto; overscroll-behavior-y: contain; scroll-padding-bottom: 88px; -webkit-overflow-scrolling: touch; touch-action: pan-y; scrollbar-gutter: stable; }
 .pwa-bottom-sentinel { width: 1px; height: 1px; }
 .pwa-message { width: min(100%, 780px); max-width: 780px; min-width: 0; overflow: visible; padding-left: 14px; border-left: 2px solid var(--pwa-line); position: relative; }
@@ -395,7 +387,6 @@ a {
 .pwa-layout-reset-button { width: 100%; margin-top: 12px; }
 .pwa-layout-reset-note { display: block; margin-top: 8px; color: var(--pwa-dim); font: 11px/1.5 var(--ff-body); }
 .pwa-modal-backdrop { box-sizing: border-box; position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; overflow-y: auto; padding: calc(20px + var(--pwa-safe-top)) 20px calc(20px + var(--pwa-safe-bottom)); background: rgba(0,0,0,.72); backdrop-filter: blur(8px); }
-.pwa-rename-backdrop { box-sizing: border-box; position: fixed; inset: 0; z-index: 18; display: grid; place-items: center; overflow-y: auto; padding: calc(20px + var(--pwa-safe-top)) 20px calc(20px + var(--pwa-safe-bottom)); background: rgba(0,0,0,.74); backdrop-filter: blur(10px); }
 .pwa-rename-dialog { box-sizing: border-box; width: min(420px, 100%); min-width: 0; padding: 24px; border: 1px solid var(--pwa-line-strong); border-radius: 16px; color: var(--pwa-ink); background: #0a0e10; box-shadow: 0 25px 90px rgba(0,0,0,.6); }
 .pwa-rename-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .pwa-rename-head h2 { margin: 7px 0 0; font: 600 24px/1.1 var(--ff-display); letter-spacing: -.04em; }
@@ -464,8 +455,6 @@ a {
 .pwa-mobile-menu-panel button { min-width: 170px; }
 .pwa-message.partial { padding-top: 4px; padding-bottom: 4px; }
 .pwa-message.user { width: fit-content; max-width: min(84%, 780px); }
-.pwa-session-backdrop { box-sizing: border-box; position: fixed; inset: 0; z-index: 8; width: 100%; max-width: none; height: 100%; max-height: none; margin: 0; padding: 0 10px var(--pwa-safe-bottom); border: 0; align-items: flex-end; background: rgba(0,0,0,.7); backdrop-filter: blur(7px); }
-.pwa-session-backdrop[open] { display: flex; }
 .pwa-session-sheet { box-sizing: border-box; width: 100%; max-height: 78dvh; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--pwa-line-strong); border-bottom: 0; border-radius: 18px 18px 0 0; color: var(--pwa-ink); background: #0a0e10; box-shadow: 0 -25px 80px rgba(0,0,0,.5); }
 .pwa-session-sheet-head { flex: 0 0 auto; display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; padding: 20px 18px 15px; border-bottom: 1px solid var(--pwa-line); }
 .pwa-session-sheet-head h2 { margin: 7px 0 0; font: 600 24px/1.1 var(--ff-display); }
@@ -517,7 +506,6 @@ a {
   .pwa-sidebar { display: none; }
   .pwa-main { height: 100%; min-height: 0; }
   .pwa-chat-head { display: none; }
-  .pwa-room-control { display: none; }
   .pwa-message-list { width: 100%; padding: 18px 16px 88px; scroll-padding-bottom: 88px; }
   .pwa-message.user { max-width: 84%; }
   .pwa-message-actions { padding: 0 16px 12px; }
@@ -537,7 +525,6 @@ a {
   .pwa-startup-card { padding: 25px 20px; }
   .pwa-runtime-notice { width: calc(100vw - 24px); flex-direction: column; align-items: stretch; gap: 10px; padding: 11px 10px 11px 12px; }
   .pwa-session-sheet { max-height: 84dvh; }
-  .pwa-rename-backdrop { place-items: end center; padding: 12px 12px calc(12px + var(--pwa-safe-bottom)); }
   .pwa-rename-dialog { width: 100%; padding: 20px 16px calc(16px + var(--pwa-safe-bottom)); border-radius: 16px; }
   .pwa-rename-head h2 { font-size: 21px; }
   .pwa-rename-actions { margin-top: 18px; }
