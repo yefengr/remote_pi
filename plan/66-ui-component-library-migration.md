@@ -1,7 +1,7 @@
 # 计划 66 — Site UI 组件库引入与 PWA 迁移
 
-**技术状态：Phase 0–2、4 的实现当前有效；Phase 3 需按新模型重新收口；Phase 5 尚未实施**
-**当前核对：2026-08-31；当前执行状态、跨计划顺序和切换门禁以 [Plan 68 — PWA UI 与自动化测试交付路线](68-pwa-ui-quality-roadmap.md) 为唯一真源**
+**技术状态：Phase 0–4 的实现当前有效；Phase 3 已按新模型完成收口；Phase 5 尚未实施**
+**当前核对：2026-09-01；当前执行状态、跨计划顺序和切换门禁以 [Plan 68 — PWA UI 与自动化测试交付路线](68-pwa-ui-quality-roadmap.md) 为唯一真源**
 **范围：`site/` 前端，优先 PWA**
 **基线：Next.js 16、React 19、TypeScript、Tailwind CSS 4**
 
@@ -21,10 +21,11 @@
 
 ## 当前检查点
 
-- Phase 0–2 与 Phase 4 的完成状态当前有效；历史验收段中的测试数字均为对应提交时的快照，不代表当前值。
-- Plan 69 删除了原 `PairingRecordCard`、`SessionList`、`PwaAppView`、startup 与 probes 的既有边界；当前 `site/src/components/pwa/pwa-app.tsx` 约 748 行，Phase 3 必须按 `device`/`endpoint` 模型重新收口，不能沿用旧抽取完成结论。
-- Phase 5 尚未开始；`site/src/app/globals.css` 约 2321 行，且 PWA 之前仍保留大量已删除站点 selector，须在业务组件边界稳定后按证据清理。
-- 当前全量验证快照见 Plan 68：legacy 118/118、Browser 75/75、coverage 共 76 个 Vitest tests、Playwright desktop/mobile 10/10、TypeScript、production build 和 `git diff --check` 通过；全量 lint 的唯一 error 是生成文件 `site/public/sw.js` 的 `@typescript-eslint/no-this-alias`，另有生成文件和既有 img warnings。
+- Phase 0–4 的完成状态当前有效；历史验收段中的测试数字均为对应提交时的快照，不代表当前值。
+- Phase 3 已按 Plan 69 的 `device_id → endpoint_id → runtime_instance_id → session_id/history_generation` 模型重新收口：`pwa-app.tsx` 从约 748 行降至 611 行，并建立 endpoint registry、Timeline viewport、真实扫码 pairing、active device/endpoint selection 和 device-level pairing presence 五个稳定边界。
+- `PwaApp` 继续持有 Owner Relay、Session/Timeline 协议编排、device CRUD、pairing IndexedDB transaction 与 UI；没有恢复 Plan 69 删除的 `PairingRecordCard`、`SessionList`、`PwaAppView`、startup 或 probes。
+- Phase 5 尚未开始；`site/src/app/globals.css` 约 2321 行，且 PWA 之前仍保留大量已删除站点 selector，须按消费者证据清理。
+- 当前全量验证快照只在 Plan 68 维护；Phase 3 冻结时 Node、Browser、coverage、Playwright、TypeScript、Lint、production build、`git diff --check` 与独立聚合审查均已收口。
 
 ## 2. 目标
 
@@ -219,17 +220,19 @@ wrapper 必须保持轻量。简单的 `Button` 或 `Badge` 可以直接导出 M
 
 ### Phase 3 — 业务组件收敛
 
-**技术状态：原批次的当前边界已被 Plan 69 取代，需按 `device`/`endpoint` 模型重新收口；何时执行以 Plan 68 为准**
+**技术状态：已完成（2026-09-01）；已按 `device`/`endpoint` 新模型重新收口**
 
-此前已完成的 `PairingRecordCard`、`SessionList` / `SessionRow`、`PwaAppView`、PWA startup 与非当前配对 probes 抽取，是 Plan 69 前的历史实现快照；Plan 69 已删除这些边界，不能再作为当前完成结论。当前 `pwa-app.tsx` 约 748 行，下一批必须先基于 `device`/`endpoint` 模型重新划分稳定的展示编排、启动与探测所有权，再以最小独立批次收口。
+Plan 69 前的 `PairingRecordCard`、`SessionList` / `SessionRow`、`PwaAppView`、PWA startup 与非当前配对 probes 仅是历史实现快照；当前实现没有恢复这些边界。Phase 3 在 `PwaApp` 保留跨域协议编排的前提下，按真实 owner 完成五个独立批次：
 
-1. 盘点当前 `pwa-app.tsx` 与直接消费者，确认 device、endpoint、连接、Session 与 Timeline 的真实边界；
-2. 优先抽取有独立 props/view model 证据的展示或编排边界，不恢复已删除的旧组件结构；
-3. 保持在线探测、连接重试和本地存储逻辑在 hooks/controller，不放入视觉组件；
-4. 仅在不改变 `device`/`endpoint` 语义的前提下，为连接、配对、Session 和 Timeline 状态逐步建立 feature hooks；
-5. 每个结构调整批次独立验证，完成标准以当前模型下可核对的所有权改善为准。
+1. `useEndpointRegistry`：拥有 endpoint 缓存恢复、snapshot/announce/update/ended、runtime takeover、在线状态与 endpoint 持久化失效；
+2. `useTimelineViewport`：拥有输出跟随、未读 group 去重、滚动 refs、RAF 自动跟随、Latest 与 reset，不拥有 Timeline 数据和 Session；
+3. `useDevicePairing`：拥有一次真实扫码配对的临时 Relay/PeerChannel、15 秒 timeout、错误、取消、重复 attempt 与卸载清理；pairing transaction 仍由 `PwaApp` 持有；
+4. `useActiveEndpointSelection`：拥有 active device/endpoint 恢复、持久化、切换与 stale restore 抑制，不拥有 endpoint presence 或 Session；
+5. `derivePairingPresence`：纯派生 device-level `checking/offline/online/partial` view model，无 effect、数据库或 transport 所有权。
 
-**验收：**当前模型下的业务组件只接收稳定的 props/view model，`PwaApp` 的 UI 编排与领域逻辑边界有可核对改善，且不恢复 Plan 69 已删除的 Pairing/Session/PwaAppView/startup/probes 边界。下文旧验收数字和提交（`c5e3cce`、`7e8f35d`、`6785b64`、`f579ee7`）仅记录 Plan 69 前历史批次，非当前状态。
+`PwaApp` 从约 748 行降至 611 行；Owner Relay、Session/Timeline 协议编排、device CRUD、pairing IndexedDB transaction、Composer 与 UI 仍保留在其明确边界内。Relay lifecycle 和完整 Session/Timeline controller 因共享恢复状态、请求 refs、assembler 与 channel generation 未被机械抽取。
+
+**验收：**五个结构批次均有独立自动化验证和只读审查；最终聚合审查发现的重复 pairing attempt 生命周期问题已由独立修复关闭。当前模型下业务组件只接收稳定 props/view model，没有修改协议、IndexedDB schema、CSS 或 Plan 69 已删除边界；完整阶段验证与准确数字以 Plan 68 当前检查点为准。下文旧验收数字和提交（`c5e3cce`、`7e8f35d`、`6785b64`、`f579ee7`）仅记录 Plan 69 前历史批次。
 
 ### Phase 4 — 遗留站点移除与低收益组件评估
 
@@ -336,8 +339,7 @@ cd .. && git diff --check
 2. Provider 的最终导入位置及 Mantine CSS 与 Next.js App Router 的边界；
 3. PWA theme 中字体、radius、control height 和状态色的精确映射；
 4. Settings 在桌面端使用侧栏、移动端使用 Drawer 的具体形态；
-5. 是否引入 `@mantine/notifications`；
-6. 是否在 Phase 3 同时拆分 `PwaApp` hooks，还是作为独立计划执行。
+5. 是否引入 `@mantine/notifications`。
 
 ## 14. 完成定义
 
