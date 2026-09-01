@@ -1,6 +1,6 @@
 # 计划 66 — Site UI 组件库引入与 PWA 迁移
 
-**技术状态：Phase 0–4 的实现当前有效；Phase 3 已按新模型完成收口；Phase 5 尚未实施**
+**技术状态：Phase 0–5 的实现当前有效；Phase 3 已按新模型完成收口；Phase 5 已完成（2026-09-01）**
 **当前核对：2026-09-01；当前执行状态、跨计划顺序和切换门禁以 [Plan 68 — PWA UI 与自动化测试交付路线](68-pwa-ui-quality-roadmap.md) 为唯一真源**
 **范围：`site/` 前端，优先 PWA**
 **基线：Next.js 16、React 19、TypeScript、Tailwind CSS 4**
@@ -21,10 +21,10 @@
 
 ## 当前检查点
 
-- Phase 0–4 的完成状态当前有效；历史验收段中的测试数字均为对应提交时的快照，不代表当前值。
+- Phase 0–5 的完成状态当前有效；历史验收段中的测试数字均为对应提交时的快照，不代表当前值。
 - Phase 3 已按 Plan 69 的 `device_id → endpoint_id → runtime_instance_id → session_id/history_generation` 模型重新收口：`pwa-app.tsx` 从约 748 行降至 611 行，并建立 endpoint registry、Timeline viewport、真实扫码 pairing、active device/endpoint selection 和 device-level pairing presence 五个稳定边界。
 - `PwaApp` 继续持有 Owner Relay、Session/Timeline 协议编排、device CRUD、pairing IndexedDB transaction 与 UI；没有恢复 Plan 69 删除的 `PairingRecordCard`、`SessionList`、`PwaAppView`、startup 或 probes。
-- Phase 5 尚未开始；`site/src/app/globals.css` 约 2321 行，且 PWA 之前仍保留大量已删除站点 selector，须按消费者证据清理。
+- Phase 5 已完成；`site/src/app/globals.css` 已从约 2321 行按消费者证据清理至 546 行，保留 PWA 业务布局、消息流、终端视觉、Mantine overlay/focus/Portal、safe-area 和响应式规则。
 - 当前全量验证快照只在 Plan 68 维护；Phase 3 冻结时 Node、Browser、coverage、Playwright、TypeScript、Lint、production build、`git diff --check` 与独立聚合审查均已收口。
 
 ## 2. 目标
@@ -247,17 +247,18 @@ Plan 69 前的 `PairingRecordCard`、`SessionList` / `SessionRow`、`PwaAppView`
 
 ### Phase 5 — 清理与长期维护
 
-**技术状态：尚未实施；执行顺序以 Plan 68 为准**
+**技术状态：已完成（2026-09-01）；执行顺序以 Plan 68 为准**
 
-`globals.css` 当前约 2321 行，PWA 前仍保留大量已删除站点 selector。本阶段在不改变 PWA 业务布局、消息流、终端视觉和 safe-area 特殊样式的前提下，按实际消费者删除无效的遗留站点与已被组件库替代的重复基础样式。
+本阶段按实际消费者证据完成 `globals.css` 清理，未改变 PWA 业务布局、消息流、终端视觉、safe-area 或 Mantine overlay 行为。四个独立本地提交如下：
 
-1. 先基于实际消费者盘点 selector，再删除无消费者的遗留站点样式；
-2. 保留 PWA 业务布局、消息流、终端视觉和 safe-area 特殊样式；
-3. 将全局 token、PWA token 和 Mantine theme 的关系记录在同一处；
-4. 记录 Mantine 版本、升级窗口和兼容验证命令；
-5. 每次 Mantine 升级先在 PWA smoke 和构建中验证，再扩大到全部受影响消费者。
+- `09acf5d`：清理已删除站点样式；
+- `ab2d03c`：清理共享内页遗留样式；
+- `eb49ddc`：清理 Landing 遗留样式；
+- `63cf272`：清理 PWA orphan 样式。
 
-**验收：**没有遗留两套同名基础行为；未迁移的自定义 CSS 都能明确对应业务布局或品牌视觉；已删除站点 selector 不再无证据保留。
+最终 `globals.css` 从约 2321 行降至 546 行，当前保留的 149 个 PWA CSS class 名均可在 `site/src` 或 `site/e2e` 中找到对应消费者；PWA token、Mantine theme、overlay/focus/Portal、safe-area 和响应式边界均完成核对。
+
+阶段出口验证已通过：Browser Mode 15 个文件/100 个用例、TypeScript、受影响目录 ESLint、production build、Playwright desktop/mobile 10/10、`git diff --check`，以及独立只读审查无 P0–P3 finding。
 
 ## 8. 主题与样式约束
 

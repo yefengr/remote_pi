@@ -37,7 +37,7 @@
 | Plan 66 | Phase 0–2 | 已完成 | Mantine 基础设施、Overlay 和基础控件迁移当前有效完成。 |
 | Plan 66 | Phase 3：业务组件收敛 | 已完成 | 已按 Plan 69 新模型抽取 endpoint registry、Timeline viewport、真实扫码 pairing、active device/endpoint selection 与 pairing presence；`pwa-app.tsx` 约 748→611 行，未恢复旧组件、startup 或 probes。 |
 | Plan 66 | Phase 4：遗留站点移除与低收益组件评估 | 已完成 | 已移除遗留官网、文档、教程、法律页面、上游 OG image 及仅有消费者；`/` 服务端重定向到唯一产品路由 `/app`。 |
-| Plan 66 | Phase 5：清理与长期维护 | 待开始 | `globals.css` 约 2321 行；PWA 前保留大量已删除站点 selector，待 Phase 3 新模型边界稳定后按消费者证据清理。 |
+| Plan 66 | Phase 5：清理与长期维护 | 已完成 | `globals.css` 已从约 2321 行按消费者证据清理至 546 行；PWA 业务布局、消息流、终端视觉、Mantine overlay/focus/Portal、safe-area 和响应式边界已核对。 |
 | Plan 69 | PWA Owner Relay/session 恢复与 v7 E2E fixture | 自动化已完成；完整真实矩阵未完成 | 已有真实配对/Relay 重连和历史恢复局部证据：offline/online 3 轮、直接关闭 WebSocket 2 轮，清本地 timeline 后均从远端恢复 2 条并回到 Connected。daemon、两个 interactive Pi、双 PWA profile、supervisor/child crash、runtime takeover 与 `/new` 的完整矩阵仍待验收。 |
 
 当前实跑验证：Vitest Node 34 files、125/125；Browser 15 files、100/100；coverage 49 files、225/225，Statements 70.15%、Branches 62.44%、Functions 71.34%、Lines 77.96%；Playwright desktop/mobile 10/10；TypeScript、production build 与 `git diff --check` 均通过。全量 `pnpm lint` 在清理 `.gitignore` 已登记的 coverage 与 Serwist 生成物后通过，0 errors，仅保留 3 个既有 `<img>` warning；未修改生成物或 ESLint 配置规避错误。旧段落中的测试数字仅为对应提交时历史快照，不代表当前值。
@@ -105,15 +105,17 @@ Plan 67 Phase 4 `/app` E2E 基线本地提交：
 
 ### 阶段 C：Plan 66 Phase 5 — CSS 清理与长期维护
 
-**状态：当前下一阶段；在独立任务中开始**
+**状态：已完成（2026-09-01）**
 
-在 `globals.css` 约 2321 行的当前基线上，按实际消费者清理 PWA 前无消费者的已删除站点 selector 与已被组件库替代的重复基础样式；保留 PWA 业务布局、消息流、终端视觉和 safe-area 特殊样式。不得重新纳入已删除官网页面或 Tabs。
+本阶段已在 `globals.css` 从约 2321 行的基线上按实际消费者完成清理，最终文件为 546 行。四个独立本地提交依次为 `09acf5d`、`ab2d03c`、`eb49ddc`、`63cf272`；当前 149 个 PWA CSS class 名均能在 `site/src` 或 `site/e2e` 找到对应消费者。未重新纳入已删除官网页面或 Tabs，PWA 业务布局、消息流、终端视觉、Mantine overlay/focus/Portal、safe-area 和响应式边界均保留。
 
-切换门禁：
+阶段出口已通过：
 
-- 每个删除的 selector 均有无消费者证据；
-- PWA token、Mantine theme 和保留的业务 CSS 边界可核对；
-- 受影响 UI、测试、TypeScript、production build 和 `git diff --check` 通过。
+- 每个删除的 selector 和 token 均完成源码、测试、动态 class 与 Mantine 消费者核对；
+- Browser Mode 15 个文件/100 个用例、TypeScript、受影响目录 ESLint、production build、Playwright desktop/mobile 10/10 和 `git diff --check` 通过；
+- 独立只读审查无 P0–P3 finding。
+
+下一阶段按本文件顺序切换至阶段 D 的 Plan 69 完整真实矩阵。
 
 ### 阶段 D：Plan 69 — 完整真实矩阵
 
