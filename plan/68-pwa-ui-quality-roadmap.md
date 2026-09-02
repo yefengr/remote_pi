@@ -1,10 +1,10 @@
 # Plan 68 — PWA UI 与自动化测试交付路线
 
-> 状态：进行中
+> 状态：已完成
 >
 > 创建日期：2026-08-29
 >
-> 更新日期：2026-09-01
+> 更新日期：2026-09-03
 >
 > 适用范围：`site/` 中的 PWA UI、组件库迁移和自动化测试建设。
 
@@ -26,7 +26,7 @@
 
 ## 2. 当前检查点
 
-更新时间：2026-09-01
+更新时间：2026-09-03
 
 | 计划 | 阶段 | 状态 | 事实与出口条件 |
 |---|---|---|---|
@@ -38,7 +38,7 @@
 | Plan 66 | Phase 3：业务组件收敛 | 已完成 | 已按 Plan 69 新模型抽取 endpoint registry、Timeline viewport、真实扫码 pairing、active device/endpoint selection 与 pairing presence；`pwa-app.tsx` 约 748→611 行，未恢复旧组件、startup 或 probes。 |
 | Plan 66 | Phase 4：遗留站点移除与低收益组件评估 | 已完成 | 已移除遗留官网、文档、教程、法律页面、上游 OG image 及仅有消费者；`/` 服务端重定向到唯一产品路由 `/app`。 |
 | Plan 66 | Phase 5：清理与长期维护 | 已完成 | `globals.css` 已从约 2321 行按消费者证据清理至 546 行；PWA 业务布局、消息流、终端视觉、Mantine overlay/focus/Portal、safe-area 和响应式边界已核对。 |
-| Plan 69 | PWA Owner Relay/session 恢复与 v7 E2E fixture | 自动化已完成；完整真实矩阵未完成 | 已有真实配对/Relay 重连和历史恢复局部证据：offline/online 3 轮、直接关闭 WebSocket 2 轮，清本地 timeline 后均从远端恢复 2 条并回到 Connected。daemon、两个 interactive Pi、双 PWA profile、supervisor/child crash、runtime takeover 与 `/new` 的完整矩阵仍待验收。 |
+| Plan 69 | PWA Owner Relay/session 恢复与 v7 E2E fixture | 已完成（2026-09-03） | 已有真实配对/Relay 重连和历史恢复局部证据；固定 Docker Relay-only 环境完成 5 个容器、双独立 Owner、`/new`、revoke ACL、stop/shutdown 的 `peer_stop`、interactive restart、supervisor、Cron 和 403 负向断言；revoke 的 `bye(peer_stop)` 仍为 `expected_known_failure`。2026-09-03 已完成本机双独立浏览器 profile 矩阵（见阶段 D），并完成真实模型 Timeline 持久化基线补验；跨物理设备矩阵作为遗留风险随收口记录，不再阻塞本计划。 |
 
 当前实跑验证：Vitest Node 34 files、125/125；Browser 15 files、100/100；coverage 49 files、225/225，Statements 70.15%、Branches 62.44%、Functions 71.34%、Lines 77.96%；Playwright desktop/mobile 10/10；TypeScript、production build 与 `git diff --check` 均通过。全量 `pnpm lint` 在清理 `.gitignore` 已登记的 coverage 与 Serwist 生成物后通过，0 errors，仅保留 3 个既有 `<img>` warning；未修改生成物或 ESLint 配置规避错误。旧段落中的测试数字仅为对应提交时历史快照，不代表当前值。
 
@@ -115,13 +115,30 @@ Plan 67 Phase 4 `/app` E2E 基线本地提交：
 - Browser Mode 15 个文件/100 个用例、TypeScript、受影响目录 ESLint、production build、Playwright desktop/mobile 10/10 和 `git diff --check` 通过；
 - 独立只读审查无 P0–P3 finding。
 
-下一阶段按本文件顺序切换至阶段 D 的 Plan 69 完整真实矩阵。
-
 ### 阶段 D：Plan 69 — 完整真实矩阵
 
-**状态：最后执行**
+**状态：已完成（2026-09-03）**
 
-Plan 69 自动化已完成，且已有 offline/online 三轮和直接关闭 WebSocket 两轮的局部真实恢复证据：清本地 timeline 后均从远端恢复 2 条并回到 Connected。最后才执行 daemon、两个 interactive Pi、双 PWA profile、supervisor/child crash、runtime takeover 与 `/new` 的完整真实矩阵；该矩阵未完成前，不得宣称跨端恢复验收完成。
+2026-09-02 已通过提交 `63293a3` 固定并验证 Docker Relay-only Protocol v2 环境：5 个容器（Relay、interactive Pi、supervisor、Owner B、Owner C）、3 张 Relay internal 数据面网络和 3 张彼此独立的控制网络；所有 route 只经过 Relay。验证覆盖 Relay/Extension readiness、双 Owner pairing 与独立 session channel、`/new` session replacement、revoke ACL 隔离与 survivor ping、stop/shutdown 的 `peer_stop` bye、interactive restart/runtime takeover、supervisor UDS、Cron stopped gate、4 项未授权控制 API 的 403，以及六个方向 DNS 隔离；验证连续两轮通过。revoke 路径缺少被撤销 Owner 的 `bye(peer_stop)`，已明确记录为 `expected_known_failure`。
+
+2026-09-03 已完成本机双独立浏览器 profile 验收：当前 `site/` standalone 构建经本机转发接入上述 Docker Relay-only 环境，两个浏览器使用完全独立的用户数据目录，通过临时本地进程转发 Relay 宿主端口，验证后已停止；配对 token 只经 `0600` 临时文件与一次性本地服务传递，未进入输出或文档。结果：
+
+- 两个 profile 持有不同 Owner 身份（identity 指纹不同），配对记录、settings 与 Service Worker 状态互相隔离；
+- 双方均完成真实 UI pairing、endpoint discovery 与 `ONLINE 1/1 endpoints`，同一 endpoint 同时可见于两个 Owner；
+- UI 消息发送、`/new`（替换后旧消息标 `DELIVERY UNKNOWN`、新 session 可用）、Relay 断线进入 `Offline`/`0/1 endpoints` 且输入禁用、手动 `Try again` 恢复 `Connected` 均通过；
+- interactive restart 产生新 runtime：一个 profile 自动恢复 online，另一个需 UI `Try again` 恢复；刷新后 pairing、settings 与 Service Worker 控制状态保留；
+- `peer_stop` 使两个 profile 同时下线，restart 后均可恢复；
+- revoke：被撤销 Owner 进入 `OFFLINE` 且重试无法恢复，存活 Owner 保持 `ONLINE` 并可继续发送，符合 ACL 隔离；
+- 两侧 Service Worker 均 `activated` 且受当前页面控制，scope 限于 `/app`。
+
+2026-09-03 完成本机真实模型 Timeline 持久化补验：使用临时 HOME、临时 identity、独立 session directory 的真实 Pi RPC，配置 `zai/glm-5.3-flash` 通过 Tokzz 网关，经本机源码 Relay 与 standalone Site 完成配对并发送最短模型请求。结果：
+
+- Pi session JSONL 记录 1 条 user 和 1 条 assistant 正式消息，并产生 2 条正式 `remote-pi:timeline-v2` 事件（`user`、`assistant`），状态分别为 `committed`、`complete`；
+- PWA IndexedDB `timelineEvents=2`，2 个记录 ID 与 2 个事件 ID 均唯一，未发现 `provider_error`；
+- 页面连续刷新两次后仍保持 2 条持久化事件，UI 恢复预期模型回复，未产生重复记录；
+- 验证结束后已停止本机 Relay、Site、Pi RPC、pairing bridge，并删除临时目录、日志和浏览器 profile。
+
+收口说明：跨物理设备矩阵未执行；revoke 缺少 `bye(peer_stop)` 由 [Plan 70](70-revoke-peer-stop-lifecycle-gap.md) 跟踪。Timeline 持久化真实模型基线已补验完成，不再作为本计划遗留风险。Plan 68 至此标记完成。
 
 ## 4. 调度规则
 
@@ -178,7 +195,7 @@ cd .. && git diff --check
 - 不因 Plan 66 后续结构拆分而阻塞当前 Plan 67 已完成的 Browser 测试建设；
 - 不因测试迁移而一次性重写全部 legacy 测试。
 
-剩余已知风险和真实设备边界，以 Plan 66、Plan 67 及项目技能中的专项记录为准。
+剩余已知风险和真实设备边界，以 Plan 66、Plan 67 及项目技能中的专项记录为准。Plan 68 收口时的遗留项：跨物理设备验收（阶段 D 收口说明），以及 revoke `bye(peer_stop)` 缺口（[Plan 70](70-revoke-peer-stop-lifecycle-gap.md)）。
 
 ## 7. 后续更新规则
 
