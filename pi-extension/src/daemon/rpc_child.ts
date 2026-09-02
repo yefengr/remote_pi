@@ -50,7 +50,6 @@ export interface RuntimeFailedEvent {
 export interface RelayStateChangedEvent { state: RelayState; }
 export interface SessionChangedEvent { session_id?: string; }
 
-export const EXIT_DAEMON_FRESH_SESSION = 42;
 export const RPC_CONTROL_STATUS_KEY = "remote-pi:control";
 export const DEFAULT_READINESS_TIMEOUT_MS = 10_000;
 export const DEFAULT_PROMPT_TIMEOUT_MS = 5_000;
@@ -103,11 +102,11 @@ export function busyTransition(line: string): boolean | null {
  * The installed Pi RPC starts configured extensions itself. In particular this
  * must not attach Remote Pi with `-e`, which could load it a second time.
  */
-export function rpcSpawnArgs(sessionName?: string, useContinue = true): string[] {
+export function rpcSpawnArgs(sessionName?: string): string[] {
   return [
     "--mode", "rpc",
     "--approve",
-    ...(useContinue ? ["--continue"] : []),
+    "--continue",
     ...(sessionName ? ["--name", sessionName] : []),
   ];
 }
@@ -201,7 +200,6 @@ export class RpcChild extends EventEmitter {
   private _sessionId: string | undefined;
   private _restartCount = 0;
   private _stopping = false;
-  private forceFreshSessionOnNextSpawn = false;
   private stdoutBuf = "";
   private _busy = false;
   private rpcReady = false;
@@ -248,9 +246,7 @@ export class RpcChild extends EventEmitter {
     const target = resolvePiSpawn(this.opts.piBin ?? "pi");
     const config = this.opts.config ?? loadLocalConfig(this.opts.cwd);
     const sessionName = config.agent_name ?? defaultAgentName(this.opts.cwd);
-    const useContinue = !this.forceFreshSessionOnNextSpawn;
-    this.forceFreshSessionOnNextSpawn = false;
-    const args = [...target.prefixArgs, ...rpcSpawnArgs(sessionName, useContinue)];
+    const args = [...target.prefixArgs, ...rpcSpawnArgs(sessionName)];
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       ...this.opts.env,
@@ -457,7 +453,6 @@ export class RpcChild extends EventEmitter {
   }
 
   private onExit(code: number | null, signal: NodeJS.Signals | null): void {
-    if (code === EXIT_DAEMON_FRESH_SESSION) this.forceFreshSessionOnNextSpawn = true;
     if (this.readinessTimer) { clearTimeout(this.readinessTimer); this.readinessTimer = null; }
     const isCrash = !this._stopping;
     this._process = "exited";

@@ -2,36 +2,29 @@
 /** One local Pi process is one stable Relay endpoint with replaceable sessions. */
 import { randomUUID } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
+import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { hostname } from "node:os";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory, SessionManager } from "@earendil-works/pi-coding-agent";
 import { canonicalizeEd25519PublicKey, type Ed25519Keypair } from "./pairing/crypto.js";
 import { qrSession } from "./pairing/qr.js";
-import {
-  addPeer, getOrCreateEd25519Keypair, KeyringUnavailableError,
-  PairedIdentityMissingError, listPeers, type PeerRecord,
-} from "./pairing/storage.js";
+import { addPeer, getOrCreateEd25519Keypair, KeyringUnavailableError, PairedIdentityMissingError, listPeers, type PeerRecord } from "./pairing/storage.js";
 import { type ClientFrame, type ServerFrame } from "./protocol/v2/index.js";
 import { RelayClient, type EndpointMetadata, type HostConnectOptions } from "./transport/relay_client.js";
 import { V2PeerChannel, type HostRouteIdentity } from "./transport/peer_channel.js";
 import { TimelineV2Service, type V2ActionFrame } from "./timeline/v2_service.js";
 import { TimelineRuntime, type Correlation } from "./timeline/runtime.js";
 import { createExtensionUiBridge, type ExtensionUiBridge } from "./extension_ui_bridge.js";
-import {
-  handleListModels, handleModelSet, handleSessionCompact, handleThinkingSet,
-  getModelsList, type ActionCtx, type ActionReplySender,
-} from "./actions/handlers.js";
+import { handleListModels, handleModelSet, handleSessionCompact, handleThinkingSet, getModelsList, type ActionCtx, type ActionReplySender } from "./actions/handlers.js";
 import { ensureModelRegistry } from "./actions/registry.js";
-import { EXIT_DAEMON_FRESH_SESSION, RPC_CONTROL_STATUS_KEY } from "./daemon/rpc_child.js";
+import { SessionNewBridge } from "./actions/session_new_bridge.js";
+import { RPC_CONTROL_STATUS_KEY } from "./daemon/rpc_child.js";
 import { defaultAgentName, loadLocalConfig } from "./session/local_config.js";
 import { resolveRelayUrl, toWebSocketUrl } from "./config.js";
 import { persistModelDefault, registerCommands, runDirectCli, type RemoteCommandDependencies } from "./daemon/commands.js";
 import { installOwnerRouter } from "./runtime/owner_router.js";
-const CONTROL_PROTOCOL_VERSION = 2;
-const RECONNECT_BACKOFFS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
-const ENDPOINT_ID_ENV = "REMOTE_PI_ENDPOINT_ID";
-const RUNTIME_INSTANCE_ID_ENV = "REMOTE_PI_RUNTIME_INSTANCE_ID";
+const CONTROL_PROTOCOL_VERSION = 2, RECONNECT_BACKOFFS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
+const ENDPOINT_ID_ENV = "REMOTE_PI_ENDPOINT_ID", RUNTIME_INSTANCE_ID_ENV = "REMOTE_PI_RUNTIME_INSTANCE_ID";
 const CTRL_PREFIX = "\x00remote-pi-ctrl:";
 export type RemoteState = "idle" | "started";
 export type RelayConnectivity = "connected" | "reconnecting" | "disconnected";
@@ -78,14 +71,16 @@ let lastCommandCtx: Pick<ExtensionContext, "ui" | "abort" | "cwd"> | null = null
 let lastEventCtx: Pick<ExtensionContext, "ui" | "abort" | "compact"> | null = null;
 let extensionUiBridge: ExtensionUiBridge | null = null;
 let currentTurnId: string | null = null;
+let replacedSessionId: string | null = null;
+const sessionNewBridge = new SessionNewBridge({ getPi: () => piApi, onCommandContext: (ctx) => { lastCommandCtx = ctx; }, onReplaced: (ctx) => { lastCommandCtx = ctx as typeof lastCommandCtx; }, onFinished: () => finishSessionReplacement() });
 
 export const _getState = (): "idle" | "started" | "paired" => state === "idle" ? "idle" : activeOwners.size > 0 ? "paired" : "started";
 export const _getCachedPublicKeyForTest = (): string | null => keypair ? Buffer.from(keypair.publicKey).toString("base64") : null;
 export const _getCurrentTurnIdForTest = (): string | null => currentTurnId;
 export const _setPiForTest = (value: unknown): void => { piApi = value as ExtensionAPI; };
 export const _setCurrentModelForTest = (value: string | undefined): void => { currentModel = value; };
-export const _setSessionStartedAtForTest = (_value: number | null): void => { /* v2 owns session state */ };
-export const _setMessageBufferForTest = (_value: unknown[]): void => { /* v1 history was removed */ };
+export const _setSessionStartedAtForTest = (_value: number | null): void => { /* compatibility no-op */ };
+export const _setMessageBufferForTest = (_value: unknown[]): void => { /* compatibility no-op */ };
 export const _getMessageBufferForTest = (): unknown[] => [];
 export const _hasPendingReconnect = (): boolean => reconnectTimer !== null;
 export const _getActivePeerCountForTest = (): number => activeOwners.size;
@@ -94,10 +89,8 @@ export const _getDisposedForTest = (): boolean => disposed;
 export const _setDisposedForTest = (value: boolean): void => { disposed = value; };
 export const _resetAutoInitedForTest = (): void => undefined;
 export const _setAutoInitedForTest = (_value: boolean): void => undefined;
-
-function displayName(cwd = process.cwd()): string {
-  return loadLocalConfig(cwd).agent_name ?? defaultAgentName(cwd);
-}
+export const _setSessionNewBridgeTimeoutForTest = (timeoutMs: number): void => sessionNewBridge.setTimeoutForTest(timeoutMs);
+function displayName(cwd = process.cwd()): string { return loadLocalConfig(cwd).agent_name ?? defaultAgentName(cwd); }
 
 function endpointMetadata(cwd = process.cwd()): EndpointMetadata {
   return {
@@ -114,11 +107,7 @@ function endpointMetadata(cwd = process.cwd()): EndpointMetadata {
 
 function routeIdentity(): HostRouteIdentity {
   if (!keypair) throw new Error("remote-pi identity is unavailable");
-  return {
-    deviceId: Buffer.from(keypair.publicKey).toString("base64"),
-    endpointId: endpointIdentity.endpointId,
-    runtimeInstanceId: endpointIdentity.runtimeInstanceId,
-  };
+  return { deviceId: Buffer.from(keypair.publicKey).toString("base64"), endpointId: endpointIdentity.endpointId, runtimeInstanceId: endpointIdentity.runtimeInstanceId };
 }
 
 async function authorizedOwnerIds(): Promise<string[]> {
@@ -190,17 +179,22 @@ function detachOwner(ownerId: string): void {
   const binding = activeOwners.get(ownerId);
   if (!binding) return;
   try { binding.channel.detach(); } catch { /* best effort */ }
-  activeOwners.delete(ownerId);
-  refreshFooter();
+  activeOwners.delete(ownerId); refreshFooter();
 }
 function sendToOwner(ownerId: string, frames: readonly ServerFrame[]): void {
   const binding = activeOwners.get(ownerId);
-  if (!binding) return;
-  for (const frame of frames) binding.channel.sendV2(frame);
+  if (binding) for (const frame of frames) binding.channel.sendV2(frame);
 }
 function broadcastV2(factory: (service: TimelineV2Service) => readonly ServerFrame[]): void {
-  for (const { channel, service } of activeOwners.values()) {
-    for (const frame of factory(service)) channel.sendV2(frame);
+  for (const { channel, service } of activeOwners.values()) for (const frame of factory(service)) channel.sendV2(frame);
+}
+
+function finishSessionReplacement(): void {
+  const sessionId = replacedSessionId;
+  if (!sessionId) return;
+  replacedSessionId = null;
+  for (const [ownerId, { channel, service }] of [...activeOwners]) {
+    channel.sendV2({ protocol_version: 2, type: "bye", session_id: sessionId, history_generation: service.generation, reason: "session_replaced" }); detachOwner(ownerId);
   }
 }
 
@@ -264,17 +258,9 @@ function routeAction(ownerId: string, frame: V2ActionFrame): void {
     case "session_compact":
       handleSessionCompact(ctx, sender, frame);
       return;
-    case "session_new": {
-      const freshSession = (): void => {
-        sender.send({ type: "action_ok", in_reply_to: frame.id, action: "session_new" });
-        if (process.env.REMOTE_PI_DAEMON === "1") setTimeout(() => process.exit(EXIT_DAEMON_FRESH_SESSION), 100);
-      };
-      if (!ctx?.newSession) { freshSession(); return; }
-      void ctx.newSession({ withSession: async (fresh) => { lastCommandCtx = fresh as typeof lastCommandCtx; } })
-        .then((result) => result.cancelled ? sender.send({ type: "action_error", in_reply_to: frame.id, action: "session_new", error: "cancelled" }) : freshSession())
-        .catch((error) => sender.send({ type: "action_error", in_reply_to: frame.id, action: "session_new", error: String(error) }));
+    case "session_new":
+      sessionNewBridge.dispatch(sender, frame);
       return;
-    }
     case "model_set":
       if (piApi) void handleModelSet(piApi, ctx, ensureModelRegistry(ctx), sender, frame, persistModelDefault);
       return;
@@ -390,6 +376,8 @@ async function handlePairRequest(
 
 function closeRelay(reason?: "peer_stop" | "session_replaced" | "shutdown"): void {
   lifecycle += 1;
+  sessionNewBridge.clear("session replacement cancelled because the endpoint closed");
+  replacedSessionId = null;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   reconnectAttempt = 0;
   if (reason) {
@@ -527,6 +515,7 @@ const commandDependencies: RemoteCommandDependencies = {
   hasRelay: () => relay !== null,
   piApi: () => piApi,
   setCommandContext: (ctx) => { lastCommandCtx = ctx; },
+  runInternalSessionNew: (token, ctx) => sessionNewBridge.run(token, ctx),
 };
 
 const extension: ExtensionFactory = (pi): void => {
@@ -547,6 +536,7 @@ const extension: ExtensionFactory = (pi): void => {
     }
     return undefined;
   });
+  pi.on("session_before_switch", (event) => sessionNewBridge.beforeSwitch(event.reason)); pi.on("session_before_fork", () => sessionNewBridge.beforeFork());
   pi.on("model_select", (event) => {
     const model = event.model as { name?: string; id?: string } | undefined;
     currentModel = model?.name ?? model?.id;
@@ -573,10 +563,11 @@ const extension: ExtensionFactory = (pi): void => {
     const manager = (ctx as unknown as { sessionManager?: SessionManager }).sessionManager;
     if (manager) {
       currentSessionManager = manager;
+      timelineGeneration = randomUUID();
       ensureTimeline(manager).resetSession(manager);
-      rotateGeneration("session_replaced");
       emitRuntimeEvent("session-changed", { endpoint_id: endpointIdentity.endpointId, runtime_instance_id: endpointIdentity.runtimeInstanceId, session_id: manager.getSessionId(), history_generation: timelineGeneration });
       emitRuntimeReady();
+      if (!sessionNewBridge.isRunning()) finishSessionReplacement();
     }
     try { currentThinking = pi.getThinkingLevel() as string | undefined; } catch { /* optional SDK capability */ }
     if (loadLocalConfig(process.cwd()).auto_start_relay !== false && state === "idle") {
@@ -586,12 +577,15 @@ const extension: ExtensionFactory = (pi): void => {
   pi.on("session_tree", () => rotateGeneration("branch_changed"));
   pi.on("session_shutdown", (event) => {
     const isProcessShutdown = event.reason === "quit";
-    if (isProcessShutdown) {
-      disposed = true;
-      extensionUiBridge?.dispose();
-      extensionUiBridge = null;
+    if (!isProcessShutdown) {
+      replacedSessionId = currentSessionManager?.getSessionId() ?? null;
+      currentSessionManager = null;
+      return;
     }
-    closeRelay(isProcessShutdown ? "shutdown" : "session_replaced");
+    disposed = true;
+    extensionUiBridge?.dispose();
+    extensionUiBridge = null;
+    closeRelay("shutdown");
   });
 };
 export default extension;

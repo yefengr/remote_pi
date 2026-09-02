@@ -23,7 +23,7 @@ function rpcStub(cwd: string): string {
 }
 
 describe("rpc spawn", () => {
-  test("does not pass the extension with -e", () => {
+  test("does not pass the extension with -e and always continues the existing session", () => {
     expect(rpcSpawnArgs("daemon")).toEqual([
       "--mode", "rpc", "--approve", "--continue", "--name", "daemon",
     ]);

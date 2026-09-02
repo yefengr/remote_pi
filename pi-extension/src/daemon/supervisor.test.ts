@@ -171,7 +171,7 @@ describe("orthogonal daemon lifecycle", () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
-  test("ignores queued retry and fresh-session callbacks after their slot is replaced", async () => {
+  test("ignores queued retry and crash callbacks after their slot is replaced", async () => {
     await supervisor!.stop();
     const cwd = mkdtempSync(join(tmpdir(), "pi-supervisor-stale-slot-"));
     const entry = addDaemon(cwd);
@@ -199,13 +199,9 @@ describe("orthogonal daemon lifecycle", () => {
     const failureStopQueue = queuedLifecycle(supervisor, entry.id);
     const restarting = ask({ op: "restart", id: entry.id });
     await waitForQueueChange(supervisor, entry.id, failureStopQueue);
-    const restartQueue = queuedLifecycle(supervisor, entry.id);
     children[0]!.emit("exit", { code: 42, signal: null, isCrash: true });
-    await waitForQueueChange(supervisor, entry.id, restartQueue);
-    const freshSessionQueue = queuedLifecycle(supervisor, entry.id);
     await new Promise((resolve) => setTimeout(resolve, 1_050));
     expect(oldSlot.restartTimer).toBeNull();
-    await waitForQueueChange(supervisor, entry.id, freshSessionQueue);
     releaseStop();
     await restarting;
 
@@ -306,6 +302,29 @@ describe("orthogonal daemon lifecycle", () => {
 
     expect(listDaemons().find((item) => item.id === entry.id)?.desired_state).toBe("running");
     expect(events).toEqual(["spawn:10000", "stop:10000", "spawn:10001", "stop:10001"]);
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  test("code 42 follows normal crash backoff instead of a fresh-session respawn", async () => {
+    await supervisor!.stop();
+    const cwd = mkdtempSync(join(tmpdir(), "pi-supervisor-code-42-"));
+    const entry = addDaemon(cwd);
+    const events: string[] = [];
+    const children: LifecycleChild[] = [];
+    supervisor = new Supervisor({
+      reconcileIntervalMs: 60_000,
+      childFactory: (options) => {
+        const child = new LifecycleChild(options, events);
+        children.push(child);
+        return child;
+      },
+    });
+    await supervisor.start();
+
+    children[0]!.emit("exit", { code: 42, signal: null, isCrash: true });
+    const slot = (supervisor as unknown as { children: Map<string, { restartTimer: ReturnType<typeof setTimeout> | null }> }).children.get(entry.id)!;
+    expect(slot.restartTimer).not.toBeNull();
+    expect(events).toEqual(["spawn:10000"]);
     rmSync(cwd, { recursive: true, force: true });
   });
 

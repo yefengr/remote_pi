@@ -42,6 +42,7 @@ export interface RemoteCommandDependencies {
   hasRelay(): boolean;
   piApi(): ExtensionAPI | null;
   setCommandContext(ctx: ExtensionCommandContext): void;
+  runInternalSessionNew(token: string, ctx: ExtensionCommandContext): Promise<void>;
 }
 
 function notify(ctx: CommandUiContext, text: string, kind: "info" | "warning" | "error" = "info"): void {
@@ -194,6 +195,7 @@ async function command(args: string, ctx: ExtensionCommandContext, deps: RemoteC
         else notify(ctx, "[remote-pi] Usage: daemon <start|stop|restart|status> [id]", "warning");
         return;
       }
+      case "internal-session-new": await deps.runInternalSessionNew(value, ctx); return;
       default: await deps.start(ctx); return;
     }
   } catch (error) {

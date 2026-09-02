@@ -49,7 +49,7 @@ export function healthFor(snapshot: DaemonStatusSnapshot): HealthState {
 
 export function legacyState(snapshot: Pick<DaemonStatusSnapshot, "desired" | "process" | "runtime">, health: HealthState): DaemonState {
   if (health === "blocked") return "blocked";
-  if (snapshot.desired === "stopped" && snapshot.process === "absent") return "stopped";
+  if (snapshot.desired === "stopped" && (snapshot.process === "absent" || snapshot.process === "exited")) return "stopped";
   if (snapshot.process === "spawning" || snapshot.runtime === "pending") return "starting";
   if (snapshot.process === "running") return "running";
   return "crashed";

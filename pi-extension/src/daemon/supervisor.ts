@@ -10,7 +10,7 @@ import {
 import { defaultAgentName, type LocalConfig } from "../session/local_config.js";
 import { ipcAddress, usesNamedPipe } from "../session/ipc.js";
 import {
-  EXIT_DAEMON_FRESH_SESSION, RpcChild,
+  RpcChild,
   type RpcChildExitEvent, type RpcChildOptions, type RuntimeFailedEvent,
 } from "./rpc_child.js";
 import {
@@ -550,15 +550,6 @@ export class Supervisor {
   private onChildExit(id: string, slot: ChildSlot, event: RpcChildExitEvent): void {
     if (this.children.get(id) !== slot || this.shuttingDown || slot.entry.desired_state === "stopped" || slot.blocked) return;
     this.cancelStabilityReset(slot);
-    if (event.code === EXIT_DAEMON_FRESH_SESSION) {
-      void this.enqueueLifecycle(id, () => {
-        if (this.children.get(id) !== slot || this.shuttingDown || slot.entry.desired_state !== "running" || slot.blocked) return;
-        slot.restartAttempt = 0;
-        slot.child.noteRestart();
-        slot.child.spawn();
-      });
-      return;
-    }
     if (!event.isCrash) return;
     slot.error ??= { code: "child_exited", message: `child exited (${String(event.code ?? event.signal)})`, at: Date.now(), retryable: true, stage: "process" };
     this.scheduleRetry(slot, "child exit");
