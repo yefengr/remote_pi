@@ -1,0 +1,162 @@
+name: remote-pi-e2e
+
+services:
+  relay:
+    build:
+      context: ../../relay
+      dockerfile: Dockerfile
+    image: remote-pi-e2e-relay:local
+    container_name: remote-pi-e2e-relay
+    restart: unless-stopped
+    environment:
+      REMOTEPI_RELAY_PORT: "3000"
+      RUST_LOG: warn
+    networks:
+      relay_host:
+        aliases: [relay]
+      relay_owner_b:
+        aliases: [relay]
+      relay_owner_c:
+        aliases: [relay]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  interactive:
+    build:
+      context: ../..
+      dockerfile: docker/e2e/host/Dockerfile
+    image: remote-pi-e2e-host:local
+    container_name: remote-pi-e2e-interactive
+    restart: unless-stopped
+    depends_on:
+      relay:
+        condition: service_healthy
+    environment:
+      HOME: /home/pi
+      PI_CODING_AGENT_DIR: /home/pi/.pi/agent
+      PI_CODING_AGENT_SESSION_DIR: /home/pi/.pi/agent/sessions
+      PI_OFFLINE: "1"
+      PI_TELEMETRY: "0"
+      REMOTE_PI_ALLOW_FILE_IDENTITY: "1"
+      REMOTE_PI_RELAY: http://relay:3000
+      INTERACTIVE_CONTROL_PORT: "8787"
+    volumes:
+      - remote-pi-e2e-interactive-home:/home/pi
+      - remote-pi-e2e-interactive-pi:/home/pi/.pi
+      - remote-pi-e2e-interactive-sessions:/home/pi/.pi/agent/sessions
+      - remote-pi-e2e-interactive-workspace:/workspace
+    networks:
+      relay_host: {}
+      control_interactive: {}
+    ports:
+      - "127.0.0.1:18787:8787/tcp"
+
+  supervisor:
+    image: remote-pi-e2e-host:local
+    container_name: remote-pi-e2e-supervisor
+    restart: unless-stopped
+    depends_on:
+      relay:
+        condition: service_healthy
+    environment:
+      HOME: /home/pi
+      PI_CODING_AGENT_DIR: /home/pi/.pi/agent
+      PI_CODING_AGENT_SESSION_DIR: /home/pi/.pi/agent/sessions
+      PI_OFFLINE: "1"
+      PI_TELEMETRY: "0"
+      REMOTE_PI_ALLOW_FILE_IDENTITY: "1"
+      REMOTE_PI_RELAY: http://relay:3000
+    volumes:
+      - remote-pi-e2e-supervisor-home:/home/pi
+      - remote-pi-e2e-supervisor-pi:/home/pi/.pi
+      - remote-pi-e2e-supervisor-sessions:/home/pi/.pi/agent/sessions
+      - remote-pi-e2e-supervisor-workspace:/workspace
+    networks:
+      relay_host: {}
+    entrypoint: ["/usr/bin/tini", "--", "/usr/local/bin/supervisor-entrypoint.sh"]
+
+  owner-b:
+    build:
+      context: ../..
+      dockerfile: docker/e2e/owner/Dockerfile
+    image: remote-pi-e2e-owner:local
+    container_name: remote-pi-e2e-owner-b
+    restart: unless-stopped
+    depends_on:
+      relay:
+        condition: service_healthy
+    environment:
+      OWNER_NAME: owner-b
+      OWNER_PORT: "8788"
+      RELAY_URL: ws://relay:3000
+      OWNER_STATE_DIR: /var/lib/remote-pi-owner
+    volumes:
+      - remote-pi-e2e-owner-b-state:/var/lib/remote-pi-owner
+    networks:
+      relay_owner_b: {}
+      control_owner_b: {}
+    ports:
+      - "127.0.0.1:18788:8788/tcp"
+
+  owner-c:
+    image: remote-pi-e2e-owner:local
+    container_name: remote-pi-e2e-owner-c
+    restart: unless-stopped
+    depends_on:
+      relay:
+        condition: service_healthy
+    environment:
+      OWNER_NAME: owner-c
+      OWNER_PORT: "8788"
+      RELAY_URL: ws://relay:3000
+      OWNER_STATE_DIR: /var/lib/remote-pi-owner
+    volumes:
+      - remote-pi-e2e-owner-c-state:/var/lib/remote-pi-owner
+    networks:
+      relay_owner_c: {}
+      control_owner_c: {}
+    ports:
+      - "127.0.0.1:18789:8788/tcp"
+
+networks:
+  relay_host:
+    name: remote-pi-e2e-relay-host
+    internal: true
+  relay_owner_b:
+    name: remote-pi-e2e-relay-owner-b
+    internal: true
+  relay_owner_c:
+    name: remote-pi-e2e-relay-owner-c
+    internal: true
+  control_interactive:
+    name: remote-pi-e2e-control-interactive
+  control_owner_b:
+    name: remote-pi-e2e-control-owner-b
+  control_owner_c:
+    name: remote-pi-e2e-control-owner-c
+
+volumes:
+  remote-pi-e2e-interactive-home:
+    name: remote-pi-e2e-interactive-home
+  remote-pi-e2e-interactive-pi:
+    name: remote-pi-e2e-interactive-pi
+  remote-pi-e2e-interactive-sessions:
+    name: remote-pi-e2e-interactive-sessions
+  remote-pi-e2e-interactive-workspace:
+    name: remote-pi-e2e-interactive-workspace
+  remote-pi-e2e-supervisor-home:
+    name: remote-pi-e2e-supervisor-home
+  remote-pi-e2e-supervisor-pi:
+    name: remote-pi-e2e-supervisor-pi
+  remote-pi-e2e-supervisor-sessions:
+    name: remote-pi-e2e-supervisor-sessions
+  remote-pi-e2e-supervisor-workspace:
+    name: remote-pi-e2e-supervisor-workspace
+  remote-pi-e2e-owner-b-state:
+    name: remote-pi-e2e-owner-b-state
+  remote-pi-e2e-owner-c-state:
+    name: remote-pi-e2e-owner-c-state

@@ -1,0 +1,26 @@
+# Root build context: include only Host image inputs.
+**
+!pi-extension/
+!pi-extension/package.json
+!pi-extension/pnpm-lock.yaml
+!pi-extension/pnpm-workspace.yaml
+!pi-extension/tsconfig.json
+!pi-extension/src/
+!pi-extension/src/**
+!docker/
+!docker/e2e/
+!docker/e2e/host/
+!docker/e2e/host/Dockerfile
+!docker/e2e/host/interactive-controller.mjs
+!docker/e2e/host/interactive-entrypoint.sh
+!docker/e2e/host/supervisor-entrypoint.sh
+
+# Defensive exclusions for sensitive or large material in the root context.
+node_modules/
+**/node_modules/
+.pi/
+**/.pi/
+.env*
+**/.env*
+.git/
+**/.git/
