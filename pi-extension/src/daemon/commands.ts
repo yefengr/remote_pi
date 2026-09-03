@@ -10,6 +10,8 @@ import { canonicalizeEd25519PublicKey, type Ed25519Keypair } from "../pairing/cr
 import { buildQRUri, clampPairTtlMs, qrSession, renderQRAscii, TOKEN_TTL_MS } from "../pairing/qr.js";
 import { addPeer, listPeers, removePeer } from "../pairing/storage.js";
 import { isValidRelayUrl, isWebSocketScheme, resolveRelayUrl, saveConfig } from "../config.js";
+import type { InitialRelayResult } from "../runtime/relay_lifecycle.js";
+export type { InitialRelayResult } from "../runtime/relay_lifecycle.js";
 import { addDaemon, findDaemonByCwd, listDaemons, removeDaemon } from "./registry.js";
 import { callSupervisor, supervisorOnline, SupervisorOfflineError } from "./client.js";
 import type { ControlRequest, DaemonInfo } from "./control_protocol.js";
@@ -27,7 +29,8 @@ type CommandStartContext = Pick<ExtensionContext, "ui" | "cwd">;
 type DaemonOperation = "start" | "stop" | "restart";
 
 export interface RemoteCommandDependencies {
-  start(ctx: CommandStartContext): Promise<void>;
+  start(ctx: CommandStartContext): Promise<InitialRelayResult>;
+  waitForInitialRelay(): Promise<InitialRelayResult>;
   stop(): void;
   state(): "idle" | "started";
   relayStatus(): string;
@@ -50,14 +53,25 @@ function notify(ctx: CommandUiContext, text: string, kind: "info" | "warning" | 
 }
 
 async function pair(ctx: CommandStartContext, args: string, deps: RemoteCommandDependencies): Promise<void> {
-  if (deps.state() === "idle") await deps.start(ctx);
+  const result = deps.state() === "idle" ? await deps.start(ctx) : await deps.waitForInitialRelay();
+  if (result === "cancelled") {
+    notify(ctx, `[remote-pi] Pair requires a Relay connection; current state: ${deps.relayStatus()}.`, "warning");
+    return;
+  }
   const keypair = deps.keypair();
-  if (!deps.hasRelay() || !keypair) { notify(ctx, "[remote-pi] Pair requires a Relay connection.", "warning"); return; }
+  if (!keypair) { notify(ctx, "[remote-pi] Pair requires an available device identity.", "warning"); return; }
+  if (!deps.hasRelay()) {
+    const status = deps.relayStatus();
+    notify(ctx, `[remote-pi] Pair requires a Relay connection; current state: ${status}.`, "warning");
+    return;
+  }
+  const relayUrl = deps.relayUrl();
+  if (!relayUrl) { notify(ctx, "[remote-pi] Pair requires a Relay URL.", "warning"); return; }
   const ttl = /--ttl\s+(\d+)/.exec(args);
   const ttlMs = ttl ? clampPairTtlMs(Number(ttl[1]) * 1_000) : TOKEN_TTL_MS;
   const issued = qrSession.issueToken(ttlMs);
   const identity = deps.endpointIdentity();
-  const uri = buildQRUri(issued.token, keypair.publicKey, deps.displayName(ctx.cwd), identity.endpointId, identity.runtimeInstanceId);
+  const uri = buildQRUri(issued.token, keypair.publicKey, deps.displayName(ctx.cwd), identity.endpointId, identity.runtimeInstanceId, relayUrl);
   try {
     deps.piApi()?.sendMessage({
       customType: "remote-pi:pair-code",

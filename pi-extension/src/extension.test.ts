@@ -4,15 +4,34 @@ import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-a
 import { decodeServerFrameV2 } from "./protocol/v2/index.js";
 import { RPC_CONTROL_STATUS_KEY } from "./daemon/rpc_child.js";
 
+type OwnerRecord = { name: string; remote_epk: string; paired_at: string };
+
 const relays: MockRelay[] = [];
+const owners: OwnerRecord[] = [];
+let nextIdentity: (() => Promise<{ publicKey: Uint8Array; secretKey: Uint8Array }>) | null = null;
+let nextPeerList: (() => Promise<OwnerRecord[]>) | null = null;
+let nextRelayConnect: (() => Promise<void>) | null = null;
+const listPeers = vi.fn(() => nextPeerList?.() ?? Promise.resolve([...owners]));
 
 class MockRelay extends EventEmitter {
   static OPEN = 1;
   readyState = MockRelay.OPEN;
-  connect = vi.fn().mockResolvedValue(undefined);
+  private rejectConnect: ((reason?: unknown) => void) | null = null;
+  connect = vi.fn(() => new Promise<void>((resolve, reject) => {
+    this.rejectConnect = reject;
+    void (nextRelayConnect?.() ?? Promise.resolve()).then(
+      () => { if (this.rejectConnect === reject) this.rejectConnect = null; resolve(); },
+      (error: unknown) => { if (this.rejectConnect === reject) this.rejectConnect = null; reject(error); },
+    );
+  }));
   send = vi.fn();
   sendControl = vi.fn();
-  close = vi.fn(() => { this.readyState = 3; });
+  close = vi.fn(() => {
+    this.readyState = 3;
+    const reject = this.rejectConnect;
+    this.rejectConnect = null;
+    reject?.(new Error("Relay closed"));
+  });
   isOpen = vi.fn(() => this.readyState === MockRelay.OPEN);
   constructor() { super(); relays.push(this); }
 }
@@ -22,13 +41,12 @@ vi.mock("./transport/relay_client.js", async (importOriginal) => ({
   RelayClient: MockRelay,
 }));
 
-const owners: Array<{ name: string; remote_epk: string; paired_at: string }> = [];
 vi.mock("./pairing/storage.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("./pairing/storage.js")>();
   return {
     ...original,
-    getOrCreateEd25519Keypair: vi.fn().mockResolvedValue({ publicKey: new Uint8Array(32).fill(1), secretKey: new Uint8Array(32).fill(2) }),
-    listPeers: vi.fn().mockImplementation(async () => [...owners]),
+    getOrCreateEd25519Keypair: vi.fn(() => nextIdentity?.() ?? Promise.resolve({ publicKey: new Uint8Array(32).fill(1), secretKey: new Uint8Array(32).fill(2) })),
+    listPeers,
     addPeer: vi.fn().mockImplementation(async (owner) => { owners.push(owner); }),
     removePeer: vi.fn().mockImplementation(async (ownerId) => {
       const index = owners.findIndex((owner) => owner.remote_epk === ownerId);
@@ -53,7 +71,7 @@ vi.mock("./pairing/qr.js", async (importOriginal) => {
 });
 
 const {
-  default: extension, _connectForTest, _stopForTest, _getState, processEndpointIdentity,
+  default: extension, _connectForTest, _stopForTest, _getState, _getCachedPublicKeyForTest, _hasPendingReconnect, processEndpointIdentity,
   _setSessionNewBridgeTimeoutForTest,
 } = await import("./index.js");
 
@@ -104,6 +122,10 @@ describe("Remote Pi endpoint extension", () => {
   beforeEach(async () => {
     owners.length = 0;
     relays.length = 0;
+    nextIdentity = null;
+    nextPeerList = null;
+    nextRelayConnect = null;
+    listPeers.mockClear();
     tokenStatus = "ok";
     _setSessionNewBridgeTimeoutForTest(5_000);
     await _stopForTest(ctx());
@@ -127,6 +149,214 @@ describe("Remote Pi endpoint extension", () => {
       authorizedOwnerIds: [sourceOwner()],
       metadata: expect.objectContaining({ kind: "interactive", pid: process.pid }),
     }));
+    await _connectForTest(ctx());
+    expect(relays).toHaveLength(1);
+  });
+
+  test("waits for auto-start identity and Relay connection before generating a pairing QR", async () => {
+    let resolveIdentity!: (keypair: { publicKey: Uint8Array; secretKey: Uint8Array }) => void;
+    let resolveConnect!: () => void;
+    nextIdentity = () => new Promise((resolve) => { resolveIdentity = resolve; });
+    nextRelayConnect = () => new Promise<void>((resolve) => { resolveConnect = resolve; });
+    const pi = makePi();
+    (extension as ExtensionFactory)(pi);
+    process.env["REMOTE_PI_DIRECT_CONFIG"] = JSON.stringify({ auto_start_relay: true });
+    try {
+      pi.handlers.get("session_start")?.({}, { ...ctx(), sessionManager: { getSessionId: () => "session-pair", getBranch: () => [], appendCustomEntry: vi.fn(), getLeafId: () => "session-pair" } });
+      const pairContext = ctx();
+      const pairPromise = pi.commands.get("remote-pi pair")!("", pairContext);
+      expect(relays).toHaveLength(0);
+      expect(pairContext.ui.notify).not.toHaveBeenCalledWith("[remote-pi] Already connected.", "warning");
+
+      resolveIdentity({ publicKey: new Uint8Array(32).fill(1), secretKey: new Uint8Array(32).fill(2) });
+      await vi.waitFor(() => expect(relays).toHaveLength(1));
+      expect(pi.sent.some((message) => (message as { customType?: string }).customType === "remote-pi:pair-code")).toBe(false);
+
+      resolveConnect();
+      await pairPromise;
+
+      expect(relays[0]!.connect).toHaveBeenCalledOnce();
+      expect(pairContext.ui.notify).not.toHaveBeenCalledWith("[remote-pi] Already connected.", "warning");
+      const pairCode = pi.sent.find((message) => (message as { customType?: string }).customType === "remote-pi:pair-code") as { details: { uri: string } };
+      expect(new URL(pairCode.details.uri).searchParams.get("r")).toBe("https://relay-pi.yefengr.cn");
+    } finally {
+      delete process.env["REMOTE_PI_DIRECT_CONFIG"];
+    }
+  });
+
+  test("stopping a pending Relay connect releases pair and isolates the next start", async () => {
+    nextRelayConnect = () => new Promise<void>(() => undefined);
+    const pi = makePi();
+    (extension as ExtensionFactory)(pi);
+    process.env["REMOTE_PI_DIRECT_CONFIG"] = JSON.stringify({ auto_start_relay: true });
+    try {
+      pi.handlers.get("session_start")?.({}, { ...ctx(), sessionManager: { getSessionId: () => "session-stop", getBranch: () => [], appendCustomEntry: vi.fn(), getLeafId: () => "session-stop" } });
+      await vi.waitFor(() => expect(relays).toHaveLength(1));
+      const pairContext = ctx();
+      const pairPromise = pi.commands.get("remote-pi pair")!("", pairContext);
+
+      await pi.commands.get("remote-pi stop")!("", ctx());
+      await pairPromise;
+
+      expect(relays[0]!.close).toHaveBeenCalledOnce();
+      expect(pi.sent.some((message) => (message as { customType?: string }).customType === "remote-pi:pair-code")).toBe(false);
+      expect(pairContext.ui.notify).toHaveBeenCalledWith("[remote-pi] Pair requires a Relay connection; current state: disconnected.", "warning");
+
+      nextRelayConnect = null;
+      await _connectForTest(ctx());
+      expect(relays).toHaveLength(2);
+      expect(relays[1]!.connect).toHaveBeenCalledOnce();
+      expect(_getState()).toBe("started");
+    } finally {
+      delete process.env["REMOTE_PI_DIRECT_CONFIG"];
+    }
+  });
+
+  test("stopping while identity is pending releases pair without affecting the next start", async () => {
+    let resolveOldIdentity!: (keypair: { publicKey: Uint8Array; secretKey: Uint8Array }) => void;
+    nextIdentity = () => new Promise((resolve) => { resolveOldIdentity = resolve; });
+    const pi = makePi();
+    (extension as ExtensionFactory)(pi);
+    process.env["REMOTE_PI_DIRECT_CONFIG"] = JSON.stringify({ auto_start_relay: true });
+    try {
+      pi.handlers.get("session_start")?.({}, { ...ctx(), sessionManager: { getSessionId: () => "session-identity-stop", getBranch: () => [], appendCustomEntry: vi.fn(), getLeafId: () => "session-identity-stop" } });
+      const pairContext = ctx();
+      const pairPromise = pi.commands.get("remote-pi pair")!("", pairContext);
+      expect(relays).toHaveLength(0);
+
+      await pi.commands.get("remote-pi stop")!("", ctx());
+      await pairPromise;
+
+      expect(pi.sent.some((message) => (message as { customType?: string }).customType === "remote-pi:pair-code")).toBe(false);
+      expect(pairContext.ui.notify).toHaveBeenCalledWith("[remote-pi] Pair requires a Relay connection; current state: disconnected.", "warning");
+
+      nextIdentity = null;
+      await _connectForTest(ctx());
+      expect(relays).toHaveLength(1);
+      const newPublicKey = _getCachedPublicKeyForTest();
+
+      resolveOldIdentity({ publicKey: new Uint8Array(32).fill(2), secretKey: new Uint8Array(32).fill(3) });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(_getCachedPublicKeyForTest()).toBe(newPublicKey);
+      expect(relays).toHaveLength(1);
+      expect(_getState()).toBe("started");
+    } finally {
+      delete process.env["REMOTE_PI_DIRECT_CONFIG"];
+    }
+  });
+
+  test("stopping while host options are pending prevents the old Relay client", async () => {
+    let resolvePeers!: (peers: OwnerRecord[]) => void;
+    nextPeerList = () => new Promise((resolve) => { resolvePeers = resolve; });
+    const pi = makePi();
+    (extension as ExtensionFactory)(pi);
+    process.env["REMOTE_PI_DIRECT_CONFIG"] = JSON.stringify({ auto_start_relay: true });
+    try {
+      pi.handlers.get("session_start")?.({}, { ...ctx(), sessionManager: { getSessionId: () => "session-options-stop", getBranch: () => [], appendCustomEntry: vi.fn(), getLeafId: () => "session-options-stop" } });
+      await vi.waitFor(() => expect(listPeers).toHaveBeenCalledOnce());
+      expect(relays).toHaveLength(0);
+      const pairContext = ctx();
+      const pairPromise = pi.commands.get("remote-pi pair")!("", pairContext);
+
+      await pi.commands.get("remote-pi stop")!("", ctx());
+      await pairPromise;
+
+      expect(pi.sent.some((message) => (message as { customType?: string }).customType === "remote-pi:pair-code")).toBe(false);
+      expect(pairContext.ui.notify).toHaveBeenCalledWith("[remote-pi] Pair requires a Relay connection; current state: disconnected.", "warning");
+
+      resolvePeers([]);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(relays).toHaveLength(0);
+
+      nextPeerList = null;
+      await _connectForTest(ctx());
+      expect(relays).toHaveLength(1);
+      expect(relays[0]!.connect).toHaveBeenCalledOnce();
+      expect(_getState()).toBe("started");
+    } finally {
+      delete process.env["REMOTE_PI_DIRECT_CONFIG"];
+    }
+  });
+
+  test("stopping a pending background reconnect closes its candidate without scheduling another retry", async () => {
+    vi.useFakeTimers();
+    try {
+      await _connectForTest(ctx());
+      nextRelayConnect = () => new Promise<void>(() => undefined);
+      relays[0]!.emit("close");
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(relays).toHaveLength(2);
+      expect(relays[1]!.connect).toHaveBeenCalledOnce();
+      expect(relays[1]!.listenerCount("message")).toBe(0);
+      await _stopForTest(ctx());
+      await Promise.resolve();
+
+      expect(relays[1]!.close).toHaveBeenCalledOnce();
+      expect(_hasPendingReconnect()).toBe(false);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(relays).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("stopping during background reconnect options does not create a candidate", async () => {
+    vi.useFakeTimers();
+    try {
+      await _connectForTest(ctx());
+      listPeers.mockClear();
+      let resolvePeers!: (peers: OwnerRecord[]) => void;
+      nextPeerList = () => new Promise((resolve) => { resolvePeers = resolve; });
+      relays[0]!.emit("close");
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(listPeers).toHaveBeenCalledOnce();
+      expect(relays).toHaveLength(1);
+      await _stopForTest(ctx());
+      resolvePeers([]);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(relays).toHaveLength(1);
+      expect(_hasPendingReconnect()).toBe(false);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(relays).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("repeated start reports background reconnect without creating another Relay client", async () => {
+    await _connectForTest(ctx());
+    relays[0]!.emit("close");
+    const retryContext = ctx();
+
+    await _connectForTest(retryContext);
+
+    expect(retryContext.ui.notify).toHaveBeenCalledWith("[remote-pi] Relay is reconnecting in background.", "warning");
+    expect(retryContext.ui.notify).not.toHaveBeenCalledWith("[remote-pi] Already connected.", "warning");
+    expect(relays).toHaveLength(1);
+    expect(_hasPendingReconnect()).toBe(true);
+    await _stopForTest(ctx());
+  });
+
+  test("does not generate a pairing QR after the socket stops being open", async () => {
+    const pi = makePi();
+    (extension as ExtensionFactory)(pi);
+    await _connectForTest(ctx());
+    relays[0]!.readyState = 3;
+    const pairContext = ctx();
+
+    await pi.commands.get("remote-pi pair")!("", pairContext);
+
+    expect(pi.sent.some((message) => (message as { customType?: string }).customType === "remote-pi:pair-code")).toBe(false);
+    expect(pairContext.ui.notify).toHaveBeenCalledWith(
+      "[remote-pi] Pair requires a Relay connection; current state: reconnecting.",
+      "warning",
+    );
   });
 
   test("emits daemon readiness over the structured RPC status channel", () => {

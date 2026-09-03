@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   QRSession,
+  buildQRUri,
   clampPairTtlMs,
   TOKEN_TTL_MS,
   PAIR_TTL_MIN_MS,
@@ -20,6 +21,35 @@ describe("clampPairTtlMs", () => {
   test("non-finite (NaN / Infinity) falls back to the default", () => {
     expect(clampPairTtlMs(Number.NaN)).toBe(TOKEN_TTL_MS);
     expect(clampPairTtlMs(Number.POSITIVE_INFINITY)).toBe(TOKEN_TTL_MS);
+  });
+});
+
+describe("buildQRUri", () => {
+  test("includes the canonical Relay URL for the PWA pairing target", () => {
+    const uri = buildQRUri(
+      "token",
+      new Uint8Array(32).fill(1),
+      "Local Pi",
+      "11f4842b-726f-4c2d-8c86-c66ddf1f1d7a",
+      "42f4842b-726f-4c2d-8c86-c66ddf1f1d7a",
+      "https://relay.example.test",
+    );
+
+    expect(new URL(uri).searchParams.get("r")).toBe("https://relay.example.test");
+  });
+
+  test("omits an absent or non-HTTP Relay hint", () => {
+    const args = [
+      "token",
+      new Uint8Array(32).fill(1),
+      "Local Pi",
+      "11f4842b-726f-4c2d-8c86-c66ddf1f1d7a",
+      "42f4842b-726f-4c2d-8c86-c66ddf1f1d7a",
+    ] as const;
+
+    expect(new URL(buildQRUri(...args)).searchParams.has("r")).toBe(false);
+    expect(new URL(buildQRUri(...args, "ftp://relay.example.test")).searchParams.has("r")).toBe(false);
+    expect(new URL(buildQRUri(...args, "not a URL")).searchParams.has("r")).toBe(false);
   });
 });
 

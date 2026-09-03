@@ -6,7 +6,7 @@ import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory, SessionManager } from "@earendil-works/pi-coding-agent";
-import { canonicalizeEd25519PublicKey, type Ed25519Keypair } from "./pairing/crypto.js";
+import { canonicalizeEd25519PublicKey } from "./pairing/crypto.js";
 import { qrSession } from "./pairing/qr.js";
 import { addPeer, getOrCreateEd25519Keypair, KeyringUnavailableError, PairedIdentityMissingError, listPeers, type PeerRecord } from "./pairing/storage.js";
 import { type ClientFrame, type ServerFrame } from "./protocol/v2/index.js";
@@ -23,12 +23,11 @@ import { defaultAgentName, loadLocalConfig } from "./session/local_config.js";
 import { resolveRelayUrl, toWebSocketUrl } from "./config.js";
 import { persistModelDefault, registerCommands, runDirectCli, type RemoteCommandDependencies } from "./daemon/commands.js";
 import { installOwnerRouter } from "./runtime/owner_router.js";
-const CONTROL_PROTOCOL_VERSION = 2, RECONNECT_BACKOFFS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
+import { RelayLifecycle, type RelayStartContext } from "./runtime/relay_lifecycle.js";
+export type { RelayConnectivity, RemoteState } from "./runtime/relay_lifecycle.js";
+const CONTROL_PROTOCOL_VERSION = 2;
 const ENDPOINT_ID_ENV = "REMOTE_PI_ENDPOINT_ID", RUNTIME_INSTANCE_ID_ENV = "REMOTE_PI_RUNTIME_INSTANCE_ID";
 const CTRL_PREFIX = "\x00remote-pi-ctrl:";
-export type RemoteState = "idle" | "started";
-export type RelayConnectivity = "connected" | "reconnecting" | "disconnected";
-
 type ProcessIdentity = Readonly<{ endpointId: string; runtimeInstanceId: string }>;
 type EndpointGlobal = typeof globalThis & { [key: symbol]: ProcessIdentity | undefined };
 const PROCESS_IDENTITY_KEY = Symbol.for("remote-pi.endpoint-process-identity");
@@ -52,14 +51,6 @@ export function processEndpointIdentity(): ProcessIdentity {
 }
 
 const endpointIdentity = processEndpointIdentity();
-let state: RemoteState = "idle";
-let relay: RelayClient | null = null;
-let relayUrl: string | null = null;
-let keypair: Ed25519Keypair | null = null;
-let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-let reconnectAttempt = 0;
-let lifecycle = 0;
-let disposed = false;
 let currentModel: string | undefined;
 let currentThinking: string | undefined;
 let working = false;
@@ -74,19 +65,19 @@ let currentTurnId: string | null = null;
 let replacedSessionId: string | null = null;
 const sessionNewBridge = new SessionNewBridge({ getPi: () => piApi, onCommandContext: (ctx) => { lastCommandCtx = ctx; }, onReplaced: (ctx) => { lastCommandCtx = ctx as typeof lastCommandCtx; }, onFinished: () => finishSessionReplacement() });
 
-export const _getState = (): "idle" | "started" | "paired" => state === "idle" ? "idle" : activeOwners.size > 0 ? "paired" : "started";
-export const _getCachedPublicKeyForTest = (): string | null => keypair ? Buffer.from(keypair.publicKey).toString("base64") : null;
+export const _getState = (): "idle" | "started" | "paired" => relayLifecycle.state === "idle" ? "idle" : activeOwners.size > 0 ? "paired" : "started";
+export const _getCachedPublicKeyForTest = (): string | null => relayLifecycle.keypair ? Buffer.from(relayLifecycle.keypair.publicKey).toString("base64") : null;
 export const _getCurrentTurnIdForTest = (): string | null => currentTurnId;
 export const _setPiForTest = (value: unknown): void => { piApi = value as ExtensionAPI; };
 export const _setCurrentModelForTest = (value: string | undefined): void => { currentModel = value; };
 export const _setSessionStartedAtForTest = (_value: number | null): void => { /* compatibility no-op */ };
 export const _setMessageBufferForTest = (_value: unknown[]): void => { /* compatibility no-op */ };
 export const _getMessageBufferForTest = (): unknown[] => [];
-export const _hasPendingReconnect = (): boolean => reconnectTimer !== null;
+export const _hasPendingReconnect = (): boolean => relayLifecycle.hasPendingReconnect;
 export const _getActivePeerCountForTest = (): number => activeOwners.size;
 export const _hasActivePeerForTest = (ownerId: string): boolean => activeOwners.has(ownerId);
-export const _getDisposedForTest = (): boolean => disposed;
-export const _setDisposedForTest = (value: boolean): void => { disposed = value; };
+export const _getDisposedForTest = (): boolean => relayLifecycle.disposed;
+export const _setDisposedForTest = (value: boolean): void => { relayLifecycle.setDisposed(value); };
 export const _resetAutoInitedForTest = (): void => undefined;
 export const _setAutoInitedForTest = (_value: boolean): void => undefined;
 export const _setSessionNewBridgeTimeoutForTest = (timeoutMs: number): void => sessionNewBridge.setTimeoutForTest(timeoutMs);
@@ -106,6 +97,7 @@ function endpointMetadata(cwd = process.cwd()): EndpointMetadata {
 }
 
 function routeIdentity(): HostRouteIdentity {
+  const keypair = relayLifecycle.keypair;
   if (!keypair) throw new Error("remote-pi identity is unavailable");
   return { deviceId: Buffer.from(keypair.publicKey).toString("base64"), endpointId: endpointIdentity.endpointId, runtimeInstanceId: endpointIdentity.runtimeInstanceId };
 }
@@ -119,10 +111,7 @@ async function authorizedOwnerIds(): Promise<string[]> {
   return [...owners];
 }
 
-function relayStatus(): RelayConnectivity {
-  if (state === "idle") return "disconnected";
-  return relay?.isOpen() ? "connected" : "reconnecting";
-}
+function relayStatus() { return relayLifecycle.status; }
 
 function emitRuntimeEvent(type: string, details: Record<string, unknown>): void {
   if (process.env.REMOTE_PI_DAEMON === "1") {
@@ -152,6 +141,7 @@ function emitRuntimeFailed(stage: string, code: string, message: string, retryab
 }
 
 async function updateEndpoint(): Promise<void> {
+  const relay = relayLifecycle.relay;
   if (!relay?.isOpen()) return;
   try {
     relay.sendControl({
@@ -166,14 +156,36 @@ function refreshFooter(ctx?: Pick<ExtensionContext, "ui"> | null): void {
   const ui = ctx?.ui ?? lastEventCtx?.ui ?? lastCommandCtx?.ui;
   if (!ui || typeof ui.setStatus !== "function" || typeof ui.setTitle !== "function") return;
   try {
-    ui.setStatus("remote-pi:relay", state === "idle" ? undefined : activeOwners.size ? "🟢 relay" : "🟡 relay waiting for pairing");
+    ui.setStatus("remote-pi:relay", relayLifecycle.state === "idle" ? undefined : activeOwners.size ? "🟢 relay" : "🟡 relay waiting for pairing");
     ui.setStatus("remote-pi:owner-active", activeOwners.size ? `📱 ${[...activeOwners.keys()][0]!.slice(0, 8)}` : undefined);
     ui.setStatus("remote-pi:session", undefined);
-    ui.setTitle(`${displayName()} · ${state === "idle" ? "Off" : "On"}`);
+    ui.setTitle(`${displayName()} · ${relayLifecycle.state === "idle" ? "Off" : "On"}`);
   } catch { /* stale UI context */ }
 }
 
 const activeOwners = new Map<string, { channel: V2PeerChannel; service: TimelineV2Service }>();
+const relayLifecycle = new RelayLifecycle({
+  loadIdentity: getOrCreateEd25519Keypair,
+  resolveRelayUrl,
+  createClient: (url, identity) => new RelayClient(toWebSocketUrl(url), identity),
+  buildConnectOptions: hostConnectOptions,
+  handleIdentityError: (error, ctx) => {
+    if (!(error instanceof KeyringUnavailableError) && !(error instanceof PairedIdentityMissingError)) return false;
+    emitRuntimeFailed("identity", error instanceof KeyringUnavailableError ? "keyring_unavailable" : "paired_identity_missing", error.message, false);
+    try { ctx.ui.notify(`[remote-pi] Cannot access the established device identity: ${error.message}`, "error"); } catch { /* stale UI context */ }
+    return true;
+  },
+  describeConnection: (resolution) => `[remote-pi] Connecting endpoint ${endpointIdentity.endpointId.slice(0, 8)} to ${resolution.url} (source: ${resolution.source})…`,
+  onStateChange: emitRelayState,
+  onConnected: (client, ctx) => {
+    installRouteListener(client);
+    if (ctx) refreshFooter(ctx);
+    else void updateEndpoint();
+  },
+  onDisconnected: () => {
+    for (const ownerId of [...activeOwners.keys()]) detachOwner(ownerId);
+  },
+});
 
 function detachOwner(ownerId: string): void {
   const binding = activeOwners.get(ownerId);
@@ -317,9 +329,8 @@ function routeClientFrame(ownerId: string, frame: ClientFrame): void {
 }
 
 function installRouteListener(relayClient: RelayClient): () => void {
-  const expectedLifecycle = lifecycle;
   return installOwnerRouter(relayClient, {
-    isCurrent: (candidate) => !disposed && state === "started" && relay === candidate && lifecycle === expectedLifecycle,
+    isCurrent: (candidate) => relayLifecycle.isCurrent(candidate),
     routeIdentity,
     hasOwner: (ownerId) => activeOwners.has(ownerId),
     findKnownOwner: async (ownerId) => !!await findKnownOwner(ownerId),
@@ -375,67 +386,15 @@ async function handlePairRequest(
 }
 
 function closeRelay(reason?: "peer_stop" | "session_replaced" | "shutdown"): void {
-  lifecycle += 1;
   sessionNewBridge.clear("session replacement cancelled because the endpoint closed");
   replacedSessionId = null;
-  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-  reconnectAttempt = 0;
   if (reason) {
     for (const { channel, service } of activeOwners.values()) {
       channel.sendV2({ protocol_version: 2, type: "bye", session_id: currentSessionManager?.getSessionId() ?? "unknown", history_generation: service.generation, reason });
     }
   }
-  for (const ownerId of [...activeOwners.keys()]) detachOwner(ownerId);
-  const oldRelay = relay;
-  relay = null;
-  relayUrl = null;
-  state = "idle";
-  oldRelay?.close();
+  relayLifecycle.stop();
   refreshFooter();
-  emitRelayState();
-}
-
-function scheduleRelayReconnect(url: string): void {
-  if (!keypair || disposed || state !== "started") return;
-  if (reconnectTimer) clearTimeout(reconnectTimer);
-  const localLifecycle = ++lifecycle;
-  const delay = RECONNECT_BACKOFFS_MS[Math.min(reconnectAttempt++, RECONNECT_BACKOFFS_MS.length - 1)]!;
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null;
-    if (disposed || state !== "started" || lifecycle !== localLifecycle) return;
-    void reconnect(url, localLifecycle);
-  }, delay);
-}
-
-function onRelayClose(closed: RelayClient): void {
-  if (closed !== relay || state === "idle") return;
-  for (const ownerId of [...activeOwners.keys()]) detachOwner(ownerId);
-  relay = null;
-  emitRelayState();
-  const url = relayUrl;
-  if (url) scheduleRelayReconnect(url);
-}
-
-async function reconnect(url: string, expectedLifecycle: number): Promise<void> {
-  if (!keypair || disposed || state !== "started" || lifecycle !== expectedLifecycle) return;
-  const candidate = new RelayClient(toWebSocketUrl(url), keypair);
-  try {
-    await candidate.connect(await hostConnectOptions());
-  } catch {
-    candidate.close();
-    if (state === "started" && lifecycle === expectedLifecycle) {
-      emitRelayState();
-      scheduleRelayReconnect(url);
-    }
-    return;
-  }
-  if (disposed || state !== "started" || lifecycle !== expectedLifecycle) { candidate.close(); return; }
-  relay = candidate;
-  reconnectAttempt = 0;
-  candidate.on("close", () => onRelayClose(candidate));
-  installRouteListener(candidate);
-  emitRelayState();
-  void updateEndpoint();
 }
 
 async function hostConnectOptions(cwd = process.cwd()): Promise<HostConnectOptions> {
@@ -448,42 +407,8 @@ async function hostConnectOptions(cwd = process.cwd()): Promise<HostConnectOptio
   };
 }
 
-async function start(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
-  if (state !== "idle") { try { ctx.ui.notify("[remote-pi] Already connected.", "warning"); } catch { /* stale UI context */ } return; }
-  const candidateLifecycle = ++lifecycle;
-  try { keypair = await getOrCreateEd25519Keypair(); }
-  catch (error) {
-    if (error instanceof KeyringUnavailableError || error instanceof PairedIdentityMissingError) {
-      emitRuntimeFailed("identity", error instanceof KeyringUnavailableError ? "keyring_unavailable" : "paired_identity_missing", error.message, false);
-      try { ctx.ui.notify(`[remote-pi] Cannot access the established device identity: ${error.message}`, "error"); } catch { /* stale UI context */ }
-      return;
-    }
-    throw error;
-  }
-  if (disposed || lifecycle !== candidateLifecycle) return;
-  const resolution = resolveRelayUrl();
-  relayUrl = resolution.url;
-  state = "started";
-  emitRelayState();
-  const candidate = new RelayClient(toWebSocketUrl(resolution.url), keypair);
-  try { ctx.ui.notify(`[remote-pi] Connecting endpoint ${endpointIdentity.endpointId.slice(0, 8)} to ${resolution.url} (source: ${resolution.source})…`); } catch { /* stale UI context */ }
-  try { await candidate.connect(await hostConnectOptions(ctx.cwd)); }
-  catch (error) {
-    candidate.close();
-    if (!disposed && lifecycle === candidateLifecycle) {
-      try { ctx.ui.notify(`[remote-pi] Relay unavailable; reconnecting in background: ${String(error)}`, "warning"); } catch { /* stale UI context */ }
-      emitRelayState();
-      scheduleRelayReconnect(resolution.url);
-    }
-    return;
-  }
-  if (disposed || lifecycle !== candidateLifecycle) { candidate.close(); return; }
-  relay = candidate;
-  candidate.on("close", () => onRelayClose(candidate));
-  installRouteListener(candidate);
-  refreshFooter(ctx);
-  emitRelayState();
-}
+function start(ctx: RelayStartContext) { return relayLifecycle.start(ctx); }
+function waitForInitialRelay() { return relayLifecycle.waitForInitial(); }
 
 const extensionVersion = (): string => {
   try {
@@ -501,18 +426,19 @@ function appliedSet(): WeakSet<object> {
 
 const commandDependencies: RemoteCommandDependencies = {
   start,
+  waitForInitialRelay,
   stop: () => closeRelay("peer_stop"),
-  state: () => state,
+  state: () => relayLifecycle.state,
   relayStatus,
-  relayUrl: () => relayUrl,
+  relayUrl: () => relayLifecycle.relayUrl,
   endpointIdentity: () => endpointIdentity,
   activeOwnerCount: () => activeOwners.size,
   isOwnerActive: (ownerId) => activeOwners.has(ownerId),
   detachOwner,
   updateEndpoint,
   displayName,
-  keypair: () => keypair,
-  hasRelay: () => relay !== null,
+  keypair: () => relayLifecycle.keypair,
+  hasRelay: () => relayLifecycle.relay?.isOpen() === true,
   piApi: () => piApi,
   setCommandContext: (ctx) => { lastCommandCtx = ctx; },
   runInternalSessionNew: (token, ctx) => sessionNewBridge.run(token, ctx),
@@ -570,8 +496,8 @@ const extension: ExtensionFactory = (pi): void => {
       if (!sessionNewBridge.isRunning()) finishSessionReplacement();
     }
     try { currentThinking = pi.getThinkingLevel() as string | undefined; } catch { /* optional SDK capability */ }
-    if (loadLocalConfig(process.cwd()).auto_start_relay !== false && state === "idle") {
-      void start(ctx as Pick<ExtensionContext, "ui" | "cwd">);
+    if (loadLocalConfig(process.cwd()).auto_start_relay !== false && relayLifecycle.state === "idle") {
+      void start(ctx as RelayStartContext);
     }
   });
   pi.on("session_tree", () => rotateGeneration("branch_changed"));
@@ -582,7 +508,7 @@ const extension: ExtensionFactory = (pi): void => {
       currentSessionManager = null;
       return;
     }
-    disposed = true;
+    relayLifecycle.setDisposed(true);
     extensionUiBridge?.dispose();
     extensionUiBridge = null;
     closeRelay("shutdown");
@@ -590,9 +516,9 @@ const extension: ExtensionFactory = (pi): void => {
 };
 export default extension;
 /** Compatibility seam used by focused extension tests. */
-export async function _startRelayForTest(ctx: unknown): Promise<void> { await start(ctx as Pick<ExtensionContext, "ui" | "cwd">); }
+export async function _startRelayForTest(ctx: unknown): Promise<void> { await start(ctx as RelayStartContext); }
 export async function _stopForTest(_ctx: unknown): Promise<void> { closeRelay("peer_stop"); }
-export async function _connectForTest(ctx: unknown): Promise<void> { await start(ctx as Pick<ExtensionContext, "ui" | "cwd">); }
+export async function _connectForTest(ctx: unknown): Promise<void> { await start(ctx as RelayStartContext); }
 
 runDirectCli(commandDependencies, (() => {
   try { return fileURLToPath(import.meta.url) === realpathSync(process.argv[1] ?? ""); }

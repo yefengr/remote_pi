@@ -52,6 +52,7 @@ export function buildQRUri(
   sessionName: string,
   endpointId: string,
   runtimeInstanceId: string,
+  relayUrl?: string,
 ): string {
   const params = new URLSearchParams({
     t: token,
@@ -60,6 +61,12 @@ export function buildQRUri(
     ep: endpointId,
     rt: runtimeInstanceId,
   });
+  if (relayUrl) {
+    try {
+      const protocol = new URL(relayUrl).protocol;
+      if (protocol === "http:" || protocol === "https:") params.set("r", relayUrl);
+    } catch { /* invalid optional hint */ }
+  }
   return `remotepi://pair?${params.toString()}`;
 }
 
@@ -78,13 +85,14 @@ export function startQRRotation(
   sessionName: string,
   endpointId: string,
   runtimeInstanceId: string,
+  relayUrl: string,
 ): () => void {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
   const rotate = () => {
     if (stopped) return;
     const { token, expiresAt } = qrSession.issueToken();
-    displayQR(buildQRUri(token, longtermEdPk, sessionName, endpointId, runtimeInstanceId));
+    displayQR(buildQRUri(token, longtermEdPk, sessionName, endpointId, runtimeInstanceId, relayUrl));
     console.log(`Renews at ${new Date(expiresAt).toLocaleTimeString()} — waiting for scan…`);
     timer = setTimeout(rotate, TOKEN_TTL_MS);
   };

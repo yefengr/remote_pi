@@ -3,16 +3,19 @@ import { EventEmitter } from "node:events";
 import { generateEd25519Keypair } from "../pairing/crypto.js";
 
 const wsRef: { current: MockWS | null } = { current: null };
+const sockets: MockWS[] = [];
 
 class MockWS extends EventEmitter {
   static OPEN = 1;
+  static openOnConstruct = true;
   readyState = MockWS.OPEN;
   readonly sent: string[] = [];
 
   constructor(_url: string) {
     super();
     wsRef.current = this;
-    setTimeout(() => this.emit("open"), 0);
+    sockets.push(this);
+    if (MockWS.openOnConstruct) setTimeout(() => this.emit("open"), 0);
   }
 
   send(data: string): void { this.sent.push(data); }
@@ -65,6 +68,8 @@ describe("RelayClient", () => {
   beforeEach(() => {
     keypair = generateEd25519Keypair();
     wsRef.current = null;
+    sockets.length = 0;
+    MockWS.openOnConstruct = true;
   });
 
   test("isOpen reflects the real WebSocket lifecycle", async () => {
@@ -74,6 +79,102 @@ describe("RelayClient", () => {
     expect(client.isOpen()).toBe(true);
     client.close();
     expect(client.isOpen()).toBe(false);
+  });
+
+  test("rejects connect when the socket never opens", async () => {
+    vi.useFakeTimers();
+    try {
+      MockWS.openOnConstruct = false;
+      const client = new RelayClient("ws://localhost:9999", keypair);
+      const connection = client.connect({ role: "owner" });
+      const rejection = expect(connection).rejects.toThrow("relay connection timeout");
+
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      await rejection;
+      expect(currentWs().readyState).toBe(3);
+      expect(client.isOpen()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("close rejects connect before the socket opens without leaving authentication timers", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new RelayClient("ws://localhost:9999", keypair);
+      const connected = client.connect(HOST_OPTIONS);
+      const ws = currentWs();
+      client.close();
+
+      await expect(connected).rejects.toThrow("relay connection closed");
+      expect(ws.readyState).toBe(3);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(ws.sent).toEqual([]);
+      expect(ws.listenerCount("message")).toBe(0);
+      expect(ws.listenerCount("close")).toBe(0);
+      expect(ws.listenerCount("ping")).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("close rejects authentication wait and ignores a late challenge", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new RelayClient("ws://localhost:9999", keypair);
+      const connected = client.connect(HOST_OPTIONS);
+      await vi.advanceTimersByTimeAsync(0);
+      const ws = currentWs();
+      expect(ws.sent).toHaveLength(1);
+      expect(ws.listenerCount("message")).toBe(1);
+
+      client.close();
+      await expect(connected).rejects.toThrow("relay connection closed");
+      expect(ws.listenerCount("message")).toBe(0);
+      expect(ws.listenerCount("close")).toBe(0);
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      simulateChallenge(ws);
+      expect(ws.sent).toHaveLength(1);
+      expect(ws.listenerCount("message")).toBe(0);
+      expect(ws.listenerCount("ping")).toBe(0);
+      expect(client.isOpen()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("a replaced socket cannot emit late events into the current connection", async () => {
+    const client = new RelayClient("ws://localhost:9999", keypair);
+    const messages: string[] = [];
+    const errors: string[] = [];
+    let closes = 0;
+    client.on("message", (message) => messages.push(message));
+    client.on("error", (error) => errors.push(error.message));
+    client.on("close", () => { closes += 1; });
+    await connectWithAuth(client, HOST_OPTIONS);
+    const first = sockets[0]!;
+    vi.spyOn(first, "close").mockImplementation(() => { first.readyState = 2; });
+
+    const secondConnection = client.connect(HOST_OPTIONS);
+    await vi.waitFor(() => expect(sockets).toHaveLength(2));
+    const second = sockets[1]!;
+    await vi.waitFor(() => expect(second.sent).toHaveLength(1));
+
+    first.emit("message", Buffer.from("late route"));
+    first.emit("error", new Error("late socket error"));
+    first.emit("ping");
+    first.emit("pong");
+    first.emit("close");
+
+    expect(messages).toEqual([]);
+    expect(errors).toEqual([]);
+    expect(closes).toBe(0);
+    simulateChallenge(second);
+    await secondConnection;
+    expect(client.isOpen()).toBe(true);
+    client.close();
   });
 
   test("Host hello carries endpoint identity, metadata, and Owner ACL", async () => {
