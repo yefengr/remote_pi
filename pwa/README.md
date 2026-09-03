@@ -1,4 +1,4 @@
-# Remote Pi Site
+# Remote Pi PWA
 
 Next.js browser PWA for remotely controlling Pi coding agents.
 
@@ -61,7 +61,7 @@ src/
 
 ## Deploy
 
-The site is deployed as a Docker image. The root-path healthcheck remains
+The PWA is deployed as a Docker image. The root-path healthcheck remains
 valid because `/` redirects to `/app`. Follow the repository deployment
-instructions in `site/CLAUDE.md`, `docker-compose.yml`, and
+instructions in `pwa/CLAUDE.md`, `docker-compose.yml`, and
 `scripts/deploy-self-hosted.sh`.

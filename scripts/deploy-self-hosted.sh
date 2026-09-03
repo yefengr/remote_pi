@@ -84,7 +84,7 @@ fi
 
 [[ -f "$ROOT_DIR/docker-compose.yml" ]] || fail "Missing $ROOT_DIR/docker-compose.yml"
 [[ -f "$ROOT_DIR/relay/Dockerfile" ]] || fail "Missing Relay Dockerfile"
-[[ -f "$ROOT_DIR/site/Dockerfile" ]] || fail "Missing site Dockerfile"
+[[ -f "$ROOT_DIR/pwa/Dockerfile" ]] || fail "Missing PWA Dockerfile"
 
 remote() {
   ssh -o ConnectTimeout=15 -o BatchMode=yes "$SSH_TARGET" "$1"
@@ -146,7 +146,7 @@ if [[ "$ACTION" == test ]]; then
     docker buildx build --builder "$BUILDER" --platform "$PLATFORM" \
       --tag "$RELAY_IMAGE" --push "$ROOT_DIR/relay"
     docker buildx build --builder "$BUILDER" --platform "$PLATFORM" \
-      --tag "$SITE_IMAGE" --push "$ROOT_DIR/site"
+      --tag "$SITE_IMAGE" --push "$ROOT_DIR/pwa"
   fi
 
   info "Building Relay locally ($PLATFORM)"
@@ -155,7 +155,7 @@ if [[ "$ACTION" == test ]]; then
 
   info "Building PWA locally ($PLATFORM)"
   docker buildx build --builder "$BUILDER" --platform "$PLATFORM" \
-    --tag "$SITE_IMAGE" --load "$ROOT_DIR/site"
+    --tag "$SITE_IMAGE" --load "$ROOT_DIR/pwa"
   docker image inspect "$RELAY_IMAGE" "$SITE_IMAGE" >/dev/null
 
   info "Preparing remote deployment directory"

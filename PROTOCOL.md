@@ -226,7 +226,7 @@ Relay 当前没有数据库或持久 volume。Registry、连接、ACL 和 subscr
 
 - Relay：[`relay/src/`](relay/src/)
 - Pi Extension：[`pi-extension/src/`](pi-extension/src/)
-- Browser/PWA：[`site/src/`](site/src/)
+- Browser/PWA：[`pwa/src/`](pwa/src/)
 - Daemon 运维：[`pi-extension/docs/daemon.md`](pi-extension/docs/daemon.md)
 
 安全问题请通过仓库维护者公布的私密渠道报告；若当前没有私密渠道，创建 issue 时不要附带 secret、private key、token、Cookie 或可利用 payload。

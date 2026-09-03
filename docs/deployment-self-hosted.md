@@ -209,7 +209,7 @@ PUBLISH_IMAGES=0
 
 ```bash
 docker buildx build --platform linux/amd64 --load \
-  --tag remote-pi-local/remote-pi-site:v0.1.0 site
+  --tag remote-pi-local/remote-pi-site:v0.1.0 pwa
 
 docker buildx build --platform linux/amd64 --load \
   --tag remote-pi-local/remote-pi-relay:v0.3.1 relay
@@ -249,7 +249,7 @@ docker login
 此模式会额外执行 Buildx `--push`。它推送当前服务器架构的镜像；多架构公共发布仍可单独使用：
 
 ```bash
-IMAGE=your-dockerhub-user/remote-pi-site ./site/push-docker.sh v0.1.0
+IMAGE=your-dockerhub-user/remote-pi-site ./pwa/push-docker.sh v0.1.0
 IMAGE=your-dockerhub-user/remote-pi-relay ./relay/push-docker.sh
 ```
 
@@ -357,10 +357,10 @@ docker-compose logs -f relay
 
 ## 发布脚本
 
-`site/push-docker.sh` 和 `relay/push-docker.sh` 支持通过 `IMAGE` 覆盖镜像名：
+`pwa/push-docker.sh` 和 `relay/push-docker.sh` 支持通过 `IMAGE` 覆盖镜像名：
 
 ```bash
-IMAGE=your-dockerhub-user/remote-pi-site ./site/push-docker.sh v0.1.0
+IMAGE=your-dockerhub-user/remote-pi-site ./pwa/push-docker.sh v0.1.0
 IMAGE=your-dockerhub-user/remote-pi-relay ./relay/push-docker.sh
 ```
 

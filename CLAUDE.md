@@ -8,14 +8,14 @@
 |---|---|---|
 | `pi-extension/` | Node + TypeScript | Pi 扩展、Daemon、Agent Mesh 与远程会话协议 |
 | `relay/` | Rust + Tokio | WebSocket Relay、Rooms 与跨 PC Agent Mesh 路由 |
-| `site/` | NextJS + React + TypeScript | 浏览器 PWA；唯一产品路由为 `/app`，根路径 `/` 重定向至该路由 |
+| `pwa/` | NextJS + React + TypeScript | 浏览器 PWA；唯一产品路由为 `/app`，根路径 `/` 重定向至该路由 |
 
 ## 工作规则
 
 - 修改前先读取目标子项目的 `CLAUDE.md`、相关代码、测试和配置。
 - 只修改用户明确授权的范围；不自动扩大到无关子项目或文档。
 - 当前分支可以直接开发，不要求使用特定终端、pane、worktree 或外部编排工具。
-- 构建、测试和 lint 在对应子项目目录执行，例如 `cd site && pnpm lint`。
+- 构建、测试和 lint 在对应子项目目录执行，例如 `cd pwa && pnpm lint`。
 - 行为变更必须提供适当的自动化验证；最终执行受影响验证和 `git diff --check`。
 - 不自动执行 `git commit`、`git push`、Pull Request、生产发布或其他外部副作用，除非用户明确授权。
 - 发现现有未提交改动时，保留并基于当前工作区继续，不回退用户改动。
@@ -32,8 +32,8 @@
 ## 常用验证
 
 ```bash
-cd site && pnpm lint
-cd site && pnpm build
+cd pwa && pnpm lint
+cd pwa && pnpm build
 cd pi-extension && pnpm test
 cd relay && cargo test
 ```
@@ -42,7 +42,7 @@ cd relay && cargo test
 
 ## 发布
 
-发布、推送和部署必须在本地验证通过后按用户授权执行。Site 的 Docker 发布和测试环境部署说明以 `site/CLAUDE.md`、`site/push-docker.sh` 和 `scripts/deploy-self-hosted.sh` 为准。
+发布、推送和部署必须在本地验证通过后按用户授权执行。PWA 的 Docker 发布和测试环境部署说明以 `pwa/CLAUDE.md`、`pwa/push-docker.sh` 和 `scripts/deploy-self-hosted.sh` 为准。
 
 ## 已关闭决策
 

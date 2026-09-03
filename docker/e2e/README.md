@@ -1,6 +1,6 @@
 # Remote Pi Docker Protocol v2 E2E
 
-这套基础设施只验证 **Relay-only Protocol v2**，不启动 `site/`，也不使用浏览器 profile、宿主 `~/.pi`、宿主 `node_modules` 或模型凭据。浏览器/PWA 场景应在后续独立批次叠加。
+这套基础设施只验证 **Relay-only Protocol v2**，不启动 `pwa/`，也不使用浏览器 profile、宿主 `~/.pi`、宿主 `node_modules` 或模型凭据。浏览器/PWA 场景应在后续独立批次叠加。
 
 ## 固定资源与隔离
 

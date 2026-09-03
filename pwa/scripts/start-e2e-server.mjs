@@ -4,8 +4,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
-const siteDirectory = resolve(scriptDirectory, "..");
-const buildDirectory = join(siteDirectory, ".next");
+const pwaDirectory = resolve(scriptDirectory, "..");
+const buildDirectory = join(pwaDirectory, ".next");
 const standaloneDirectory = join(buildDirectory, "standalone");
 
 async function requireDirectory(path) {
@@ -24,7 +24,7 @@ async function replaceRuntimeAsset(source, destination) {
 }
 
 async function prepareStandaloneBuild() {
-  const publicDirectory = join(siteDirectory, "public");
+  const publicDirectory = join(pwaDirectory, "public");
   const staticDirectory = join(buildDirectory, "static");
 
   await Promise.all([

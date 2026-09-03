@@ -1,4 +1,4 @@
-# Remote Pi — Site (NextJS)
+# Remote Pi — PWA (NextJS)
 
 Subprojeto web do Remote Pi. Contém somente o PWA browser em
 `src/app/app/`, `src/components/pwa/` e `src/lib/pwa/`. A única rota de produto
@@ -34,7 +34,7 @@ healthcheck Docker na raiz funcional.
 
 - Features do PWA browser ficam neste subprojeto e devem permanecer em
   `src/app/app/`, `src/components/pwa/` e `src/lib/pwa/`.
-- Não reintroduza landing page, documentação pública ou páginas legais no Site; a
+- Não reintroduza landing page, documentação pública ou páginas legais na PWA; a
   interface de produto permanece exclusivamente em `/app`.
 - Não adicionar backend ou API routes sem autorização explícita.
 - Não comitar `.next/`, `out/`, `node_modules/` (já no .gitignore raiz).
@@ -42,7 +42,7 @@ healthcheck Docker na raiz funcional.
 
 ## Publicação (deploy)
 
-O site roda em produção (`remote-pi.jacobmoura.work`) como **imagem Docker** no
+A PWA roda em produção (`remote-pi.jacobmoura.work`) como **imagem Docker** no
 Docker Hub: `jacobmoura7/remote-pi-site`. O host de produção puxa a tag
 `:latest` — então **publicar = buildar e dar push da imagem**.
 

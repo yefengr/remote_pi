@@ -2,7 +2,7 @@
 // source of truth: pi-extension/install.sh.
 //
 // Why a committed copy in public/ AND a sync step:
-//   The Docker image is built with `site/` as the *only* build context
+//   The Docker image is built with `pwa/` as the *only* build context
 //   (push-docker.sh runs `docker buildx build … .` from this folder), so the
 //   sibling `pi-extension/` directory is NOT reachable during the in-image
 //   `pnpm build`. We therefore COMMIT `public/install.sh` (that's what the
@@ -28,7 +28,7 @@ if (!existsSync(SRC)) {
   );
   if (!existsSync(DEST)) {
     console.error(
-      "[sync-install-sh] FATAL: public/install.sh is also missing — the site would 404 on /install.sh.",
+      "[sync-install-sh] FATAL: public/install.sh is also missing — the PWA would 404 on /install.sh.",
     );
     process.exit(1);
   }

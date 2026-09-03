@@ -22,7 +22,7 @@
 |---|---|---|
 | [`pi-extension/`](./pi-extension) | Node + TypeScript | Pi extension, endpoint pairing, and daemon supervisor CLI |
 | [`relay/`](./relay) | Rust + Tokio | WebSocket relay with an in-memory endpoint registry |
-| [`site/`](./site) | NextJS | Landing pages, documentation, legal pages, and browser PWA |
+| [`pwa/`](./pwa) | NextJS | Browser PWA for controlling Pi coding-agent endpoints |
 
 ## Architecture
 

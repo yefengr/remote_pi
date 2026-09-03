@@ -78,7 +78,7 @@ agents=(
   "App|app"
   "Relay|relay"
   "Extension|pi-extension"
-  "Site|site"
+  "PWA|pwa"
 )
 
 panes_now() {
