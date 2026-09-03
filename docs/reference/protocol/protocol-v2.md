@@ -2,7 +2,7 @@
 
 本文件是 Relay、Pi Extension 与 Browser/PWA 的当前跨端协议真源。实现必须以 strict schema 拒绝未知字段、错误方向和错误版本；不存在旧协议 fallback、双读或自动降级。
 
-共享 machine-readable 样例位于 `fixtures/v2/manifest.json`。完整产品与安全说明见仓库根目录 [`PROTOCOL.md`](../../PROTOCOL.md)。
+共享 machine-readable 样例位于 `fixtures/v2/manifest.json`。完整产品与安全说明见仓库根目录 [`PROTOCOL.md`](../../../PROTOCOL.md)。
 
 ## 1. 身份与生命周期
 

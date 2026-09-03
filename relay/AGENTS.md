@@ -2,7 +2,7 @@
 
 WebSocket Relay：认证 Browser/PWA Owner 与 Pi Host 连接，在内存中维护 device/endpoint/runtime registry 和每个 endpoint 的 Owner ACL，发布 endpoint snapshot/update，并转发 opaque `ct` route。
 
-Relay 不提供 Agent Mesh、Pi-to-Pi forwarding、room/presence、membership API、SQLite storage 或 message queue。当前跨端真源见 [`../PROTOCOL.md`](../PROTOCOL.md) 和 [`../.orchestration/contracts/protocol.md`](../.orchestration/contracts/protocol.md)。
+Relay 不提供 Agent Mesh、Pi-to-Pi forwarding、room/presence、membership API、SQLite storage 或 message queue。当前跨端真源见 [`../PROTOCOL.md`](../PROTOCOL.md) 和 [`../docs/reference/protocol/protocol-v2.md`](../docs/reference/protocol/protocol-v2.md)。
 
 ## Stack
 
@@ -59,7 +59,3 @@ cargo test --locked
 - 不解析 inner Protocol v2 来做业务授权；Relay 只依据 outer role、endpoint/runtime 和 ACL。
 - 不把 pairing route 当成 session 授权。
 - 不提交 `target/`。
-
-## 编排模式
-
-收到 `[ORCH:<task-id>]` 时，先完整阅读 `../.orchestration/INSTRUCTIONS.md`，遵守白名单、结果文件、验证和不提交约束。

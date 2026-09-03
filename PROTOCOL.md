@@ -4,9 +4,9 @@
 
 跨端 strict schema 真源：
 
-- [`.orchestration/contracts/protocol.md`](.orchestration/contracts/protocol.md)
-- [`.orchestration/contracts/pairing.md`](.orchestration/contracts/pairing.md)
-- [`.orchestration/contracts/fixtures/v2/manifest.json`](.orchestration/contracts/fixtures/v2/manifest.json)
+- [`docs/reference/protocol/protocol-v2.md`](docs/reference/protocol/protocol-v2.md)
+- [`docs/reference/protocol/pairing.md`](docs/reference/protocol/pairing.md)
+- [`docs/reference/protocol/fixtures/v2/manifest.json`](docs/reference/protocol/fixtures/v2/manifest.json)
 
 历史 `plan/` 文档只用于审计过去决策，不是当前协议真源。
 
@@ -103,7 +103,7 @@ Pairing token 是短期、单次使用 token。成功后 Extension：
 
 每台电脑独立 pairing 和 revoke。撤销一个 device 上的 Owner 后，Extension 删除本地 ACL、关闭对应 binding、更新 Relay ACL；其他电脑上的 pairing 不受影响。没有跨设备 membership 传播。
 
-完整规则见 [pairing contract](.orchestration/contracts/pairing.md)。
+完整规则见 [pairing contract](docs/reference/protocol/pairing.md)。
 
 ## 5. Protocol v2 inner frames
 

@@ -136,7 +136,7 @@ and 27 (see [`plan/`](plan/) directory for design history).
   wire format, identity model, ACK protocol, cross-PC routing, mesh
   membership, pairing flow, honest trust model, threat model, failure modes,
   and architectural roadmap.
-- Linked from `pi-extension/README.md`, `pi-extension/CLAUDE.md`,
+- Linked from `pi-extension/README.md`, `pi-extension/AGENTS.md`,
   `relay/README.md`, and the site's `/docs#protocol` section (plus footer).
 
 #### Daemon mode (pi-extension)

@@ -63,5 +63,5 @@ src/
 
 The PWA is deployed as a Docker image. The root-path healthcheck remains
 valid because `/` redirects to `/app`. Follow the repository deployment
-instructions in `pwa/CLAUDE.md`, `docker-compose.yml`, and
+instructions in `pwa/AGENTS.md`, `docker-compose.yml`, and
 `scripts/deploy-self-hosted.sh`.

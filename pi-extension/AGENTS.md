@@ -8,7 +8,7 @@ Remote Pi 的 Pi package：注册 `/remote-pi`，把当前 Pi 进程作为独立
 device_id → endpoint_id → runtime_instance_id → session_id / history_generation
 ```
 
-本项目不提供 Agent Mesh、本地 broker、Pi-to-Pi 通信、room routing、membership、mesh tools 或 MCP mesh server。协议、安全边界与跨端契约见 [`../PROTOCOL.md`](../PROTOCOL.md) 和 [`../.orchestration/contracts/`](../.orchestration/contracts/)。
+本项目不提供 Agent Mesh、本地 broker、Pi-to-Pi 通信、room routing、membership、mesh tools 或 MCP mesh server。协议、安全边界与跨端契约见 [`../PROTOCOL.md`](../PROTOCOL.md)、[`../docs/reference/protocol/protocol-v2.md`](../docs/reference/protocol/protocol-v2.md) 和 [`../docs/reference/protocol/pairing.md`](../docs/reference/protocol/pairing.md)。
 
 ## Stack
 
@@ -78,7 +78,3 @@ pnpm verify
 - 不记录 private key、pairing token、完整 `ct` 或消息正文。
 - 不自行实现 crypto primitive。
 - 不提交 `dist/`。
-
-## 编排模式
-
-收到 `[ORCH:<task-id>]` 时，先完整阅读 `../.orchestration/INSTRUCTIONS.md`，遵守白名单、结果文件、验证和不提交约束。

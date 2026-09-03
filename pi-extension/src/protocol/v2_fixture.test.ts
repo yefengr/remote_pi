@@ -23,7 +23,7 @@ type FixtureManifest = {
 };
 
 const manifest = JSON.parse(
-  readFileSync(new URL("../../../.orchestration/contracts/fixtures/v2/manifest.json", import.meta.url), "utf8"),
+  readFileSync(new URL("../../../docs/reference/protocol/fixtures/v2/manifest.json", import.meta.url), "utf8"),
 ) as FixtureManifest;
 
 function parseFixture(fixture: FixtureCase): unknown {

@@ -4,7 +4,7 @@ import { describe, expect, test } from "vitest";
 import { DecodeError, decodeServer, encodeClient } from "./codec.js";
 
 const fixtureDir = fileURLToPath(
-  new URL("../../../.orchestration/contracts/fixtures", import.meta.url),
+  new URL("../../../docs/reference/protocol/fixtures", import.meta.url),
 );
 
 const SERVER_TYPE_FILES = new Set([

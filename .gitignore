@@ -1,11 +1,6 @@
-# cmux / claude
-.fresh/
 .*
-# Track CI and shared orchestration contracts despite the `.*` rule above.
+# Track CI configuration despite the `.*` rule above.
 !.github/
-!.orchestration/
-.orchestration/results/*
-!.orchestration/results/.gitkeep
 
 # Node
 node_modules/

@@ -40,38 +40,10 @@ healthcheck Docker na raiz funcional.
 - Não comitar `.next/`, `out/`, `node_modules/` (já no .gitignore raiz).
 - Não desabilitar lint pra fazer passar — corrigir o erro.
 
-## Publicação (deploy)
+## Publicação
 
-A PWA roda em produção (`remote-pi.jacobmoura.work`) como **imagem Docker** no
-Docker Hub: `jacobmoura7/remote-pi-site`. O host de produção puxa a tag
-`:latest` — então **publicar = buildar e dar push da imagem**.
-
-```bash
-./push-docker.sh            # build multi-plataforma + push, tag :latest
-./push-docker.sh v1.2.3     # tag :v1.2.3 E :latest
-```
-
-O que o script faz: cria (idempotente) um builder buildx `multiarch`
-(`docker-container`), builda para `linux/amd64,linux/arm64` a partir do
-`Dockerfile` (multi-stage → `next build` com `output: "standalone"`, runtime
-`node:22-alpine` na porta 3000 com healthcheck em `/`) e dá `--push` pro Docker
-Hub.
-
-Pré-requisitos: **`docker login`** (Docker Hub) feito antes, e `docker buildx`
-(vem no Docker moderno). Sem login, o push falha no fim do build.
-
-Fluxo típico de publicação: commit + push no git → `pnpm lint && pnpm build`
-verdes → `./push-docker.sh` → o host redeploya da `:latest`. Passe uma versão
-(`vX.Y.Z`) quando quiser uma tag fixada além da `:latest`.
-
-O teste isolado do PWA usa o script da raiz:
-
-```bash
-scripts/deploy-self-hosted.sh test
-```
-
-Ele constrói e transfere as imagens, inicia apenas o PWA de teste e mantém a
-instância de produção inalterada.
+部署流程和 Docker 运行事实统一维护在
+[`../docs/deployment-self-hosted.md`](../docs/deployment-self-hosted.md)，本文件不重复维护部署细节。
 
 ## Desenvolvimento direto
 
