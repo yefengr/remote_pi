@@ -163,7 +163,9 @@ function refreshFooter(ctx?: Pick<ExtensionContext, "ui"> | null): void {
   } catch { /* stale UI context */ }
 }
 
-const activeOwners = new Map<string, { channel: V2PeerChannel; service: TimelineV2Service }>();
+type OwnerBinding = { channel: V2PeerChannel; service: TimelineV2Service; sessionId: string };
+
+const activeOwners = new Map<string, OwnerBinding>();
 const relayLifecycle = new RelayLifecycle({
   loadIdentity: getOrCreateEd25519Keypair,
   resolveRelayUrl,
@@ -192,6 +194,18 @@ function detachOwner(ownerId: string): void {
   if (!binding) return;
   try { binding.channel.detach(); } catch { /* best effort */ }
   activeOwners.delete(ownerId); refreshFooter();
+}
+function closeOwner(ownerId: string, reason: "peer_stop"): void {
+  const binding = activeOwners.get(ownerId);
+  if (!binding) return;
+  binding.channel.sendV2({
+    protocol_version: 2,
+    type: "bye",
+    session_id: binding.sessionId,
+    history_generation: binding.service.generation,
+    reason,
+  });
+  detachOwner(ownerId);
 }
 function sendToOwner(ownerId: string, frames: readonly ServerFrame[]): void {
   const binding = activeOwners.get(ownerId);
@@ -282,7 +296,7 @@ function routeAction(ownerId: string, frame: V2ActionFrame): void {
   }
 }
 
-function createBinding(relayClient: RelayClient, ownerId: string): { channel: V2PeerChannel; service: TimelineV2Service } | null {
+function createBinding(relayClient: RelayClient, ownerId: string): OwnerBinding | null {
   const manager = currentSessionManager;
   if (!manager) return null;
   const runtime = ensureTimeline(manager);
@@ -310,10 +324,10 @@ function createBinding(relayClient: RelayClient, ownerId: string): { channel: V2
     onAction: (frame) => routeAction(ownerId, frame),
     onListModels: () => getModelsList((lastEventCtx ?? lastCommandCtx) as ActionCtx | null, ensureModelRegistry((lastEventCtx ?? lastCommandCtx) as ActionCtx | null), currentModel),
   });
-  return { channel, service };
+  return { channel, service, sessionId: manager.getSessionId() };
 }
 
-function attachOwner(relayClient: RelayClient, ownerId: string): { channel: V2PeerChannel; service: TimelineV2Service } | null {
+function attachOwner(relayClient: RelayClient, ownerId: string): OwnerBinding | null {
   detachOwner(ownerId);
   const binding = createBinding(relayClient, ownerId);
   if (!binding) return null;
@@ -434,7 +448,7 @@ const commandDependencies: RemoteCommandDependencies = {
   endpointIdentity: () => endpointIdentity,
   activeOwnerCount: () => activeOwners.size,
   isOwnerActive: (ownerId) => activeOwners.has(ownerId),
-  detachOwner,
+  closeOwner,
   updateEndpoint,
   displayName,
   keypair: () => relayLifecycle.keypair,

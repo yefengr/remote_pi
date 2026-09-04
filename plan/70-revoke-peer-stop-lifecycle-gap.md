@@ -1,22 +1,24 @@
 # Plan 70 — Revoke 缺少 `bye(peer_stop)` 生命周期通知
 
-> 状态：待处理
+> 状态：已完成
 >
 > 优先级：P2
 >
 > 创建日期：2026-09-02
 >
-> 类型：已验证的产品生命周期缺口
+> 完成日期：2026-09-04
+>
+> 类型：已修复的产品生命周期缺口
 
 ## 1. 摘要
 
-Remote Pi 当前执行 Owner revoke 时，能够正确撤销访问权限和 Relay ACL，但不会在解除 Owner binding 前向被撤销 Owner 发送 Protocol v2 `bye` 帧。被撤销 Owner 最终可以收到 `endpoint_ended`，并且后续 route 会被 Relay 拒绝；缺少的是主动、明确的 `bye(reason="peer_stop")` 生命周期通知。
+Remote Pi 过去执行 Owner revoke 时，能够正确撤销访问权限和 Relay ACL，但不会在解除 Owner binding 前向被撤销 Owner 发送 Protocol v2 `bye` 帧。该缺口现已修复：在线目标 Owner 会先收到 `bye(reason="peer_stop")`，随后 Extension 才解除其 binding 并同步 Relay ACL。
 
-这不是当前 E2E Docker 环境的缺陷，也不是已确认的访问控制漏洞。它是 Extension 在 revoke 场景下没有完成优雅断开通知的产品协议缺口。
+这不是 E2E Docker 环境缺陷，也不是已确认的访问控制漏洞。它是 Extension 在 revoke 场景下曾缺少优雅断开通知的产品协议缺口。
 
-## 2. 当前行为
+## 2. 修复前行为
 
-`/remote-pi revoke <shortid>` 当前执行顺序为：
+修复前，`/remote-pi revoke <shortid>` 的执行顺序为：
 
 1. 从本地 `peers.json` 删除 Owner；
 2. 调用 `detachOwner`，关闭对应的 Owner binding；
@@ -24,11 +26,7 @@ Remote Pi 当前执行 Owner revoke 时，能够正确撤销访问权限和 Rela
 4. Relay 向相关订阅方发送 `endpoint_ended` 或后续状态变化；
 5. 被撤销 Owner 的后续 session route 不再获得响应。
 
-相关实现：
-
-- [`pi-extension/src/daemon/commands.ts`](../pi-extension/src/daemon/commands.ts) 的 `revoke`：删除 peer、detach binding 并更新 endpoint；
-- [`pi-extension/src/index.ts`](../pi-extension/src/index.ts) 的 `detachOwner`：直接 detach channel 并从 active owner 集合移除；
-- [`pi-extension/src/index.ts`](../pi-extension/src/index.ts) 的 `closeRelay`：stop、shutdown 和 session replacement 会发送 `bye`，但 revoke 不经过该路径。
+根因是 revoke 直接执行静默 `detachOwner`；全局 stop、shutdown 和 session replacement 已有各自的 `bye` 路径，但 revoke 没有定向通知单个 Owner 的关闭操作。
 
 ## 3. 期望行为
 
@@ -70,45 +68,48 @@ bye(reason="peer_stop")
 - 依赖 `bye` 清理当前 session、取消 pending 请求或展示明确断开原因的客户端，无法使用统一终止语义；
 - revoke 场景与显式 `/remote-pi stop`、shutdown 的终止通知行为不一致。
 
-## 5. 验证证据
+## 5. 实现与验证证据
 
-在固定 Docker Relay-only E2E 环境中已验证：
+实现采用定向 `closeOwner(ownerId, "peer_stop")` 路径：
 
-- revoke 后被撤销 Owner 收到 `endpoint_ended`；
-- 被撤销 Owner 的后续 `ping` 不会收到 `pong`；
-- 存活 Owner 在 revoke 后仍可收到 `pong`；
-- revoke 后未观察到被撤销 Owner 的 `bye(reason="peer_stop")`，验证输出为：
+1. 从目标 Owner binding 固定的 session identity 取得 `session_id`，从其 service 取得 `history_generation`，因此 session replacement 的 manager 切换窗口也不会产生 `"unknown"`；
+2. 通过目标 channel best-effort 发送 `bye(reason="peer_stop")`；
+3. 静默 detach 目标 binding；
+4. revoke 命令继续调用 `updateEndpoint()` 同步移除该 Owner 后的 ACL。
+
+普通 Relay disconnect、binding 替换和 pairing 失败仍使用静默 `detachOwner`；全局 stop、shutdown 与 session replacement 的既有通知路径不变。
+
+2026-09-04 已通过：
+
+- 聚焦测试：`cd pi-extension && pnpm exec vitest run src/daemon/commands.test.ts src/extension.test.ts`，2 个文件、27 项测试通过；
+- Extension 全量验证：`cd pi-extension && pnpm verify`，typecheck、31 个测试文件（370 passed、3 skipped）和 build 通过；
+- E2E 脚本语法检查：`node --check docker/e2e/runner.mjs` 通过；
+- 固定 Docker Relay-only E2E：`./docker/e2e/scripts/verify.sh` 通过，其中包括：
 
 ```text
-finding revoke_peer_stop=expected_known_failure
+assert revoked_owner_rebound_after_new=true
+assert revoke_peer_stop_bye=true
+assert revoke_bye_before_endpoint_ended=true
+assert revoked_route_rejected=true
+assert survivor_ping_after_revoke=true
 ```
 
-复现入口：
+E2E 会在 session replacement 后先让目标 Owner 与存活 Owner 都重新建立当前 binding，再撤销在线目标 Owner；因此 `bye` 断言使用目标 Owner 最新 `session_ready` 返回的权威 `session_id` 和 `history_generation`。
 
-```sh
-./docker/e2e/scripts/up.sh
-./docker/e2e/scripts/verify.sh
-./docker/e2e/scripts/stop.sh
-```
+## 6. 修复验收结果
 
-上述验证只记录该缺口，不将其作为 ACL 隔离失败，也不修改本计划之外的产品行为。
-
-## 6. 修复验收标准
-
-修复本缺口时至少应满足：
-
-- revoke 对当前 active binding 发送一次 `bye(reason="peer_stop")`；
-- `bye` 在 detach binding 前发送，确保帧仍可到达被撤销 Owner；
-- `bye` 携带当前有效的 `session_id` 和 `history_generation`；
-- revoke 后继续拒绝该 Owner 的 session route；
-- 未被撤销 Owner 的 session、发现和 route 不受影响；
-- 无 active binding 或 Owner 已离线时，revoke 仍成功完成 ACL 更新，不因通知失败阻塞撤销；
-- pairing、stop、shutdown、session replacement 的既有 bye reason 和顺序不回归；
-- 增加自动化测试，覆盖通知顺序、目标 Owner 隔离、撤销后 route 拒绝和离线 revoke。
+- [x] revoke 对当前 active binding 发送一次 `bye(reason="peer_stop")`；
+- [x] `bye` 在 detach binding 前发送；
+- [x] `bye` 携带当前有效的 `session_id` 和 `history_generation`；
+- [x] revoke 后继续拒绝该 Owner 的 session route；
+- [x] 未被撤销 Owner 的 session 和 route 不受影响；
+- [x] 无 active binding 或通知发送失败时仍完成本地删除和 ACL 更新；
+- [x] pairing、stop、shutdown、session replacement 的既有生命周期路径不回归；
+- [x] 自动化测试覆盖完整通知顺序、session replacement 窗口、目标 Owner 隔离、撤销后 route 拒绝、存活 Owner 和离线 revoke。
 
 ## 7. 范围与关联
 
-本文件只记录产品缺口，不包含本轮修复实现或排期承诺。固定 Docker 验收基础设施及其已知失败标记见 [`docker/e2e/README.md`](../docker/e2e/README.md)。
+固定 Docker 验收基础设施及当前断言见 [`docker/e2e/README.md`](../docker/e2e/README.md)。Plan 71 的 pairing 事务一致性缺口不在本次修复范围内，状态不变。
 
 本缺口在以下提交的验收中被确认：
 

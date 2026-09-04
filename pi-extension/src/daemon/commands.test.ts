@@ -2,6 +2,19 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { RemoteCommandDependencies } from "./commands.js";
 
+const peers = vi.hoisted(() => [] as { name: string; remote_epk: string; paired_at: string }[]);
+const removePeer = vi.hoisted(() => vi.fn(async (ownerId: string) => {
+  const index = peers.findIndex((peer) => peer.remote_epk === ownerId);
+  if (index < 0) return false;
+  peers.splice(index, 1);
+  return true;
+}));
+vi.mock("../pairing/storage.js", () => ({
+  addPeer: vi.fn(),
+  listPeers: vi.fn(() => Promise.resolve([...peers])),
+  removePeer,
+}));
+
 const callSupervisor = vi.fn().mockResolvedValue({ daemons: [] });
 vi.mock("./client.js", () => ({
   callSupervisor,
@@ -18,7 +31,7 @@ function commandContext() {
   return { cwd: "/tmp/remote-pi-command-test", ui: { notify: vi.fn() } };
 }
 
-function registerPair(deps: RemoteCommandDependencies): { handler: CommandHandler; sent: unknown[] } {
+function registerPair(deps: RemoteCommandDependencies): { handler: CommandHandler; revokeHandler: CommandHandler; sent: unknown[] } {
   const commands = new Map<string, CommandHandler>();
   const sent: unknown[] = [];
   const pi = {
@@ -27,7 +40,7 @@ function registerPair(deps: RemoteCommandDependencies): { handler: CommandHandle
   } as unknown as ExtensionAPI;
   const boundDeps = { ...deps, piApi: () => pi };
   registerCommands(pi, boundDeps);
-  return { handler: commands.get("remote-pi pair")!, sent };
+  return { handler: commands.get("remote-pi pair")!, revokeHandler: commands.get("remote-pi revoke")!, sent };
 }
 
 function dependencies(overrides: Partial<RemoteCommandDependencies> = {}): RemoteCommandDependencies {
@@ -41,7 +54,7 @@ function dependencies(overrides: Partial<RemoteCommandDependencies> = {}): Remot
     endpointIdentity: vi.fn(() => ({ endpointId: "11f4842b-726f-4c2d-8c86-c66ddf1f1d7a", runtimeInstanceId: "42f4842b-726f-4c2d-8c86-c66ddf1f1d7a" })),
     activeOwnerCount: vi.fn(() => 0),
     isOwnerActive: vi.fn(() => false),
-    detachOwner: vi.fn(),
+    closeOwner: vi.fn(),
     updateEndpoint: vi.fn().mockResolvedValue(undefined),
     displayName: vi.fn(() => "Local Pi"),
     keypair: vi.fn(() => ({ publicKey: new Uint8Array(32).fill(1), secretKey: new Uint8Array(64).fill(2) })),
@@ -54,6 +67,8 @@ function dependencies(overrides: Partial<RemoteCommandDependencies> = {}): Remot
 }
 
 afterEach(() => {
+  peers.length = 0;
+  removePeer.mockClear();
   process.argv = [...originalArgv];
   callSupervisor.mockClear();
   vi.restoreAllMocks();
@@ -93,6 +108,38 @@ describe("pair command", () => {
 
     expect(sent).toEqual([]);
     expect(ctx.ui.notify).toHaveBeenCalledWith("[remote-pi] Pair requires a Relay connection; current state: disconnected.", "warning");
+  });
+});
+
+describe("revoke command", () => {
+  test("closes the target before updating Relay ACL", async () => {
+    const ownerId = Buffer.alloc(32, 7).toString("base64");
+    peers.push({ name: "Owner B", remote_epk: ownerId, paired_at: "now" });
+    const calls: string[] = [];
+    const deps = dependencies({
+      closeOwner: vi.fn(() => { calls.push("closeOwner"); }),
+      updateEndpoint: vi.fn(async () => { calls.push("updateEndpoint"); }),
+    });
+    const { revokeHandler } = registerPair(deps);
+
+    await revokeHandler(ownerId.slice(0, 8), commandContext() as unknown as ExtensionCommandContext);
+
+    expect(removePeer).toHaveBeenCalledWith(ownerId);
+    expect(deps.closeOwner).toHaveBeenCalledWith(ownerId, "peer_stop");
+    expect(removePeer.mock.invocationCallOrder[0]).toBeLessThan((deps.closeOwner as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!);
+    expect(calls).toEqual(["closeOwner", "updateEndpoint"]);
+  });
+
+  test("updates Relay ACL when the revoked Owner has no active binding", async () => {
+    const ownerId = Buffer.alloc(32, 7).toString("base64");
+    peers.push({ name: "Offline Owner", remote_epk: ownerId, paired_at: "now" });
+    const deps = dependencies();
+    const { revokeHandler } = registerPair(deps);
+
+    await revokeHandler(ownerId.slice(0, 8), commandContext() as unknown as ExtensionCommandContext);
+
+    expect(deps.closeOwner).toHaveBeenCalledWith(ownerId, "peer_stop");
+    expect(deps.updateEndpoint).toHaveBeenCalledOnce();
   });
 });
 

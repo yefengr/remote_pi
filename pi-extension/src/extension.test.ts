@@ -99,13 +99,18 @@ function ctx() {
 }
 
 function sourceOwner(): string {
-  return Buffer.alloc(32, 7).toString("base64");
+  return ownerId(7);
+}
+
+function ownerId(value: number): string {
+  return Buffer.alloc(32, value).toString("base64");
 }
 
 function inbound(
   identity: ReturnType<typeof processEndpointIdentity>,
   inner: unknown,
   purpose: "pairing" | "session" = "pairing",
+  owner = sourceOwner(),
 ): string {
   return JSON.stringify({
     type: "route",
@@ -113,7 +118,7 @@ function inbound(
     device_id: Buffer.alloc(32, 1).toString("base64"),
     endpoint_id: identity.endpointId,
     runtime_instance_id: identity.runtimeInstanceId,
-    source_owner_id: sourceOwner(),
+    source_owner_id: owner,
     ct: Buffer.from(JSON.stringify(inner)).toString("base64"),
   });
 }
@@ -411,6 +416,111 @@ describe("Remote Pi endpoint extension", () => {
     }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(relay.send).not.toHaveBeenCalled();
+  });
+
+  test("revoke sends peer_stop only to the target before detaching and updating Relay ACL", async () => {
+    const ownerB = sourceOwner();
+    const ownerC = ownerId(8);
+    owners.push(
+      { name: "owner-b", remote_epk: ownerB, paired_at: "now" },
+      { name: "owner-c", remote_epk: ownerC, paired_at: "now" },
+    );
+    const pi = makePi();
+    (extension as ExtensionFactory)(pi);
+    const manager = { getSessionId: () => "session-revoke", getBranch: () => [], appendCustomEntry: vi.fn(), getLeafId: () => "session-revoke" };
+    pi.handlers.get("session_start")?.({}, { ...ctx(), sessionManager: manager });
+    await _connectForTest(ctx());
+    const relay = relays.at(-1)!;
+    relay.emit("message", inbound(processEndpointIdentity(), { protocol_version: 2, type: "session_hello", id: "hello-b", channel_id: "channel-b" }, "session", ownerB));
+    relay.emit("message", inbound(processEndpointIdentity(), { protocol_version: 2, type: "session_hello", id: "hello-c", channel_id: "channel-c" }, "session", ownerC));
+    await vi.waitFor(() => expect(relay.send).toHaveBeenCalledTimes(2));
+    const readyFrames = relay.send.mock.calls.map(([line]) => {
+      const outbound = JSON.parse(line) as { target_owner_id: string; ct: string };
+      return { ownerId: outbound.target_owner_id, frame: decodeServerFrameV2(Buffer.from(outbound.ct, "base64").toString("utf8")) };
+    });
+    const readyB = readyFrames.find(({ ownerId: target, frame }) => target === ownerB && frame.type === "session_ready")?.frame;
+    const readyC = readyFrames.find(({ ownerId: target, frame }) => target === ownerC && frame.type === "session_ready")?.frame;
+    if (!readyB || !readyC || readyB.type !== "session_ready" || readyC.type !== "session_ready") throw new Error("expected owner sessions");
+    relay.send.mockClear();
+    relay.sendControl.mockClear();
+    const listenersBeforeRevoke = relay.listenerCount("message");
+    let listenersAtBye = -1;
+    let listenersAtAclUpdate = -1;
+    relay.send.mockImplementationOnce(() => { listenersAtBye = relay.listenerCount("message"); });
+    relay.sendControl.mockImplementationOnce(() => { listenersAtAclUpdate = relay.listenerCount("message"); });
+    await pi.commands.get("remote-pi revoke")!(ownerB.slice(0, 8), ctx());
+
+    const byeOutbound = JSON.parse(relay.send.mock.calls[0]![0]) as { target_owner_id: string; ct: string };
+    expect(byeOutbound.target_owner_id).toBe(ownerB);
+    expect(decodeServerFrameV2(Buffer.from(byeOutbound.ct, "base64").toString("utf8"))).toMatchObject({
+      type: "bye", session_id: "session-revoke", history_generation: readyB.history_generation, reason: "peer_stop",
+    });
+    expect(relay.send.mock.calls).toHaveLength(1);
+    expect(listenersAtBye).toBe(listenersBeforeRevoke);
+    expect(listenersAtAclUpdate).toBe(listenersBeforeRevoke - 1);
+    expect(relay.listenerCount("message")).toBe(listenersBeforeRevoke - 1);
+    expect(relay.send.mock.invocationCallOrder[0]).toBeLessThan(relay.sendControl.mock.invocationCallOrder[0]!);
+    expect(relay.sendControl).toHaveBeenCalledWith(expect.objectContaining({
+      type: "endpoint_update", authorized_owner_ids: [ownerC],
+    }));
+
+    const survivorCursor = relay.send.mock.calls.length;
+    relay.emit("message", inbound(processEndpointIdentity(), {
+      protocol_version: 2, type: "ping", id: "ping-c", channel_id: "channel-c", history_generation: readyC.history_generation,
+    }, "session", ownerC));
+    await vi.waitFor(() => expect(relay.send.mock.calls).toHaveLength(survivorCursor + 1));
+    const survivorOutbound = JSON.parse(relay.send.mock.calls.at(-1)![0]) as { target_owner_id: string; ct: string };
+    expect(survivorOutbound.target_owner_id).toBe(ownerC);
+    expect(decodeServerFrameV2(Buffer.from(survivorOutbound.ct, "base64").toString("utf8"))).toMatchObject({ type: "pong", in_reply_to: "ping-c" });
+  });
+
+  test("revoke keeps the binding session id during a session replacement window", async () => {
+    const ownerB = sourceOwner();
+    owners.push({ name: "owner-b", remote_epk: ownerB, paired_at: "now" });
+    const pi = makePi();
+    (extension as ExtensionFactory)(pi);
+    const manager = { getSessionId: () => "session-before-replacement", getBranch: () => [], appendCustomEntry: vi.fn(), getLeafId: () => "session-before-replacement" };
+    pi.handlers.get("session_start")?.({}, { ...ctx(), sessionManager: manager });
+    await _connectForTest(ctx());
+    const relay = relays.at(-1)!;
+    relay.emit("message", inbound(processEndpointIdentity(), { protocol_version: 2, type: "session_hello", id: "hello-b", channel_id: "channel-b" }, "session"));
+    await vi.waitFor(() => expect(relay.send).toHaveBeenCalled());
+    const readyOutbound = JSON.parse(relay.send.mock.calls.at(-1)![0]) as { ct: string };
+    const ready = decodeServerFrameV2(Buffer.from(readyOutbound.ct, "base64").toString("utf8"));
+    if (ready.type !== "session_ready") throw new Error("expected session_ready");
+    relay.send.mockClear();
+
+    pi.handlers.get("session_shutdown")?.({ reason: "new" });
+    await pi.commands.get("remote-pi revoke")!(ownerB.slice(0, 8), ctx());
+
+    const byeOutbound = JSON.parse(relay.send.mock.calls[0]![0]) as { ct: string };
+    expect(decodeServerFrameV2(Buffer.from(byeOutbound.ct, "base64").toString("utf8"))).toMatchObject({
+      type: "bye",
+      session_id: "session-before-replacement",
+      history_generation: ready.history_generation,
+      reason: "peer_stop",
+    });
+  });
+
+  test("revoke best-effort bye does not block detach or Relay ACL update", async () => {
+    const ownerB = sourceOwner();
+    owners.push({ name: "owner-b", remote_epk: ownerB, paired_at: "now" });
+    const pi = makePi();
+    (extension as ExtensionFactory)(pi);
+    const manager = { getSessionId: () => "session-revoke", getBranch: () => [], appendCustomEntry: vi.fn(), getLeafId: () => "session-revoke" };
+    pi.handlers.get("session_start")?.({}, { ...ctx(), sessionManager: manager });
+    await _connectForTest(ctx());
+    const relay = relays.at(-1)!;
+    relay.emit("message", inbound(processEndpointIdentity(), { protocol_version: 2, type: "session_hello", id: "hello-b", channel_id: "channel-b" }, "session"));
+    await vi.waitFor(() => expect(relay.send).toHaveBeenCalled());
+    const listenersBeforeRevoke = relay.listenerCount("message");
+    relay.send.mockImplementationOnce(() => { throw new Error("send unavailable"); });
+    relay.sendControl.mockClear();
+    await pi.commands.get("remote-pi revoke")!(ownerB.slice(0, 8), ctx());
+
+    expect(relay.listenerCount("message")).toBe(listenersBeforeRevoke - 1);
+    expect(relay.sendControl).toHaveBeenCalledWith(expect.objectContaining({ type: "endpoint_update", authorized_owner_ids: [] }));
+    expect(owners).toEqual([]);
   });
 
   test("routes session_new through the internal command bridge and uses its command ctx", async () => {

@@ -218,6 +218,19 @@ async function main() {
     return eventAfter(state, cReplacementCursor, (frame) => frame.type === "bye" && frame.reason === "session_replaced");
   });
   assert(cReplacement, "second_owner_session_replaced");
+  const reboundChannelB = id("channel-b-after-new");
+  const reboundHelloB = id("hello-b-after-new");
+  const bReboundCursor = sequenceOf(await request(ownerPorts.b, "/state"));
+  await request(ownerPorts.b, "/frame", { method: "POST", capability: ownerBCapability, body: { frame: { protocol_version: 2, type: "session_hello", id: reboundHelloB, channel_id: reboundChannelB } } });
+  const ownerBRebound = await waitFor("owner-b rebound session", async () => {
+    const state = await request(ownerPorts.b, "/state");
+    return eventAfter(state, bReboundCursor, (frame) => frame.type === "session_ready" && frame.in_reply_to === reboundHelloB) ? state : null;
+  });
+  const bReboundReady = ownerBRebound.frames.find((frame) => frame.sequence > bReboundCursor && frame.type === "session_ready" && frame.in_reply_to === reboundHelloB);
+  assert(!!bReboundReady, "revoked_owner_rebound_after_new");
+  const revokeSessionId = bReboundReady.session_id;
+  const revokeGeneration = bReboundReady.history_generation;
+
   const reboundChannelC = id("channel-c-after-new");
   const reboundHelloC = id("hello-c-after-new");
   const cReboundCursor = sequenceOf(await request(ownerPorts.c, "/state"));
@@ -235,13 +248,28 @@ async function main() {
   const ownerBId = (await request(ownerPorts.b, "/private/id", { capability: ownerBCapability })).owner_id;
   const bRevokeCursor = sequenceOf(await request(ownerPorts.b, "/state"));
   await request(18787, "/control", { method: "POST", capability: interactiveCapability, body: { action: "revoke", owner_id: ownerBId, request_id: id("control-revoke-b") } });
-  await waitFor("owner-b endpoint_ended", async () => {
+  const revokeByeState = await waitFor("owner-b revoke bye", async () => {
     const state = await request(ownerPorts.b, "/state");
-    return endpointEventAfter(state, bRevokeCursor, (event) => event.type === "endpoint_ended");
+    return eventAfter(state, bRevokeCursor, (frame) => frame.type === "bye"
+      && frame.reason === "peer_stop"
+      && frame.session_id === revokeSessionId
+      && frame.history_generation === revokeGeneration) ? state : null;
   });
+  const revokeBye = revokeByeState.frames.find((frame) => frame.sequence > bRevokeCursor
+    && frame.type === "bye"
+    && frame.reason === "peer_stop"
+    && frame.session_id === revokeSessionId
+    && frame.history_generation === revokeGeneration);
+  assert(!!revokeBye, "revoke_peer_stop_bye");
+  const revokeEndedState = await waitFor("owner-b endpoint_ended", async () => {
+    const state = await request(ownerPorts.b, "/state");
+    return endpointEventAfter(state, bRevokeCursor, (event) => event.type === "endpoint_ended") ? state : null;
+  });
+  const revokeEnded = revokeEndedState.endpoint_events.find((event) => event.sequence > bRevokeCursor && event.type === "endpoint_ended");
+  assert(!!revokeEnded && revokeBye.sequence < revokeEnded.sequence, "revoke_bye_before_endpoint_ended");
   const rejectedCursor = sequenceOf(await request(ownerPorts.b, "/state"));
   const revokedPing = id("ping-revoked");
-  await request(ownerPorts.b, "/frame", { method: "POST", capability: ownerBCapability, body: { frame: { protocol_version: 2, type: "ping", id: revokedPing, channel_id: channelB, history_generation: generation } } });
+  await request(ownerPorts.b, "/frame", { method: "POST", capability: ownerBCapability, body: { frame: { protocol_version: 2, type: "ping", id: revokedPing, channel_id: reboundChannelB, history_generation: revokeGeneration } } });
   await sleep(1000);
   const revokedState = await request(ownerPorts.b, "/state");
   assert(!eventAfter(revokedState, rejectedCursor, (frame) => frame.type === "pong" && frame.in_reply_to === revokedPing), "revoked_route_rejected");
@@ -253,10 +281,6 @@ async function main() {
     return eventAfter(state, cSurvivorCursor, (frame) => frame.type === "pong" && frame.in_reply_to === survivorPing);
   });
   assert(survivorPong, "survivor_ping_after_revoke");
-  const revokeFrames = (await request(ownerPorts.b, "/state")).frames;
-  const peerStop = revokeFrames.some((frame) => frame.sequence > bRevokeCursor && frame.type === "bye" && frame.reason === "peer_stop");
-  process.stdout.write(`finding revoke_peer_stop=${peerStop ? "observed" : "expected_known_failure"}\n`);
-
   const cPeerStopCursor = sequenceOf(await request(ownerPorts.c, "/state"));
   await request(18787, "/control", { method: "POST", capability: interactiveCapability, body: { action: "peer_stop", request_id: id("control-peer-stop") } });
   const shutdownBye = await waitFor("peer_stop bye for survivor", async () => {

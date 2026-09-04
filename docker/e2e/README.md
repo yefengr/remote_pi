@@ -41,8 +41,6 @@ Docker runtime 不允许只连接 `internal` 网络的容器实际发布宿主�
 - owner-b pairing、`session_ready`、`ping`/`pong`；
 - owner-c 第二 pairing 和独立 session channel；
 - `/new` 产生 `action_ok` 的 session replacement invariant；
-- revoke 后 `endpoint_ended`、被撤销 Owner 路由拒绝、存活 Owner ping；
-- `peer_stop` bye、interactive restart readness；
+- revoke 对在线目标 Owner 先发送带 binding session/generation 的 `bye(peer_stop)`，再产生 `endpoint_ended` 并拒绝其路由，存活 Owner 继续响应 ping；
+- endpoint `peer_stop` bye、interactive restart readiness；
 - supervisor UDS 和 cron `desired_state=stopped` gate。
-
-当前产品实现的 revoke 路径会 detach 绑定并撤销 ACL，但不向被撤销 Owner 主动发送 `bye(peer_stop)`；验证将其明确写为 `expected_known_failure`，而不修改产品源码。ACL/`endpoint_ended`/route rejection/survivor ping 仍必须通过。

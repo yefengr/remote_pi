@@ -38,7 +38,7 @@ export interface RemoteCommandDependencies {
   endpointIdentity(): Readonly<{ endpointId: string; runtimeInstanceId: string }>;
   activeOwnerCount(): number;
   isOwnerActive(ownerId: string): boolean;
-  detachOwner(ownerId: string): void;
+  closeOwner(ownerId: string, reason: "peer_stop"): void;
   updateEndpoint(): Promise<void>;
   displayName(cwd?: string): string;
   keypair(): Ed25519Keypair | null;
@@ -96,7 +96,9 @@ async function revoke(args: string, ctx: CommandUiContext, deps: RemoteCommandDe
   if (matches.length !== 1) { notify(ctx, matches.length ? "[remote-pi] Ambiguous owner id." : "[remote-pi] No matching paired device.", "warning"); return; }
   const peer = matches[0]!;
   await removePeer(peer.remote_epk);
-  try { deps.detachOwner(canonicalizeEd25519PublicKey(peer.remote_epk, "Owner public key")); } catch { deps.detachOwner(peer.remote_epk); }
+  let ownerId = peer.remote_epk;
+  try { ownerId = canonicalizeEd25519PublicKey(peer.remote_epk, "Owner public key"); } catch { /* preserve cleanup for corrupt legacy records */ }
+  deps.closeOwner(ownerId, "peer_stop");
   await deps.updateEndpoint();
   notify(ctx, `[remote-pi] Revoked: ${peer.name}`);
 }
