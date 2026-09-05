@@ -2,7 +2,7 @@
 
 WebSocket Relay：认证 Browser/PWA Owner 与 Pi Host 连接，在内存中维护 device/endpoint/runtime registry 和每个 endpoint 的 Owner ACL，发布 endpoint snapshot/update，并转发 opaque `ct` route。
 
-Relay 不提供 Agent Mesh、Pi-to-Pi forwarding、room/presence、membership API、SQLite storage 或 message queue。当前跨端真源见 [`../PROTOCOL.md`](../PROTOCOL.md) 和 [`../docs/reference/protocol/protocol-v2.md`](../docs/reference/protocol/protocol-v2.md)。系统关系与状态所有权见 [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)；本文件只维护 Relay 的协作、实现约束与验证要求。
+Relay 不提供 Agent Mesh、Pi-to-Pi forwarding、room/presence、membership API、SQLite storage 或 message queue。当前跨端真源见 [协议与安全总览](../docs/reference/protocol/README.md) 和 [`../docs/reference/protocol/protocol-v2.md`](../docs/reference/protocol/protocol-v2.md)。系统关系与状态所有权见 [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)；本文件只维护 Relay 的协作、实现约束与验证要求。
 
 ## Stack
 

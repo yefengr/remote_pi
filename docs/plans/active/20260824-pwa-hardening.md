@@ -6,7 +6,7 @@
 
 Serwist、离线应用壳和同源多标签连接控制已有实现，来源包括提交 `9b70dad`、`d2ac793` 及当前源码。后续 Protocol v2 和 endpoint 模型替代了早期 room、本地无限历史以及 partial 持久化假设，不能继续按这些旧规则重新实施。
 
-当前结构、业务存储和缓存边界以 [ARCHITECTURE](../../ARCHITECTURE.md) 为准；协议以 [PROTOCOL](../../../PROTOCOL.md) 为准。当前设计基线见 [DESIGN](../../DESIGN.md)，素靛主题是另一个尚未实施的方案，不是本项验收的前置条件。
+当前结构、业务存储和缓存边界以 [ARCHITECTURE](../../ARCHITECTURE.md) 为准；协议以 [PROTOCOL](../../reference/protocol/README.md) 为准。当前设计基线见 [DESIGN](../../DESIGN.md)，素靛主题是另一个尚未实施的方案，不是本项验收的前置条件。
 
 | 范围 | 现有依据 | 仍需确认 |
 | --- | --- | --- |

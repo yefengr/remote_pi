@@ -1,4 +1,4 @@
-> 历史边界：本文件是被取代的旧 PWA 架构快照，不作为当前执行或项目状态真源；当前架构以 [ARCHITECTURE](../../ARCHITECTURE.md) 与 [PROTOCOL](../../../PROTOCOL.md) 为准。当前状态见 [ROADMAP](../../ROADMAP.md)。
+> 历史边界：本文件是被取代的旧 PWA 架构快照，不作为当前执行或项目状态真源；当前架构以 [ARCHITECTURE](../../ARCHITECTURE.md) 与 [PROTOCOL](../../reference/protocol/README.md) 为准。当前状态见 [ROADMAP](../../ROADMAP.md)。
 
 # Remote Pi PWA 技术架构方案
 

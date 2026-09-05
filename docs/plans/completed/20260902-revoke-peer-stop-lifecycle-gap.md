@@ -120,4 +120,4 @@ E2E 会在 session replacement 后先让目标 Owner 与存活 Owner 都重新�
 关联产品决策和 Protocol v2 生命周期定义：
 
 - [Plan 69](20260829-remove-agent-mesh-and-rework-daemon.md)
-- [`PROTOCOL.md`](../../../PROTOCOL.md)
+- [`PROTOCOL.md`](../../reference/protocol/README.md)

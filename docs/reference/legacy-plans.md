@@ -1,6 +1,6 @@
 # 历史文档索引
 
-按原计划编号或完整旧路径查找迁移后的文档。此页只维护路径与历史来源，不维护当前事项状态；当前进度见 [ROADMAP](../ROADMAP.md)，现行协议见 [PROTOCOL](../../PROTOCOL.md)，部署见 [DEPLOYMENT](../DEPLOYMENT.md)。
+按原计划编号或完整旧路径查找迁移后的文档。此页只维护路径与历史来源，不维护当前事项状态；当前进度见 [ROADMAP](../ROADMAP.md)，现行协议见 [PROTOCOL](protocol/README.md)，部署见 [DEPLOYMENT](../DEPLOYMENT.md)。
 
 ## 如何阅读归档
 

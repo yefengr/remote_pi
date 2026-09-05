@@ -4,11 +4,11 @@
 
 跨端 strict schema 真源：
 
-- [`docs/reference/protocol/protocol-v2.md`](docs/reference/protocol/protocol-v2.md)
-- [`docs/reference/protocol/pairing.md`](docs/reference/protocol/pairing.md)
-- [`docs/reference/protocol/fixtures/v2/manifest.json`](docs/reference/protocol/fixtures/v2/manifest.json)
+- [`docs/reference/protocol/protocol-v2.md`](protocol-v2.md)
+- [`docs/reference/protocol/pairing.md`](pairing.md)
+- [`docs/reference/protocol/fixtures/v2/manifest.json`](fixtures/v2/manifest.json)
 
-[历史文档索引](docs/reference/legacy-plans.md)收录已迁移的旧方案与协议快照，只用于审计过去决策，不是当前协议真源。
+[历史文档索引](../legacy-plans.md)收录已迁移的旧方案与协议快照，只用于审计过去决策，不是当前协议真源。
 
 ## 1. 系统边界
 
@@ -103,7 +103,7 @@ Pairing token 是短期、单次使用 token。成功后 Extension：
 
 每台电脑独立 pairing 和 revoke。撤销一个 device 上的 Owner 后，Extension 删除本地 ACL、关闭对应 binding、更新 Relay ACL；其他电脑上的 pairing 不受影响。没有跨设备 membership 传播。
 
-完整规则见 [pairing contract](docs/reference/protocol/pairing.md)。
+完整规则见 [pairing contract](pairing.md)。
 
 ## 5. Protocol v2 inner frames
 
@@ -160,7 +160,7 @@ Daemon registry v2 位于 `~/.pi/remote/daemons.json`。每条记录包含稳定
 3. `control_protocol_version == 2`；
 4. Extension 上报 endpoint/runtime 与 supervisor 注入值一致。
 
-Supervisor 不导入私有 Pi SDK，也不在 child 外重复执行 resource discovery。实际宿主 `pi --mode rpc` 启动后负责 settings、package、resource discovery 与 diagnostics；Supervisor 消费 RPC `get_state` 和 Extension 的结构化 `runtime-ready`，不解析 stderr 推断状态。readiness 超时且 RPC 已 ready、Extension 仍未报告时进入 `extension_not_ready` blocked；身份、协议、Extension readiness 和 runtime identity 的确定性错误同样进入 `blocked`。不能将这一流程描述成“在 spawn 前发现所有 Extension 问题并阻止 child 启动”。运行细节见 [daemon 指南](pi-extension/docs/daemon.md)。
+Supervisor 不导入私有 Pi SDK，也不在 child 外重复执行 resource discovery。实际宿主 `pi --mode rpc` 启动后负责 settings、package、resource discovery 与 diagnostics；Supervisor 消费 RPC `get_state` 和 Extension 的结构化 `runtime-ready`，不解析 stderr 推断状态。readiness 超时且 RPC 已 ready、Extension 仍未报告时进入 `extension_not_ready` blocked；身份、协议、Extension readiness 和 runtime identity 的确定性错误同样进入 `blocked`。不能将这一流程描述成“在 spawn 前发现所有 Extension 问题并阻止 child 启动”。运行细节见 [daemon 指南](../../../pi-extension/docs/daemon.md)。
 
 Relay 断线只使 endpoint `degraded/reconnecting`；Extension 后台重连，不通过重启 Pi 修复网络。Transient process/runtime failure 使用有限 restart budget。
 
@@ -224,9 +224,9 @@ Relay 当前没有数据库或持久 volume。Registry、连接、ACL 和 subscr
 
 ## 10. 参考实现与报告
 
-- Relay：[`relay/src/`](relay/src/)
-- Pi Extension：[`pi-extension/src/`](pi-extension/src/)
-- Browser/PWA：[`pwa/src/`](pwa/src/)
-- Daemon 运维：[`pi-extension/docs/daemon.md`](pi-extension/docs/daemon.md)
+- Relay：[`relay/src/`](../../../relay/src/)
+- Pi Extension：[`pi-extension/src/`](../../../pi-extension/src/)
+- Browser/PWA：[`pwa/src/`](../../../pwa/src/)
+- Daemon 运维：[`pi-extension/docs/daemon.md`](../../../pi-extension/docs/daemon.md)
 
 安全问题请通过仓库维护者公布的私密渠道报告；若当前没有私密渠道，创建 issue 时不要附带 secret、private key、token、Cookie 或可利用 payload。

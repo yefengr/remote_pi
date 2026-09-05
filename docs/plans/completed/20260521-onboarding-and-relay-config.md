@@ -1,4 +1,4 @@
-> **历史归档。** 原始路径：`plan/14-onboarding-and-relay-config.md`。本文已退出当前执行入口；归档不等于所有条目已实现，正文为原始快照。 当前索引：[历史计划索引](../../reference/legacy-plans.md)；当前协议：[PROTOCOL.md](../../../PROTOCOL.md)；当前事项：[ROADMAP.md](../../ROADMAP.md)。
+> **历史归档。** 原始路径：`plan/14-onboarding-and-relay-config.md`。本文已退出当前执行入口；归档不等于所有条目已实现，正文为原始快照。 当前索引：[历史计划索引](../../reference/legacy-plans.md)；当前协议：[PROTOCOL.md](../../reference/protocol/README.md)；当前事项：[ROADMAP.md](../../ROADMAP.md)。
 
 # Plano 14 — Onboarding + relay configurável
 

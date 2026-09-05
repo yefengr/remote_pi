@@ -3,7 +3,7 @@ name: agent-network
 description: Use when you (a Pi agent) are running inside a local agent session — i.e., when the Pi footer shows "📡 <session-name>". This skill teaches how to receive messages from other agents, how to reply in a correlatable way, how to ask things of other agents without losing track, and how to act when you don't yet have the context you need.
 ---
 
-> **历史参考。** 原始路径：`plan/19-agent-network-skill.md`。本文已退出当前执行入口；归档不等于所有条目已实现，正文为原始快照。 当前索引：[历史计划索引](../legacy-plans.md)；当前协议：[PROTOCOL.md](../../../PROTOCOL.md)；当前事项：[ROADMAP.md](../../ROADMAP.md)。
+> **历史参考。** 原始路径：`plan/19-agent-network-skill.md`。本文已退出当前执行入口；归档不等于所有条目已实现，正文为原始快照。 当前索引：[历史计划索引](../legacy-plans.md)；当前协议：[PROTOCOL.md](../protocol/README.md)；当前事项：[ROADMAP.md](../../ROADMAP.md)。
 
 > **已失效历史参考。** Agent Mesh 已移除；本文仅供历史参考，不是可加载技能或执行授权。
 

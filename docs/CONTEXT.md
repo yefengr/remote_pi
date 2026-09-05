@@ -36,7 +36,7 @@ Remote Pi 让用户从浏览器连接 Host 电脑上的 Pi，发送输入并查�
 
 本地缓存不等于云端备份，也不是实时在线状态的证明。离线读取仅限已经缓存的页面壳与正式历史窗口，不能保证从未在线访问过的浏览器也能启动应用。发送输入需要在线链路，产品不提供离线发送队列。
 
-TLS 不等于应用层端到端加密（E2E）；Relay 运营方具有观察能力，配对资料与密钥属于各端本地状态。普通 Pi 会话还会涉及模型调用，不能据此宣称消息绝不离开电脑、不会经过第三方或 Relay 绝不可能看到明文。具体信任边界以[协议入口](../PROTOCOL.md)为准。
+TLS 不等于应用层端到端加密（E2E）；Relay 运营方具有观察能力，配对资料与密钥属于各端本地状态。普通 Pi 会话还会涉及模型调用，不能据此宣称消息绝不离开电脑、不会经过第三方或 Relay 绝不可能看到明文。具体信任边界以[协议入口](reference/protocol/README.md)为准。
 
 ## 非目标
 
@@ -53,6 +53,6 @@ TLS 不等于应用层端到端加密（E2E）；Relay 运营方具有观察能�
 
 - [架构说明](ARCHITECTURE.md)：当前三端职责、状态所有权、会话数据流与缓存边界。
 - [设计系统](DESIGN.md)：当前界面设计规则；未来主题方案不等于当前实现。
-- [协议入口](../PROTOCOL.md)：身份、配对、消息与信任边界；详细定义见[会话协议](reference/protocol/protocol-v2.md)和[配对协议](reference/protocol/pairing.md)。
+- [协议入口](reference/protocol/README.md)：身份、配对、消息与信任边界；详细定义见[会话协议](reference/protocol/protocol-v2.md)和[配对协议](reference/protocol/pairing.md)。
 - [部署说明](DEPLOYMENT.md)：服务部署、配置与运维流程。
 - [路线图](ROADMAP.md)：已确定事项及项目级状态；本文不维护开发进度。

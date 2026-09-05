@@ -1,4 +1,4 @@
-> **历史参考。** 原始路径：`plan/47-android-queued-editing.md`。本文已退出当前执行入口；归档不等于所有条目已实现，正文为原始快照。 当前索引：[历史计划索引](../legacy-plans.md)；当前协议：[PROTOCOL.md](../../../PROTOCOL.md)；当前事项：[ROADMAP.md](../../ROADMAP.md)。
+> **历史参考。** 原始路径：`plan/47-android-queued-editing.md`。本文已退出当前执行入口；归档不等于所有条目已实现，正文为原始快照。 当前索引：[历史计划索引](../legacy-plans.md)；当前协议：[PROTOCOL.md](../protocol/README.md)；当前事项：[ROADMAP.md](../../ROADMAP.md)。
 
 # 47 — Android queued follow-ups and steer consumption (as built)
 

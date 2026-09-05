@@ -48,7 +48,7 @@
 
 - 不恢复 landing page、公开文档、教程或法律页面；产品界面仅位于 `/app`。
 - 不未经授权添加 backend、API routes、账号或其他服务端业务入口。
-- 不把历史 room/mesh 模型或尚未实施的主题原型当作当前实现规范；协议与安全边界引用 [`../PROTOCOL.md`](../PROTOCOL.md)。
+- 不把历史 room/mesh 模型或尚未实施的主题原型当作当前实现规范；协议与安全边界引用 [协议与安全总览](../docs/reference/protocol/README.md)。
 - 不提交 `.next/`、`out/`、`node_modules/` 等生成物；不通过禁用 lint 或修改生成物规避错误。
 - 可以直接在当前分支开发；保留用户既有未提交改动，不自动提交、push 或发布。
 

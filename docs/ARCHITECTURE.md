@@ -35,7 +35,7 @@ Pi Extension endpoint
 | Host 的 Pi session | 本机保存 | 实际 Pi `SessionManager` 当前 branch 是正式历史的真源。 |
 | Relay registry | `HashMap` 内存 | 注册、ACL、subscriptions 和 senders；当前 Compose 不配置 Relay volume。 |
 
-Host 数据的具体路径、权限与信任边界见[协议入口](../PROTOCOL.md)和 [daemon 指南](../pi-extension/docs/daemon.md)。Relay 内存状态的实现入口是 [`RegistryInner`](../relay/src/peers/registry.rs)。
+Host 数据的具体路径、权限与信任边界见[协议入口](reference/protocol/README.md)和 [daemon 指南](../pi-extension/docs/daemon.md)。Relay 内存状态的实现入口是 [`RegistryInner`](../relay/src/peers/registry.rs)。
 
 浏览器数据库名为 `remote-pi-pwa`，表定义由 [`db.ts`](../pwa/src/lib/pwa/db.ts) 维护：
 
@@ -116,7 +116,7 @@ Serwist 在构建时生成 `public/sw.js`，Service Worker 的 scope 为 `/app`�
 
 ## 相关真源
 
-- [协议入口](../PROTOCOL.md)、[会话协议](reference/protocol/protocol-v2.md)与[配对协议](reference/protocol/pairing.md)：身份、wire 字段、信任边界及协议约束。TLS 不等于应用层 E2E，Relay 运营方具有观察能力。
+- [协议入口](reference/protocol/README.md)、[会话协议](reference/protocol/protocol-v2.md)与[配对协议](reference/protocol/pairing.md)：身份、wire 字段、信任边界及协议约束。TLS 不等于应用层 E2E，Relay 运营方具有观察能力。
 - [daemon 指南](../pi-extension/docs/daemon.md)：Host 生命周期、命令、存储路径与诊断。
 - [部署说明](DEPLOYMENT.md)：构建、部署、配置与运维流程。
 - [设计系统](DESIGN.md)：当前视觉规则；[主题方案](plans/active/20260830-pwa-theme.md)属于未来设计，不是当前实现。

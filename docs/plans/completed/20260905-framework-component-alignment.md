@@ -25,7 +25,7 @@
 
 Remote Pi 的唯一产品路由是 `/app`，`/` 在服务端重定向到 `/app`。Browser/PWA Owner 经 WebSocket/TLS 连接 Relay，再到 Pi endpoint。PWA 保存本地身份、配对、endpoint metadata 和 timeline；Relay 使用内存 registry/ACL，转发 opaque `ct`，不提供数据库或离线消息队列。
 
-Pi Extension 通过宿主扩展机制接入，生产环境不私有安装 Pi SDK；supervisor 从实际 `pi --mode rpc` 宿主发现资源。产品与安全边界继续以 [PROTOCOL.md](../../../PROTOCOL.md) 和[完整协议参考](../../reference/protocol/)为准，本方案不重述协议字段或安全规则。
+Pi Extension 通过宿主扩展机制接入，生产环境不私有安装 Pi SDK；supervisor 从实际 `pi --mode rpc` 宿主发现资源。产品与安全边界继续以 [PROTOCOL.md](../../reference/protocol/README.md) 和[完整协议参考](../../reference/protocol/)为准，本方案不重述协议字段或安全规则。
 
 Next.js 当前承担路由、构建、静态资源、standalone 输出和 Serwist 集成，见 [next.config.ts](../../../pwa/next.config.ts)。核心界面是客户端 `PwaApp`，由 `pwa/src/app/app/page.tsx` 渲染。不能因为 Next.js 提供服务端能力就扩大产品边界；未经授权添加 backend/API routes 仍被 [PWA 规范](../../../pwa/AGENTS.md)禁止。
 

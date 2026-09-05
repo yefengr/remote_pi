@@ -25,7 +25,7 @@ pi install npm:@yefengr/remote-pi
 
 可选的后台进程管理见 [Daemon 使用指南](pi-extension/docs/daemon.md)。
 
-> 当前没有应用层端到端加密；敏感场景请使用可信 Relay。详见[协议与安全说明](PROTOCOL.md)。
+> 当前没有应用层端到端加密；敏感场景请使用可信 Relay。详见[协议与安全说明](docs/reference/protocol/README.md)。
 
 ## 项目结构
 
@@ -42,7 +42,7 @@ pi install npm:@yefengr/remote-pi
 | 产品背景与术语 | [CONTEXT](docs/CONTEXT.md) |
 | 当前架构与状态所有权 | [ARCHITECTURE](docs/ARCHITECTURE.md) |
 | 设计系统与组件规则 | [DESIGN](docs/DESIGN.md) |
-| 协议与安全边界 | [PROTOCOL](PROTOCOL.md) |
+| 协议与安全边界 | [协议与安全总览](docs/reference/protocol/README.md) |
 | 自托管部署 | [DEPLOYMENT](docs/DEPLOYMENT.md) |
 | 已确定事项与进度 | [ROADMAP](docs/ROADMAP.md) |
 | 尚未确定开发的建议 | [BACKLOG](docs/BACKLOG.md) |
