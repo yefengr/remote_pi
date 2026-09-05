@@ -54,7 +54,7 @@ export class V2PeerChannel implements V2Channel {
     return this.ownerId;
   }
 
-  sendV2(msg: ServerFrame): void {
+  sendV2(msg: ServerFrame): boolean {
     try {
       const ct = Buffer.from(encodeServerFrameV2(msg)).toString("base64");
       this.relay.send(JSON.stringify({
@@ -66,8 +66,10 @@ export class V2PeerChannel implements V2Channel {
         target_owner_id: this.ownerId,
         ct,
       } satisfies RouteFrame));
+      return true;
     } catch {
       // Formal history recovers messages lost while the relay reconnects.
+      return false;
     }
   }
 
@@ -80,7 +82,10 @@ export class V2PeerChannel implements V2Channel {
     if (!outer) return;
     try {
       const frame = decodeClientFrameV2(Buffer.from(outer.ct, "base64").toString("utf8"));
-      const expectedPurpose: RoutePurpose = frame.type === "pair_request" ? "pairing" : "session";
+      // Pair requests have one owner in installOwnerRouter. Letting an active
+      // session binding process retries would duplicate or misroute replies.
+      if (frame.type === "pair_request") return;
+      const expectedPurpose: RoutePurpose = "session";
       if (outer.purpose !== expectedPurpose) return;
       this.onMessage(frame);
     } catch {

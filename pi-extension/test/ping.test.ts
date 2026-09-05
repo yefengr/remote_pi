@@ -43,7 +43,17 @@ vi.mock("../src/config.js", async (importOriginal) => {
 
 vi.mock("../src/pairing/qr.js", async (importOriginal) => {
   const orig = await importOriginal<typeof import("../src/pairing/qr.js")>();
-  return { ...orig, qrSession: { issueToken: vi.fn().mockReturnValue({ token: "test-token", expiresAt: Date.now() + 60_000 }), consumeToken: vi.fn().mockReturnValue("ok"), clear: vi.fn() } };
+  return {
+    ...orig,
+    qrSession: {
+      issueToken: vi.fn().mockReturnValue({ token: "test-token", expiresAt: Date.now() + 60_000 }),
+      reserveToken: vi.fn((token: string, ownerId: string, requestId: string) => ({ status: "reserved", reservation: Object.freeze({ token, ownerId, requestId }) })),
+      commitToken: vi.fn().mockReturnValue(true),
+      releaseToken: vi.fn().mockReturnValue(true),
+      isReservationCurrent: vi.fn().mockReturnValue(true),
+      clear: vi.fn(),
+    },
+  };
 });
 
 vi.mock("../src/transport/relay_client.js", () => ({ RelayClient: MockRelay }));

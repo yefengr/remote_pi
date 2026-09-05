@@ -244,6 +244,16 @@ describe("RelayClient", () => {
     client.close();
   });
 
+  test("sendControl reports whether the current socket accepted the frame", async () => {
+    const client = new RelayClient("ws://localhost:9999", keypair);
+    expect(client.sendControl({ type: "endpoint_update" })).toBe(false);
+    await connectWithAuth(client, HOST_OPTIONS);
+    expect(client.sendControl({ type: "endpoint_update" })).toBe(true);
+    expect(JSON.parse(currentWs().sent.at(-1)!)).toEqual({ type: "endpoint_update" });
+    client.close();
+    expect(client.sendControl({ type: "endpoint_update" })).toBe(false);
+  });
+
   async function connectFake(client: InstanceType<typeof RelayClient>): Promise<void> {
     const p = client.connect(HOST_OPTIONS);
     await vi.advanceTimersByTimeAsync(1);

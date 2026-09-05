@@ -9,16 +9,20 @@ import { makePwaDeviceId, type PwaDeviceRecord } from "@/lib/pwa/db";
 import type { OwnerKeyPair } from "@/lib/remote-pi/types";
 
 const PAIRING_TIMEOUT_MS = 15_000;
+const PAIRING_MAX_ATTEMPTS = 2;
 
 type DevicePairingState = "idle" | "scanning" | "pairing";
 type PairingAttempt = {
-  relay: RelayClient;
+  relay: RelayClient | null;
   channel: PeerChannel | null;
   timer: ReturnType<typeof setTimeout> | null;
   reject: ((reason?: unknown) => void) | null;
+  unsubscribeClose: (() => void) | null;
+  requestId: string;
   cancelled: boolean;
   cleanedUp: boolean;
 };
+class RetryablePairingError extends Error {}
 export type DevicePairingResult = {
   device: PwaDeviceRecord;
   endpointId: string;
@@ -50,17 +54,25 @@ export function useDevicePairing({ identity, relayUrl, onPaired, onError }: UseD
     onErrorRef.current = onError;
   }, [identity, onError, onPaired, relayUrl]);
 
-  const cleanupAttempt = useCallback((attempt: PairingAttempt) => {
-    if (attempt.cleanedUp) return;
-    attempt.cleanedUp = true;
+  const closeAttemptTransport = useCallback((attempt: PairingAttempt) => {
     if (attempt.timer !== null) {
       clearTimeout(attempt.timer);
       attempt.timer = null;
     }
+    attempt.unsubscribeClose?.();
+    attempt.unsubscribeClose = null;
     attempt.channel?.close();
-    attempt.relay.close();
-    if (attemptRef.current === attempt) attemptRef.current = null;
+    attempt.channel = null;
+    attempt.relay?.close();
+    attempt.relay = null;
+    attempt.reject = null;
   }, []);
+  const cleanupAttempt = useCallback((attempt: PairingAttempt) => {
+    if (attempt.cleanedUp) return;
+    attempt.cleanedUp = true;
+    closeAttemptTransport(attempt);
+    if (attemptRef.current === attempt) attemptRef.current = null;
+  }, [closeAttemptTransport]);
   const cancelAttempt = useCallback((attempt: PairingAttempt, message: string) => {
     attempt.cancelled = true;
     attempt.reject?.(new Error(message));
@@ -73,8 +85,10 @@ export function useDevicePairing({ identity, relayUrl, onPaired, onError }: UseD
 
   const open = useCallback(() => { setState("scanning"); }, []);
   const close = useCallback(() => {
-    setState((current) => current === "scanning" ? "idle" : current);
-  }, []);
+    const attempt = attemptRef.current;
+    if (attempt) cancelAttempt(attempt, "Pairing cancelled by the user.");
+    setState("idle");
+  }, [cancelAttempt]);
   const pairFromQr = useCallback(async (raw: string) => {
     const currentIdentity = identityRef.current;
     if (!currentIdentity) return;
@@ -89,33 +103,59 @@ export function useDevicePairing({ identity, relayUrl, onPaired, onError }: UseD
     setState("pairing");
     onErrorRef.current(null);
     const deviceId = normalizePairDeviceId(payload.deviceId);
-    const relay = new RelayClient({ relayUrl: payload.relayUrl || configuredRelayUrl, identity: currentIdentity });
-    const attempt: PairingAttempt = { relay, channel: null, timer: null, reject: null, cancelled: false, cleanedUp: false };
+    const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const request = createPairRequest(payload.token, browserName(), requestId);
+    const attempt: PairingAttempt = { relay: null, channel: null, timer: null, reject: null, unsubscribeClose: null, requestId, cancelled: false, cleanedUp: false };
     attemptRef.current = attempt;
     const isActive = () => attemptRef.current === attempt && !attempt.cancelled;
     try {
-      const paired = await new Promise<PwaDeviceRecord>((resolve, reject) => {
-        attempt.reject = reject;
-        attempt.timer = setTimeout(() => reject(new Error("Pairing timed out. Generate a fresh QR on the Pi.")), PAIRING_TIMEOUT_MS);
-        attempt.channel = new PeerChannel({
-          relay,
-          endpoint: { deviceId, endpointId: payload.endpointId, runtimeInstanceId: payload.runtimeInstanceId },
-          onPairOk: (ok) => {
-            if (!isActive()) return;
-            if (ok.endpoint_id !== payload.endpointId) { if (attempt.timer !== null) clearTimeout(attempt.timer); attempt.timer = null; reject(new Error("Pairing response belongs to a different endpoint.")); return; }
-            if (attempt.timer !== null) clearTimeout(attempt.timer);
-            attempt.timer = null;
-            resolve({ id: makePwaDeviceId(deviceId), deviceId, relayUrl: payload.relayUrl || configuredRelayUrl, pairedAt: new Date().toISOString(), hostname: ok.hostname, harness: ok.harness });
-          },
-          onPairError: (pairError) => { if (!isActive()) return; if (attempt.timer !== null) clearTimeout(attempt.timer); attempt.timer = null; reject(new Error(pairError.message)); },
-          onMalformed: (reason) => { if (!isActive()) return; if (attempt.timer !== null) clearTimeout(attempt.timer); attempt.timer = null; reject(new Error(reason)); },
-        });
-        void relay.connect().then(() => {
-          if (!isActive()) return;
-          if (!attempt.channel?.sendPairRequest(createPairRequest(payload.token, browserName(), globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`))) throw new Error("Relay is not ready for pairing.");
-        }).catch(reject);
-      });
-      if (!isActive()) return;
+      let paired: PwaDeviceRecord | null = null;
+      for (let attemptNumber = 1; attemptNumber <= PAIRING_MAX_ATTEMPTS && !paired; attemptNumber += 1) {
+        const relay = new RelayClient({ relayUrl: payload.relayUrl || configuredRelayUrl, identity: currentIdentity });
+        attempt.relay = relay;
+        try {
+          paired = await new Promise<PwaDeviceRecord>((resolve, reject) => {
+            let settled = false;
+            let requestSent = false;
+            const finish = (callback: () => void) => {
+              if (settled) return;
+              settled = true;
+              if (attempt.timer !== null) { clearTimeout(attempt.timer); attempt.timer = null; }
+              attempt.unsubscribeClose?.();
+              attempt.unsubscribeClose = null;
+              callback();
+            };
+            const fail = (reason: unknown, retryable: boolean) => {
+              const error = reason instanceof Error ? reason : new Error(String(reason));
+              finish(() => reject(retryable ? new RetryablePairingError(error.message) : error));
+            };
+            attempt.reject = (reason) => fail(reason ?? new Error("Pairing cancelled."), false);
+            attempt.unsubscribeClose = relay.on("close", () => { if (isActive()) fail(new Error("Relay connection closed during pairing."), requestSent); });
+            attempt.timer = setTimeout(() => fail(new Error("Pairing timed out. Generate a fresh QR on the Pi."), requestSent), PAIRING_TIMEOUT_MS);
+            attempt.channel = new PeerChannel({
+              relay,
+              endpoint: { deviceId, endpointId: payload.endpointId, runtimeInstanceId: payload.runtimeInstanceId },
+              onPairOk: (ok) => {
+                if (!isActive()) return;
+                if (ok.in_reply_to !== request.id) return;
+                if (ok.endpoint_id !== payload.endpointId) { fail(new Error("Pairing response belongs to a different endpoint."), false); return; }
+                finish(() => resolve({ id: makePwaDeviceId(deviceId), deviceId, relayUrl: payload.relayUrl || configuredRelayUrl, pairedAt: new Date().toISOString(), hostname: ok.hostname, harness: ok.harness }));
+              },
+              onPairError: (pairError) => { if (isActive() && pairError.in_reply_to === request.id) fail(new Error(pairError.message), false); },
+              onMalformed: (reason) => { if (isActive()) fail(new Error(reason), false); },
+            });
+            void relay.connect().then(() => {
+              if (!isActive()) return;
+              requestSent = attempt.channel?.sendPairRequest(request) === true;
+              if (!requestSent) fail(new Error("Relay is not ready for pairing."), false);
+            }).catch((error) => fail(error, false));
+          });
+        } catch (pairingError) {
+          closeAttemptTransport(attempt);
+          if (!(pairingError instanceof RetryablePairingError) || attemptNumber === PAIRING_MAX_ATTEMPTS || !isActive()) throw pairingError;
+        }
+      }
+      if (!paired || !isActive()) return;
       await onPairedRef.current({ device: paired, endpointId: payload.endpointId });
       if (isActive()) setState("idle");
     } catch (pairingError) {
@@ -126,7 +166,7 @@ export function useDevicePairing({ identity, relayUrl, onPaired, onError }: UseD
     } finally {
       cleanupAttempt(attempt);
     }
-  }, [cancelAttempt, cleanupAttempt]);
+  }, [cancelAttempt, cleanupAttempt, closeAttemptTransport]);
 
   return { state, open, close, pairFromQr };
 }

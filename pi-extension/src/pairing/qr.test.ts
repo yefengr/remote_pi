@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   QRSession,
   buildQRUri,
+  type TokenReservation,
   clampPairTtlMs,
   TOKEN_TTL_MS,
   PAIR_TTL_MIN_MS,
@@ -22,6 +23,72 @@ describe("clampPairTtlMs", () => {
     expect(clampPairTtlMs(Number.NaN)).toBe(TOKEN_TTL_MS);
     expect(clampPairTtlMs(Number.POSITIVE_INFINITY)).toBe(TOKEN_TTL_MS);
   });
+});
+
+describe("QRSession pairing reservations", () => {
+  test("reserves and commits a token, then replays the same completion", () => {
+    const session = new QRSession();
+    const { token } = session.issueToken();
+    const first = session.reserveToken(token, "owner-a", "request-1");
+    expect(first.status).toBe("reserved");
+    if (first.status !== "reserved") throw new Error("expected reservation");
+    const completion = { type: "pair_ok", requestId: "request-1" };
+    expect(session.commitToken(first.reservation, completion)).toBe(true);
+    expect(session.reserveToken(token, "owner-a", "request-1")).toEqual({ status: "committed", completion });
+    expect(session.isReservationCurrent(first.reservation)).toBe(false);
+  });
+
+  test("replays a committed result for the same request after token expiry", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(0));
+      const session = new QRSession();
+      const { token } = session.issueToken(10_000);
+      const first = session.reserveToken(token, "owner-a", "request-1");
+      if (first.status !== "reserved") throw new Error("expected reservation");
+      const completion = { type: "pair_ok", requestId: "request-1" };
+      expect(session.commitToken(first.reservation, completion)).toBe(true);
+      vi.setSystemTime(new Date(10_001));
+
+      expect(session.reserveToken(token, "owner-a", "request-1")).toEqual({ status: "committed", completion });
+      expect(session.reserveToken(token, "owner-b", "request-1").status).toBe("consumed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("only the same Owner and request can reuse a reservation", () => {
+    const session = new QRSession();
+    const { token } = session.issueToken();
+    expect(session.reserveToken(token, "owner-a", "request-1").status).toBe("reserved");
+    expect(session.reserveToken(token, "owner-b", "request-1").status).toBe("consumed");
+    expect(session.reserveToken(token, "owner-a", "request-2").status).toBe("consumed");
+  });
+
+  test("release keeps the token private to the original request", () => {
+    const session = new QRSession();
+    const { token } = session.issueToken();
+    const result = session.reserveToken(token, "owner-a", "request-1");
+    if (result.status !== "reserved") throw new Error("expected reservation");
+    expect(session.releaseToken(result.reservation)).toBe(true);
+    expect(session.reserveToken(token, "owner-b", "request-1").status).toBe("consumed");
+    const retry = session.reserveToken(token, "owner-a", "request-1");
+    expect(retry.status).toBe("reserved");
+    if (retry.status === "reserved") expect(retry.reservation).not.toBe(result.reservation);
+  });
+
+  test("rejects stale reservations and invalid commits", () => {
+    const session = new QRSession();
+    const { token } = session.issueToken();
+    const result = session.reserveToken(token, "owner-a", "request-1");
+    if (result.status !== "reserved") throw new Error("expected reservation");
+    const forged = { token, ownerId: "owner-a", requestId: "request-1" } as TokenReservation;
+    expect(session.isReservationCurrent(forged)).toBe(false);
+    expect(session.commitToken(forged, "completion")).toBe(false);
+    expect(session.commitToken(result.reservation, "completion")).toBe(true);
+    expect(session.commitToken(result.reservation, "other")).toBe(false);
+  });
+
 });
 
 describe("buildQRUri", () => {

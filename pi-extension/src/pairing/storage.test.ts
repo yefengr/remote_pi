@@ -539,6 +539,72 @@ describe("getOrCreateEd25519Keypair — file identity wins over a readable keyri
 });
 
 
+describe("peer write receipts and conditional rollback", () => {
+  const peersPath = join(_tmpHome, ".pi", "remote", "peers.json");
+
+  function writePeers(peers: unknown): void {
+    mkdirSync(join(_tmpHome, ".pi", "remote"), { recursive: true });
+    writeFileSync(peersPath, JSON.stringify({ peers }, null, 2));
+  }
+
+  test("addPeer returns its record and canonical-slot token", async () => {
+    const record = { name: "new", remote_epk: "receipt-owner", paired_at: "first" };
+
+    await expect(storage.addPeer(record)).resolves.toMatchObject({ record });
+    const receipt = await storage.addPeer(record);
+    expect(receipt.token).toBeDefined();
+    expect(receipt.previousRecord).toEqual(record);
+  });
+
+  test("rolls back an added record while its receipt remains current", async () => {
+    const record = { name: "new", remote_epk: "rollback-added", paired_at: "first" };
+    const receipt = await storage.addPeer(record);
+
+    await expect(storage.conditionalRollbackPeer(receipt)).resolves.toMatchObject({
+      outcome: "removed",
+    });
+    expect(JSON.parse(readFileSync(peersPath, "utf8"))).toEqual({ peers: [] });
+  });
+
+  test("rolls back an overwritten record by restoring its raw predecessor", async () => {
+    const previous = { name: "old", remote_epk: "rollback-overwritten", paired_at: "old" };
+    const replacement = { name: "new", remote_epk: "rollback-overwritten", paired_at: "new" };
+    writePeers([previous]);
+    const receipt = await storage.addPeer(replacement);
+
+    expect(receipt.previousRecord).toEqual(previous);
+    await expect(storage.conditionalRollbackPeer(receipt)).resolves.toMatchObject({
+      outcome: "restored",
+    });
+    expect(JSON.parse(readFileSync(peersPath, "utf8"))).toEqual({ peers: [previous] });
+  });
+
+  test("a stale receipt cannot roll back a subsequent re-pair", async () => {
+    const first = { name: "first", remote_epk: "rollback-stale", paired_at: "first" };
+    const second = { name: "second", remote_epk: "rollback-stale", paired_at: "second" };
+    const receipt = await storage.addPeer(first);
+    await storage.addPeer(second);
+
+    await expect(storage.conditionalRollbackPeer(receipt)).resolves.toMatchObject({
+      outcome: "stale",
+    });
+    expect(JSON.parse(readFileSync(peersPath, "utf8"))).toEqual({ peers: [second] });
+  });
+
+  test.each([
+    ["false", () => false],
+    ["throw", () => { throw new Error("authority unavailable"); }],
+  ])("a %s authority guard does not write", async (_case, canCommit) => {
+    const record = { name: "guarded", remote_epk: "rollback-guard", paired_at: "first" };
+    const receipt = await storage.addPeer(record);
+
+    await expect(storage.conditionalRollbackPeer(receipt, canCommit)).resolves.toMatchObject({
+      outcome: "no_authority",
+    });
+    expect(JSON.parse(readFileSync(peersPath, "utf8"))).toEqual({ peers: [record] });
+  });
+});
+
 describe("owner snapshot mutation tokens", () => {
   const peersPath = join(_tmpHome, ".pi", "remote", "peers.json");
   const snapshotStorage = storage as typeof storage & {

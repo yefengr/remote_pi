@@ -8,7 +8,7 @@ import type { DevicePairingController, DevicePairingResult } from "./use-device-
 import { useDevicePairing } from "./use-device-pairing";
 
 const relayHarness = vi.hoisted(() => ({
-  instances: [] as Array<{ state: string; connectCalls: number; closeCalls: number }>,
+  instances: [] as Array<{ state: string; connectCalls: number; closeCalls: number; emitClose: () => void }>,
   nextConnectRejects: 0,
 }));
 const channelHarness = vi.hoisted(() => ({
@@ -25,7 +25,7 @@ const channelHarness = vi.hoisted(() => ({
 type PairOkFrame = Extract<ServerFrame, { type: "pair_ok" }>;
 type PairErrorFrame = Extract<ServerFrame, { type: "pair_error" }>;
 
-type RelayInstance = { state: string; connectCalls: number; closeCalls: number };
+type RelayInstance = { state: string; connectCalls: number; closeCalls: number; emitClose: () => void };
 
 vi.mock("@/lib/remote-pi/relay-client", () => ({
   RelayClient: class {
@@ -33,6 +33,7 @@ vi.mock("@/lib/remote-pi/relay-client", () => ({
     connectCalls = 0;
     closeCalls = 0;
     connectRejects = 0;
+    closeListeners = new Set<() => void>();
 
     constructor() {
       this.connectRejects = relayHarness.nextConnectRejects;
@@ -40,8 +41,9 @@ vi.mock("@/lib/remote-pi/relay-client", () => ({
       relayHarness.instances.push(this as RelayInstance);
     }
 
-    on() {
-      return () => undefined;
+    on(event: string, callback: () => void) {
+      if (event === "close") this.closeListeners.add(callback);
+      return () => this.closeListeners.delete(callback);
     }
 
     async connect() {
@@ -61,6 +63,11 @@ vi.mock("@/lib/remote-pi/relay-client", () => ({
     close() {
       this.closeCalls += 1;
       this.state = "closed";
+    }
+
+    emitClose() {
+      this.state = "closed";
+      for (const callback of this.closeListeners) callback();
     }
   },
 }));
@@ -207,6 +214,52 @@ test("pairs a device, waits for onPaired, and cleans up temporary transport", as
   }
 });
 
+test("retries a sent request with the same id after Relay disconnect", async () => {
+  const onPaired = vi.fn<(result: DevicePairingResult) => Promise<void>>(async () => undefined);
+  const { controller, screen } = await renderController(onPaired);
+  try {
+    controller().open();
+    const pairing = controller().pairFromQr(pairingUri());
+    await vi.waitFor(() => expect(channelHarness.channels[0]?.pairRequestFrames).toHaveLength(1));
+    const firstRequest = channelHarness.channels[0]!.pairRequestFrames[0]!;
+
+    relayHarness.instances[0]!.emitClose();
+    await vi.waitFor(() => expect(channelHarness.channels).toHaveLength(2));
+    await vi.waitFor(() => expect(channelHarness.channels[1]?.pairRequestFrames).toHaveLength(1));
+    const secondRequest = channelHarness.channels[1]!.pairRequestFrames[0]!;
+    expect(secondRequest).toEqual(firstRequest);
+
+    channelHarness.channels[1]!.emitPairOk({ protocol_version: 2, type: "pair_ok", in_reply_to: secondRequest.id, session_name: "recovered", session_started_at: Date.now(), endpoint_id: endpointId, hostname: "paired-host" });
+    await pairing;
+
+    expect(onPaired).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(controller().state).toBe("idle"));
+    expect(channelHarness.channels[0]?.closeCalls).toBe(1);
+    expect(relayHarness.instances[0]?.closeCalls).toBe(1);
+  } finally {
+    await screen.unmount();
+  }
+});
+
+test("ignores a late response for a different pairing request", async () => {
+  const onPaired = vi.fn<(result: DevicePairingResult) => Promise<void>>(async () => undefined);
+  const { controller, screen } = await renderController(onPaired);
+  try {
+    controller().open();
+    const pairing = controller().pairFromQr(pairingUri());
+    await vi.waitFor(() => expect(channelHarness.channels[0]?.pairRequestFrames).toHaveLength(1));
+    const channel = channelHarness.channels[0]!;
+    const request = channel.pairRequestFrames[0]!;
+    channel.emitPairOk({ protocol_version: 2, type: "pair_ok", in_reply_to: "stale-request", session_name: "stale", session_started_at: Date.now(), endpoint_id: endpointId });
+    expect(onPaired).not.toHaveBeenCalled();
+    channel.emitPairOk({ protocol_version: 2, type: "pair_ok", in_reply_to: request.id, session_name: "current", session_started_at: Date.now(), endpoint_id: endpointId });
+    await pairing;
+    expect(onPaired).toHaveBeenCalledTimes(1);
+  } finally {
+    await screen.unmount();
+  }
+});
+
 test("cancels and cleans an active attempt before starting a newer pairing", async () => {
   vi.useFakeTimers();
   const onPaired = vi.fn<(result: DevicePairingResult) => Promise<void>>(async () => undefined);
@@ -255,7 +308,7 @@ test("returns to scanning and cleans up after endpoint mismatch and pair error",
     const mismatchChannel = channelHarness.channels[0];
     expect(mismatchChannel).toBeDefined();
     await flushMicrotasks();
-    mismatchChannel?.emitPairOk({ protocol_version: 2, type: "pair_ok", in_reply_to: "request", session_name: "test-session", session_started_at: Date.now(), endpoint_id: "123e4567-e89b-42d3-a456-426614174099" });
+    mismatchChannel?.emitPairOk({ protocol_version: 2, type: "pair_ok", in_reply_to: mismatchChannel.pairRequestFrames[0]?.id ?? "missing-request", session_name: "test-session", session_started_at: Date.now(), endpoint_id: "123e4567-e89b-42d3-a456-426614174099" });
     await mismatchPairing;
     await vi.waitFor(() => expect(controller().state).toBe("scanning"));
     expect(errors.at(-1)).toBe("Pairing response belongs to a different endpoint.");
@@ -266,7 +319,7 @@ test("returns to scanning and cleans up after endpoint mismatch and pair error",
     const errorChannel = channelHarness.channels[1];
     expect(errorChannel).toBeDefined();
     await flushMicrotasks();
-    errorChannel?.emitPairError({ protocol_version: 2, type: "pair_error", in_reply_to: "request", code: "internal_error", message: "Pairing rejected by Pi." });
+    errorChannel?.emitPairError({ protocol_version: 2, type: "pair_error", in_reply_to: errorChannel.pairRequestFrames[0]?.id ?? "missing-request", code: "internal_error", message: "Pairing rejected by Pi." });
     await errorPairing;
     await vi.waitFor(() => expect(controller().state).toBe("scanning"));
     expect(errors.at(-1)).toBe("Pairing rejected by Pi.");
@@ -330,23 +383,64 @@ test("cleans an active pairing attempt when the hook unmounts", async () => {
   expect(relay?.closeCalls).toBe(1);
 });
 
-test("returns to scanning and cleans up after pairing timeout", async () => {
+test("cancels an active pairing attempt when the dialog is closed", async () => {
+  vi.useFakeTimers();
+  const onPaired = vi.fn<(result: DevicePairingResult) => Promise<void>>(async () => undefined);
+  const { controller, errors, screen } = await renderController(onPaired);
+  try {
+    controller().open();
+    const pairing = controller().pairFromQr(pairingUri());
+    await vi.waitFor(() => expect(channelHarness.channels[0]?.pairRequestFrames).toHaveLength(1));
+    const channel = channelHarness.channels[0]!;
+    const relay = relayHarness.instances[0]!;
+    const requestId = channel.pairRequestFrames[0]!.id;
+
+    controller().close();
+    await pairing;
+    await expect.element(screen.getByTestId("pairing-state")).toHaveTextContent("idle");
+    vi.advanceTimersByTime(30_000);
+    await flushMicrotasks();
+
+    expect(channel.closeCalls).toBe(1);
+    expect(relay.closeCalls).toBe(1);
+    expect(channelHarness.channels).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+    channel.emitPairOk({ protocol_version: 2, type: "pair_ok", in_reply_to: requestId, session_name: "late", session_started_at: Date.now(), endpoint_id: endpointId });
+    expect(onPaired).not.toHaveBeenCalled();
+    expect(errors.filter((message) => message !== null)).toEqual([]);
+  } finally {
+    await screen.unmount();
+    vi.useRealTimers();
+  }
+});
+
+test("retries an already-sent request once after timeout, then stops", async () => {
   vi.useFakeTimers();
   const { controller, errors, screen } = await renderController(async () => undefined);
   try {
     controller().open();
     const pairing = controller().pairFromQr(pairingUri());
-    const channel = channelHarness.channels[0];
-    const relay = relayHarness.instances[0];
-    expect(channel).toBeDefined();
-    expect(relay).toBeDefined();
+    await vi.waitFor(() => expect(channelHarness.channels[0]?.pairRequestFrames).toHaveLength(1));
+    const firstChannel = channelHarness.channels[0]!;
+    const firstRelay = relayHarness.instances[0]!;
+    const firstRequest = firstChannel.pairRequestFrames[0]!;
 
-    vi.advanceTimersByTime(15_000);
+    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.waitFor(() => expect(channelHarness.channels[1]?.pairRequestFrames).toHaveLength(1));
+    const secondChannel = channelHarness.channels[1]!;
+    const secondRelay = relayHarness.instances[1]!;
+    expect(secondChannel.pairRequestFrames[0]).toEqual(firstRequest);
+    expect(firstChannel.closeCalls).toBe(1);
+    expect(firstRelay.closeCalls).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(15_000);
     await pairing;
     await expect.element(screen.getByTestId("pairing-state")).toHaveTextContent("scanning");
     expect(errors.at(-1)).toBe("Pairing timed out. Generate a fresh QR on the Pi.");
-    expect(channel?.closeCalls).toBe(1);
-    expect(relay?.closeCalls).toBe(1);
+    expect(channelHarness.channels).toHaveLength(2);
+    expect(secondChannel.closeCalls).toBe(1);
+    expect(secondRelay.closeCalls).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
   } finally {
     await screen.unmount();
     vi.useRealTimers();

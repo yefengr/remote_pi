@@ -66,6 +66,18 @@ export type ConditionalPeerRemoval =
   | { readonly outcome: "removed"; readonly nextToken: OwnerStorageToken }
   | { readonly outcome: "stale" | "not_found" | "no_authority" };
 
+/** Provenance and pre-write state for one successful addPeer mutation. */
+export interface PeerWriteReceipt {
+  readonly record: PeerRecord;
+  readonly token: OwnerStorageToken;
+  /** The raw record replaced by this write, when addPeer overwrote one. */
+  readonly previousRecord?: unknown;
+}
+
+export type ConditionalPeerRollback =
+  | { readonly outcome: "removed" | "restored"; readonly nextToken: OwnerStorageToken }
+  | { readonly outcome: "stale" | "not_found" | "no_authority" };
+
 function _ownerSlotKey(rawOwnerPubkey: unknown): string {
   if (typeof rawOwnerPubkey !== "string") {
     // Invalid non-string records remain isolated; their quarantine slots never
@@ -100,7 +112,7 @@ function _serializePeerMutation<T>(mutation: () => Promise<T>): Promise<T> {
   return result;
 }
 
-export function addPeer(record: PeerRecord): Promise<void> {
+export function addPeer(record: PeerRecord): Promise<PeerWriteReceipt> {
   return _serializePeerMutation(async () => {
     const peers = await listPeers() as unknown[];
     const idx = peers.findIndex((peer) =>
@@ -108,6 +120,7 @@ export function addPeer(record: PeerRecord): Promise<void> {
       typeof peer === "object" &&
       (peer as { remote_epk?: unknown }).remote_epk === record.remote_epk,
     );
+    const previousRecord = idx >= 0 ? peers[idx] : undefined;
     if (idx >= 0) {
       peers[idx] = record; // idempotent re-pair
     } else {
@@ -117,7 +130,10 @@ export function addPeer(record: PeerRecord): Promise<void> {
     await writeFile(PEERS_PATH, JSON.stringify({ peers }, null, 2));
     // A successful re-pair is a new storage provenance event even when the
     // record bytes happen to be identical.
-    _invalidateOwnerSlot(record.remote_epk);
+    const token = _invalidateOwnerSlot(record.remote_epk);
+    return idx >= 0
+      ? { record, token, previousRecord }
+      : { record, token };
   });
 }
 
@@ -195,6 +211,54 @@ export function conditionalRemovePeer(
     }
     writeFileSync(PEERS_PATH, JSON.stringify({ peers: filtered }, null, 2));
     return { outcome: "removed", nextToken: _invalidateOwnerSlot(remoteEpk) };
+  });
+}
+
+/**
+ * Compensates a specific addPeer write only while that write still owns its
+ * canonical Owner slot. The receipt's raw written record must still be
+ * present, so an out-of-band replacement cannot be removed or overwritten.
+ */
+export function conditionalRollbackPeer(
+  receipt: PeerWriteReceipt,
+  canCommit?: () => boolean,
+): Promise<ConditionalPeerRollback> {
+  return _serializePeerMutation(async () => {
+    const slot = _ownerSlotKey(receipt.record.remote_epk);
+    if (_tokenForSlot(slot) !== receipt.token) return { outcome: "stale" };
+
+    const peers = await _readPeerContainerStrict();
+    const idx = peers.findIndex((peer) => {
+      try {
+        return JSON.stringify(peer) === JSON.stringify(receipt.record);
+      } catch {
+        return false;
+      }
+    });
+    if (idx < 0) return { outcome: "not_found" };
+
+    const restoringPreviousRecord = "previousRecord" in receipt;
+    const nextPeers = [...peers];
+    if (restoringPreviousRecord) {
+      nextPeers[idx] = receipt.previousRecord;
+    } else {
+      nextPeers.splice(idx, 1);
+    }
+
+    await mkdir(dirname(PEERS_PATH), { recursive: true });
+    // No await may intervene between the final token/authority checks and
+    // synchronous write, preserving the lane's fail-closed commit boundary.
+    if (_tokenForSlot(slot) !== receipt.token) return { outcome: "stale" };
+    if (canCommit) {
+      let authorized = false;
+      try { authorized = canCommit(); } catch { return { outcome: "no_authority" }; }
+      if (!authorized) return { outcome: "no_authority" };
+    }
+    writeFileSync(PEERS_PATH, JSON.stringify({ peers: nextPeers }, null, 2));
+    return {
+      outcome: restoringPreviousRecord ? "restored" : "removed",
+      nextToken: _invalidateOwnerSlot(receipt.record.remote_epk),
+    };
   });
 }
 

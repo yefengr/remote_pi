@@ -12,9 +12,10 @@ const host = {
 class RelayMock {
   listeners = new Set<(line: string) => void>();
   sent: string[] = [];
+  failSend = false;
   on(_event: string, listener: (line: string) => void): void { this.listeners.add(listener); }
   off(_event: string, listener: (line: string) => void): void { this.listeners.delete(listener); }
-  send(line: string): void { this.sent.push(line); }
+  send(line: string): void { if (this.failSend) throw new Error("send failed"); this.sent.push(line); }
   emit(line: string): void { for (const listener of this.listeners) listener(line); }
 }
 
@@ -41,6 +42,7 @@ describe("V2PeerChannel", () => {
     relay.emit(line("owner", { protocol_version: 2, type: "session_hello", id: "h", channel_id: "c" }, { endpoint_id: "33333333-3333-4333-8333-333333333333" }));
     relay.emit(line("owner", { type: "session_hello", id: "h", channel_id: "c" }));
     relay.emit(line("owner", { protocol_version: 2, type: "session_hello", id: "pairing-bypass", channel_id: "c" }, { purpose: "pairing" }));
+    relay.emit(line("owner", { protocol_version: 2, type: "pair_request", id: "pair-retry", token: "token", device_name: "browser" }, { purpose: "pairing" }));
     relay.emit(line("owner", { protocol_version: 2, type: "session_hello", id: "h", channel_id: "c" }));
     expect(received).toHaveBeenCalledTimes(1);
     expect(received).toHaveBeenCalledWith(expect.objectContaining({ id: "h" }));
@@ -71,6 +73,15 @@ describe("V2PeerChannel", () => {
     });
     expect(outer).not.toHaveProperty("source_owner_id");
     expect(decodeServerFrameV2(Buffer.from(outer.ct as string, "base64").toString("utf8"))).toMatchObject({ type: "session_ready" });
+  });
+
+  test("reports whether a route was handed to the Relay", () => {
+    const relay = new RelayMock();
+    const channel = new V2PeerChannel(relay as unknown as RelayClient, "owner", host, () => undefined);
+    const frame = { protocol_version: 2 as const, type: "pair_error" as const, in_reply_to: "pair", code: "internal_error" as const, message: "failed" };
+    expect(channel.sendV2(frame)).toBe(true);
+    relay.failSend = true;
+    expect(channel.sendV2(frame)).toBe(false);
   });
 
   test("rejects routes that lack Relay-provided source identity", () => {

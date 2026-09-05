@@ -106,9 +106,15 @@ export class RelayClient extends EventEmitter {
     this.ws.send(line);
   }
 
-  sendControl(frame: object): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify(frame));
+  sendControl(frame: object): boolean {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+    try {
+      this.ws.send(JSON.stringify(frame));
+      return true;
+    } catch (error) {
+      this.reportError(this.asError(error));
+      return false;
+    }
   }
 
   close(): void {

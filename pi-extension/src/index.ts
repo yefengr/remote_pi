@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory, SessionManager } from "@earendil-works/pi-coding-agent";
 import { canonicalizeEd25519PublicKey } from "./pairing/crypto.js";
 import { qrSession } from "./pairing/qr.js";
-import { addPeer, getOrCreateEd25519Keypair, KeyringUnavailableError, PairedIdentityMissingError, listPeers, type PeerRecord } from "./pairing/storage.js";
+import { addPeer, conditionalRollbackPeer, getOrCreateEd25519Keypair, KeyringUnavailableError, PairedIdentityMissingError, listPeers, type PeerRecord } from "./pairing/storage.js";
 import { type ClientFrame, type ServerFrame } from "./protocol/v2/index.js";
 import { RelayClient, type EndpointMetadata, type HostConnectOptions } from "./transport/relay_client.js";
 import { V2PeerChannel, type HostRouteIdentity } from "./transport/peer_channel.js";
@@ -24,6 +24,7 @@ import { resolveRelayUrl, toWebSocketUrl } from "./config.js";
 import { persistModelDefault, registerCommands, runDirectCli, type RemoteCommandDependencies } from "./daemon/commands.js";
 import { installOwnerRouter } from "./runtime/owner_router.js";
 import { RelayLifecycle, type RelayStartContext } from "./runtime/relay_lifecycle.js";
+import { PairingCoordinator } from "./runtime/pairing_coordinator.js";
 export type { RelayConnectivity, RemoteState } from "./runtime/relay_lifecycle.js";
 const CONTROL_PROTOCOL_VERSION = 2;
 const ENDPOINT_ID_ENV = "REMOTE_PI_ENDPOINT_ID", RUNTIME_INSTANCE_ID_ENV = "REMOTE_PI_RUNTIME_INSTANCE_ID";
@@ -140,16 +141,25 @@ function emitRuntimeFailed(stage: string, code: string, message: string, retryab
   emitRuntimeEvent("runtime-failed", { stage, code, message, retryable });
 }
 
-async function updateEndpoint(): Promise<void> {
-  const relay = relayLifecycle.relay;
-  if (!relay?.isOpen()) return;
-  try {
-    relay.sendControl({
-      type: "endpoint_update",
-      metadata: endpointMetadata(),
-      authorized_owner_ids: await authorizedOwnerIds(),
-    });
-  } catch { /* reconnect owns recovery */ }
+let endpointUpdateQueue: Promise<void> = Promise.resolve();
+
+function updateEndpoint(expectedRelay?: RelayClient): Promise<boolean> {
+  let sent = false;
+  const operation = endpointUpdateQueue.then(async () => {
+    const relay = expectedRelay ?? relayLifecycle.relay;
+    if (!relay?.isOpen() || !relayLifecycle.isCurrent(relay)) return;
+    try {
+      const authorized = await authorizedOwnerIds();
+      if (!relayLifecycle.isCurrent(relay) || !relay.isOpen()) return;
+      sent = relay.sendControl({
+        type: "endpoint_update",
+        metadata: endpointMetadata(),
+        authorized_owner_ids: authorized,
+      });
+    } catch { /* reconnect owns recovery */ }
+  });
+  endpointUpdateQueue = operation.then(() => undefined, () => undefined);
+  return operation.then(() => sent);
 }
 
 function refreshFooter(ctx?: Pick<ExtensionContext, "ui"> | null): void {
@@ -182,10 +192,11 @@ const relayLifecycle = new RelayLifecycle({
   onConnected: (client, ctx) => {
     installRouteListener(client);
     if (ctx) refreshFooter(ctx);
-    else void updateEndpoint();
+    else void updateEndpoint(client);
   },
   onDisconnected: () => {
     for (const ownerId of [...activeOwners.keys()]) detachOwner(ownerId);
+    pairingCoordinator.abandonInactive();
   },
 });
 
@@ -366,28 +377,17 @@ async function findKnownOwner(ownerId: string): Promise<PeerRecord | null> {
   return null;
 }
 
-async function handlePairRequest(
-  relayClient: RelayClient,
-  ownerId: string,
-  frame: Extract<ClientFrame, { type: "pair_request" }>,
-): Promise<void> {
-  const binding = attachOwner(relayClient, ownerId);
-  if (!binding) return;
-  const status = qrSession.consumeToken(frame.token);
-  if (status !== "ok") {
-    binding.channel.sendV2({ protocol_version: 2, type: "pair_error", in_reply_to: frame.id, code: status === "expired" ? "token_expired" : status === "consumed" ? "token_consumed" : "token_unknown", message: "Pairing token is invalid or expired" });
-    detachOwner(ownerId);
-    return;
-  }
-  try {
-    await addPeer({ name: frame.device_name, remote_epk: ownerId, paired_at: new Date().toISOString() });
-    await updateEndpoint();
-  } catch {
-    binding.channel.sendV2({ protocol_version: 2, type: "pair_error", in_reply_to: frame.id, code: "internal_error", message: "Failed to persist pairing" });
-    detachOwner(ownerId);
-    return;
-  }
-  binding.channel.sendV2({
+const pairingCoordinator = new PairingCoordinator({
+  qrSession,
+  routeIdentity,
+  isRelayCurrent: (relay) => relayLifecycle.isCurrent(relay),
+  attachOwner,
+  activeBinding: (ownerId) => activeOwners.get(ownerId),
+  addPeer,
+  rollbackPeer: conditionalRollbackPeer,
+  updateEndpoint: (relay) => updateEndpoint(relay),
+  refreshCurrentEndpoint: () => updateEndpoint(),
+  buildPairOk: (frame) => ({
     protocol_version: 2,
     type: "pair_ok",
     in_reply_to: frame.id,
@@ -396,7 +396,11 @@ async function handlePairRequest(
     endpoint_id: endpointIdentity.endpointId,
     harness: { name: "Pi coding agent", version: extensionVersion() },
     hostname: hostname(),
-  });
+  }),
+});
+
+function handlePairRequest(relayClient: RelayClient, ownerId: string, frame: Extract<ClientFrame, { type: "pair_request" }>): Promise<void> {
+  return pairingCoordinator.handle(relayClient, ownerId, frame);
 }
 
 function closeRelay(reason?: "peer_stop" | "session_replaced" | "shutdown"): void {
@@ -449,7 +453,7 @@ const commandDependencies: RemoteCommandDependencies = {
   activeOwnerCount: () => activeOwners.size,
   isOwnerActive: (ownerId) => activeOwners.has(ownerId),
   closeOwner,
-  updateEndpoint,
+  updateEndpoint: async () => { await updateEndpoint(); },
   displayName,
   keypair: () => relayLifecycle.keypair,
   hasRelay: () => relayLifecycle.relay?.isOpen() === true,

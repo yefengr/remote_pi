@@ -11,7 +11,20 @@ const owners: OwnerRecord[] = [];
 let nextIdentity: (() => Promise<{ publicKey: Uint8Array; secretKey: Uint8Array }>) | null = null;
 let nextPeerList: (() => Promise<OwnerRecord[]>) | null = null;
 let nextRelayConnect: (() => Promise<void>) | null = null;
+let nextAddPeer: (() => Promise<void>) | null = null;
 const listPeers = vi.fn(() => nextPeerList?.() ?? Promise.resolve([...owners]));
+const addPeer = vi.fn(async (owner: OwnerRecord) => {
+  await nextAddPeer?.();
+  const index = owners.findIndex((entry) => entry.remote_epk === owner.remote_epk);
+  if (index >= 0) owners[index] = owner; else owners.push(owner);
+  return { record: owner, token: Object.freeze({}) };
+});
+const conditionalRollbackPeer = vi.fn(async (receipt: { record: OwnerRecord }) => {
+  const index = owners.findIndex((entry) => entry === receipt.record);
+  if (index < 0) return { outcome: "stale" };
+  owners.splice(index, 1);
+  return { outcome: "removed", nextToken: Object.freeze({}) };
+});
 
 class MockRelay extends EventEmitter {
   static OPEN = 1;
@@ -25,7 +38,7 @@ class MockRelay extends EventEmitter {
     );
   }));
   send = vi.fn();
-  sendControl = vi.fn();
+  sendControl = vi.fn(() => true);
   close = vi.fn(() => {
     this.readyState = 3;
     const reject = this.rejectConnect;
@@ -47,7 +60,8 @@ vi.mock("./pairing/storage.js", async (importOriginal) => {
     ...original,
     getOrCreateEd25519Keypair: vi.fn(() => nextIdentity?.() ?? Promise.resolve({ publicKey: new Uint8Array(32).fill(1), secretKey: new Uint8Array(32).fill(2) })),
     listPeers,
-    addPeer: vi.fn().mockImplementation(async (owner) => { owners.push(owner); }),
+    addPeer,
+    conditionalRollbackPeer,
     removePeer: vi.fn().mockImplementation(async (ownerId) => {
       const index = owners.findIndex((owner) => owner.remote_epk === ownerId);
       if (index < 0) return false;
@@ -57,15 +71,38 @@ vi.mock("./pairing/storage.js", async (importOriginal) => {
   };
 });
 
-let tokenStatus: "ok" | "expired" | "consumed" | "unknown" = "ok";
+const pairingTokenState = vi.hoisted(() => ({
+  reservation: null as { token: string; ownerId: string; requestId: string } | null,
+  completion: null as unknown,
+  released: false,
+}));
 vi.mock("./pairing/qr.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("./pairing/qr.js")>();
   return {
     ...original,
     qrSession: {
       issueToken: vi.fn(() => ({ token: "pair-token", expiresAt: Date.now() + 60_000 })),
-      consumeToken: vi.fn(() => tokenStatus),
-      clear: vi.fn(),
+      reserveToken: vi.fn((token: string, ownerId: string, requestId: string) => {
+        if (pairingTokenState.completion && pairingTokenState.reservation?.ownerId === ownerId && pairingTokenState.reservation.requestId === requestId) {
+          return { status: "committed", completion: pairingTokenState.completion };
+        }
+        if (pairingTokenState.reservation && (pairingTokenState.reservation.ownerId !== ownerId || pairingTokenState.reservation.requestId !== requestId)) return { status: "consumed" };
+        if (!pairingTokenState.reservation || pairingTokenState.released) pairingTokenState.reservation = Object.freeze({ token, ownerId, requestId });
+        pairingTokenState.released = false;
+        return { status: "reserved", reservation: pairingTokenState.reservation };
+      }),
+      commitToken: vi.fn((reservation: unknown, completion: unknown) => {
+        if (reservation !== pairingTokenState.reservation) return false;
+        pairingTokenState.completion = completion;
+        return true;
+      }),
+      isReservationCurrent: vi.fn((reservation: unknown) => reservation === pairingTokenState.reservation && pairingTokenState.completion === null && !pairingTokenState.released),
+      releaseToken: vi.fn((reservation: unknown) => {
+        if (reservation !== pairingTokenState.reservation) return false;
+        pairingTokenState.released = true;
+        return true;
+      }),
+      clear: vi.fn(() => { pairingTokenState.reservation = null; pairingTokenState.completion = null; pairingTokenState.released = false; }),
     },
   };
 });
@@ -130,8 +167,13 @@ describe("Remote Pi endpoint extension", () => {
     nextIdentity = null;
     nextPeerList = null;
     nextRelayConnect = null;
+    nextAddPeer = null;
     listPeers.mockClear();
-    tokenStatus = "ok";
+    addPeer.mockClear();
+    conditionalRollbackPeer.mockClear();
+    pairingTokenState.reservation = null;
+    pairingTokenState.completion = null;
+    pairingTokenState.released = false;
     _setSessionNewBridgeTimeoutForTest(5_000);
     await _stopForTest(ctx());
   });
@@ -156,6 +198,40 @@ describe("Remote Pi endpoint extension", () => {
     }));
     await _connectForTest(ctx());
     expect(relays).toHaveLength(1);
+  });
+
+  test("serializes ACL snapshots so a newer authorization update is sent last", async () => {
+    const ownerA = sourceOwner();
+    const ownerB = ownerId(8);
+    owners.push({ name: "owner-a", remote_epk: ownerA, paired_at: "now" });
+    const pi = makePi();
+    (extension as ExtensionFactory)(pi);
+    const manager = { getSessionId: () => "session-1", getBranch: () => [], appendCustomEntry: vi.fn(), getLeafId: () => "session-1" };
+    pi.handlers.get("session_start")?.({}, { ...ctx(), sessionManager: manager });
+    await _connectForTest(ctx());
+    const relay = relays.at(-1)!;
+    relay.sendControl.mockClear();
+    let resolveStaleSnapshot!: (peers: OwnerRecord[]) => void;
+    let reads = 0;
+    nextPeerList = () => {
+      reads += 1;
+      return reads === 1
+        ? new Promise<OwnerRecord[]>((resolve) => { resolveStaleSnapshot = resolve; })
+        : Promise.resolve([...owners]);
+    };
+
+    pi.handlers.get("model_select")?.({ model: { id: "first" } });
+    await vi.waitFor(() => expect(listPeers).toHaveBeenCalledOnce());
+    owners.splice(0, owners.length, { name: "owner-b", remote_epk: ownerB, paired_at: "later" });
+    pi.handlers.get("model_select")?.({ model: { id: "second" } });
+    expect(relay.sendControl).not.toHaveBeenCalled();
+
+    resolveStaleSnapshot([{ name: "owner-a", remote_epk: ownerA, paired_at: "now" }]);
+    await vi.waitFor(() => expect(relay.sendControl).toHaveBeenCalledTimes(2));
+    expect(relay.sendControl.mock.calls.map(([frame]) => (frame as { authorized_owner_ids: string[] }).authorized_owner_ids)).toEqual([
+      [ownerA],
+      [ownerB],
+    ]);
   });
 
   test("waits for auto-start identity and Relay connection before generating a pairing QR", async () => {
@@ -404,6 +480,183 @@ describe("Remote Pi endpoint extension", () => {
     expect(outbound.target_owner_id).toBe(sourceOwner());
     expect(outbound.source_owner_id).toBeUndefined();
     expect(decodeServerFrameV2(Buffer.from(outbound.ct, "base64").toString("utf8"))).toMatchObject({ type: "pair_ok", endpoint_id: processEndpointIdentity().endpointId });
+  });
+
+  test("rolls back and leaves the request retryable when Relay rejects the ACL update", async () => {
+    const pi = makePi();
+    (extension as ExtensionFactory)(pi);
+    const manager = { getSessionId: () => "session-1", getBranch: () => [], appendCustomEntry: vi.fn(), getLeafId: () => "session-1" };
+    pi.handlers.get("session_start")?.({}, { ...ctx(), sessionManager: manager });
+    await _connectForTest(ctx());
+    const relay = relays.at(-1)!;
+    relay.sendControl.mockClear();
+    relay.sendControl.mockReturnValueOnce(false);
+
+    relay.emit("message", inbound(processEndpointIdentity(), { protocol_version: 2, type: "pair_request", id: "P-acl-failed", token: "pair-token", device_name: "phone" }));
+
+    await vi.waitFor(() => expect(conditionalRollbackPeer).toHaveBeenCalledOnce());
+    expect(owners).toEqual([]);
+    expect(pairingTokenState.released).toBe(true);
+    expect(pairingTokenState.completion).toBeNull();
+    expect(relay.send).not.toHaveBeenCalled();
+    expect(relay.sendControl).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: "endpoint_update",
+      authorized_owner_ids: [],
+    }));
+  });
+
+  test("replays pair_ok for the same Owner request after the first send fails", async () => {
+    const pi = makePi();
+    (extension as ExtensionFactory)(pi);
+    const manager = { getSessionId: () => "session-1", getBranch: () => [], appendCustomEntry: vi.fn(), getLeafId: () => "session-1" };
+    pi.handlers.get("session_start")?.({}, { ...ctx(), sessionManager: manager });
+    await _connectForTest(ctx());
+    const relay = relays.at(-1)!;
+    relay.send.mockImplementationOnce(() => { throw new Error("pair_ok dropped"); });
+    const request = { protocol_version: 2 as const, type: "pair_request" as const, id: "P-retry", token: "pair-token", device_name: "phone" };
+
+    relay.emit("message", inbound(processEndpointIdentity(), request));
+    await vi.waitFor(() => expect(addPeer).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(pairingTokenState.completion).not.toBeNull());
+    relay.emit("message", inbound(processEndpointIdentity(), request));
+    await vi.waitFor(() => expect(relay.send).toHaveBeenCalledTimes(2));
+
+    expect(addPeer).toHaveBeenCalledOnce();
+    const replay = JSON.parse(relay.send.mock.calls[1]![0]) as { ct: string };
+    expect(decodeServerFrameV2(Buffer.from(replay.ct, "base64").toString("utf8"))).toMatchObject({ type: "pair_ok", in_reply_to: "P-retry" });
+  });
+
+  test("replays pair_ok without replacing an active Owner session binding", async () => {
+    const pi = makePi();
+    (extension as ExtensionFactory)(pi);
+    const manager = { getSessionId: () => "session-1", getBranch: () => [], appendCustomEntry: vi.fn(), getLeafId: () => "session-1" };
+    pi.handlers.get("session_start")?.({}, { ...ctx(), sessionManager: manager });
+    await _connectForTest(ctx());
+    const relay = relays.at(-1)!;
+    const request = { protocol_version: 2 as const, type: "pair_request" as const, id: "P-active-replay", token: "pair-token", device_name: "phone" };
+
+    relay.emit("message", inbound(processEndpointIdentity(), request));
+    await vi.waitFor(() => expect(pairingTokenState.completion).not.toBeNull());
+    relay.emit("message", inbound(processEndpointIdentity(), { protocol_version: 2, type: "session_hello", id: "hello-active", channel_id: "channel-active" }, "session"));
+    await vi.waitFor(() => expect(relay.send).toHaveBeenCalledTimes(2));
+    const ready = decodeServerFrameV2(Buffer.from((JSON.parse(relay.send.mock.calls[1]![0]) as { ct: string }).ct, "base64").toString("utf8"));
+    if (ready.type !== "session_ready") throw new Error("expected session_ready");
+    relay.emit("message", inbound(processEndpointIdentity(), request));
+    await vi.waitFor(() => expect(relay.send).toHaveBeenCalledTimes(3));
+    relay.emit("message", inbound(processEndpointIdentity(), { protocol_version: 2, type: "ping", id: "ping-after-replay", channel_id: "channel-active", history_generation: ready.history_generation }, "session"));
+    await vi.waitFor(() => expect(relay.send).toHaveBeenCalledTimes(4));
+
+    const frames = relay.send.mock.calls.map(([line]) => decodeServerFrameV2(Buffer.from((JSON.parse(line) as { ct: string }).ct, "base64").toString("utf8")));
+    expect(frames[2]).toMatchObject({ type: "pair_ok", in_reply_to: "P-active-replay" });
+    expect(frames[3]).toMatchObject({ type: "pong", in_reply_to: "ping-after-replay" });
+  });
+
+  test("rolls back a pending pairing write when its Relay lifecycle closes", async () => {
+    let releaseAddPeer!: () => void;
+    nextAddPeer = () => new Promise<void>((resolve) => { releaseAddPeer = resolve; });
+    const pi = makePi();
+    (extension as ExtensionFactory)(pi);
+    const manager = { getSessionId: () => "session-1", getBranch: () => [], appendCustomEntry: vi.fn(), getLeafId: () => "session-1" };
+    pi.handlers.get("session_start")?.({}, { ...ctx(), sessionManager: manager });
+    await _connectForTest(ctx());
+    const relay = relays.at(-1)!;
+
+    relay.emit("message", inbound(processEndpointIdentity(), { protocol_version: 2, type: "pair_request", id: "P-pending", token: "pair-token", device_name: "phone" }));
+    await vi.waitFor(() => expect(addPeer).toHaveBeenCalledOnce());
+    relay.readyState = 3;
+    relay.emit("close");
+    releaseAddPeer();
+
+    await vi.waitFor(() => expect(conditionalRollbackPeer).toHaveBeenCalledOnce());
+    expect(owners).toEqual([]);
+    expect(pairingTokenState.released).toBe(true);
+  });
+
+  test("refreshes the current Relay ACL after an old Relay attempt rolls back", async () => {
+    vi.useFakeTimers();
+    try {
+      let releaseAddPeer!: () => void;
+      nextAddPeer = () => new Promise<void>((resolve) => { releaseAddPeer = resolve; });
+      const pi = makePi();
+      (extension as ExtensionFactory)(pi);
+      const manager = { getSessionId: () => "session-1", getBranch: () => [], appendCustomEntry: vi.fn(), getLeafId: () => "session-1" };
+      pi.handlers.get("session_start")?.({}, { ...ctx(), sessionManager: manager });
+      await _connectForTest(ctx());
+      const oldRelay = relays[0]!;
+
+      oldRelay.emit("message", inbound(processEndpointIdentity(), { protocol_version: 2, type: "pair_request", id: "P-old-relay", token: "pair-token", device_name: "phone" }));
+      await vi.waitFor(() => expect(addPeer).toHaveBeenCalledOnce());
+      oldRelay.readyState = 3;
+      oldRelay.emit("close");
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() => expect(relays).toHaveLength(2));
+      const currentRelay = relays[1]!;
+      // Model Relay B observing the transient addPeer write before the old
+      // attempt resumes and compensates it.
+      owners.push({ name: "phone", remote_epk: sourceOwner(), paired_at: "transient" });
+      currentRelay.sendControl.mockClear();
+
+      releaseAddPeer();
+
+      await vi.waitFor(() => expect(conditionalRollbackPeer).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(currentRelay.sendControl).toHaveBeenCalledWith(expect.objectContaining({
+        type: "endpoint_update",
+        authorized_owner_ids: [],
+      })));
+      expect(owners).toEqual([]);
+      expect(oldRelay.sendControl).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("rolls back a pending write when a new QR invalidates its reservation", async () => {
+    let releaseAddPeer!: () => void;
+    nextAddPeer = () => new Promise<void>((resolve) => { releaseAddPeer = resolve; });
+    const pi = makePi();
+    (extension as ExtensionFactory)(pi);
+    const manager = { getSessionId: () => "session-1", getBranch: () => [], appendCustomEntry: vi.fn(), getLeafId: () => "session-1" };
+    pi.handlers.get("session_start")?.({}, { ...ctx(), sessionManager: manager });
+    await _connectForTest(ctx());
+    const relay = relays.at(-1)!;
+
+    relay.emit("message", inbound(processEndpointIdentity(), { protocol_version: 2, type: "pair_request", id: "P-old-qr", token: "pair-token", device_name: "phone" }));
+    await vi.waitFor(() => expect(addPeer).toHaveBeenCalledOnce());
+    pairingTokenState.reservation = Object.freeze({ token: "new-token", ownerId: sourceOwner(), requestId: "P-new-qr" });
+    releaseAddPeer();
+
+    await vi.waitFor(() => expect(conditionalRollbackPeer).toHaveBeenCalledOnce());
+    expect(owners).toEqual([]);
+    expect(relay.send).not.toHaveBeenCalled();
+  });
+
+  test("does not let a competing request replace the reserved Owner binding", async () => {
+    let releaseAddPeer!: () => void;
+    nextAddPeer = () => new Promise<void>((resolve) => { releaseAddPeer = resolve; });
+    const pi = makePi();
+    (extension as ExtensionFactory)(pi);
+    const manager = { getSessionId: () => "session-1", getBranch: () => [], appendCustomEntry: vi.fn(), getLeafId: () => "session-1" };
+    pi.handlers.get("session_start")?.({}, { ...ctx(), sessionManager: manager });
+    await _connectForTest(ctx());
+    const relay = relays.at(-1)!;
+    const ownerA = sourceOwner();
+    const ownerB = ownerId(8);
+
+    relay.emit("message", inbound(processEndpointIdentity(), { protocol_version: 2, type: "pair_request", id: "P-owner-a", token: "pair-token", device_name: "owner-a" }, "pairing", ownerA));
+    await vi.waitFor(() => expect(addPeer).toHaveBeenCalledOnce());
+    relay.emit("message", inbound(processEndpointIdentity(), { protocol_version: 2, type: "pair_request", id: "P-owner-b", token: "pair-token", device_name: "owner-b" }, "pairing", ownerB));
+    await vi.waitFor(() => expect(relay.send).toHaveBeenCalledOnce());
+    releaseAddPeer();
+    await vi.waitFor(() => expect(relay.send).toHaveBeenCalledTimes(2));
+
+    const frames = relay.send.mock.calls.map(([line]) => {
+      const outbound = JSON.parse(line) as { target_owner_id: string; ct: string };
+      return { ownerId: outbound.target_owner_id, frame: decodeServerFrameV2(Buffer.from(outbound.ct, "base64").toString("utf8")) };
+    });
+    expect(frames).toEqual(expect.arrayContaining([
+      expect.objectContaining({ ownerId: ownerB, frame: expect.objectContaining({ type: "pair_error", code: "token_consumed" }) }),
+      expect.objectContaining({ ownerId: ownerA, frame: expect.objectContaining({ type: "pair_ok", in_reply_to: "P-owner-a" }) }),
+    ]));
   });
 
   test("rejects a route without Relay-provided source_owner_id", async () => {

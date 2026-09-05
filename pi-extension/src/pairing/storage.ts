@@ -10,6 +10,7 @@ export {
   listOwnerPubkeys,
   snapshotOwnerPubkeys,
   conditionalRemovePeer,
+  conditionalRollbackPeer,
   removePeer,
 } from "./owner_storage.js";
 export type {
@@ -17,6 +18,8 @@ export type {
   OwnerStorageToken,
   OwnerStorageSnapshotRecord,
   ConditionalPeerRemoval,
+  PeerWriteReceipt,
+  ConditionalPeerRollback,
 } from "./owner_storage.js";
 
 /**

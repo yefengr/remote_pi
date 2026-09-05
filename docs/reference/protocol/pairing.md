@@ -12,7 +12,7 @@ remotepi://pair?t=<token>&epk=<device_id>&n=<display_name>&ep=<endpoint_id>&rt=<
 
 | query | 类型 | 规则 |
 |---|---|---|
-| `t` | Base64url，16 bytes | 必填；单次使用；默认 60 秒有效 |
+| `t` | Base64url，16 bytes | 必填；绑定当前二维码；默认 60 秒有效 |
 | `epk` | Base64url，32 bytes | 必填；Host 设备 Ed25519 公钥；PWA 规范化为 Relay canonical Base64 STANDARD `device_id` |
 | `n` | UTF-8 string | 必填；1–80 字符；仅展示用途 |
 | `ep` | opaque UUID | 必填；发起配对的 endpoint |
@@ -77,11 +77,13 @@ inner frame：
 Extension 必须：
 
 1. 使用 Relay 注入的 `source_owner_id` 作为 Owner 身份；
-2. 原子校验 token 是否存在、未过期、未消费；
-3. 消费成功 token；
-4. 把 Owner 记录写入设备本地 `~/.pi/remote/peers.json`；
-5. 通过 `endpoint_update.authorized_owner_ids` 同步 Relay ACL；
-6. 向该 Owner 返回 `pair_ok`。
+2. 为 `(token, source_owner_id, pair_request.id)` 建立当前进程内的 token reservation；
+3. 把 Owner 记录写入设备本地 `~/.pi/remote/peers.json`；
+4. 通过 `endpoint_update.authorized_owner_ids` 同步 Relay ACL；
+5. 记录该请求对应的 `pair_ok` 结果并向 Owner 返回；
+6. 在每个异步边界后确认 Relay、endpoint/runtime 和 Owner binding 仍属于本次 pairing attempt。
+
+同一 Owner 使用同一 token 和 `pair_request.id` 重试时，Extension 可以继续原 attempt 或重放已记录的相同 `pair_ok`。committed 结果在当前二维码被替换或清除前可重放，即使原 token TTL 已到期；未提交 reservation 仍受 token TTL 限制。不同 Owner 或不同 request 不能取得已 reservation/committed 的 token。当前 reservation 和完成结果仅保存在 Pi Extension 进程内；Pi 进程重启后不承诺恢复原 request，需生成新的二维码。
 
 ### `pair_ok`
 
@@ -190,6 +192,6 @@ Host 本地撤销 Owner 时必须：
 - Owner 不能在 route 中自带 source/target Owner 字段。
 - Host→Owner 必须指定 `target_owner_id`，且 session route 必须命中 Host 当前 ACL。
 - Pairing route 绕过 ACL 仅用于 token 验证，不意味着 session 授权。
-- token single-use；新 pairing 操作替换旧活动 token。
+- token 绑定当前二维码；同一 Owner + 同一 `pair_request.id` 的重试可恢复或重放，其他 Owner/request 不能复用；新 pairing 操作替换旧活动 token。
 - endpoint/runtime 必须同时匹配；旧 runtime QR 和迟到 route fail closed。
 - 不提供旧 QR、旧路由字段或旧本地数据库的兼容迁移。
