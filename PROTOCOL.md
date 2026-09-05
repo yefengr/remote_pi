@@ -8,7 +8,7 @@
 - [`docs/reference/protocol/pairing.md`](docs/reference/protocol/pairing.md)
 - [`docs/reference/protocol/fixtures/v2/manifest.json`](docs/reference/protocol/fixtures/v2/manifest.json)
 
-历史 `plan/` 文档只用于审计过去决策，不是当前协议真源。
+[历史文档索引](docs/reference/legacy-plans.md)收录已迁移的旧方案与协议快照，只用于审计过去决策，不是当前协议真源。
 
 ## 1. 系统边界
 

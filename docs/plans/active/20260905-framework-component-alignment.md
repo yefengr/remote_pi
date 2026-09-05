@@ -6,7 +6,7 @@
 
 本次仅获授权记录调整方案，只新增本文件。这不代表现行规范或实现已经调整，也不代表后续开发已获授权。各阶段实施前仍需另行确认具体文件、行为与验证范围。
 
-以下建议不取代现行 [AGENTS.md](../../../AGENTS.md)、子项目规范、协议或已关闭决策。若后续实施需要改变既有边界，应先提出独立方案并取得确认，不能以本文件作为直接修改依据。本方案不另设项目级事项状态，也不创建 `docs/ROADMAP.md`。
+以下建议不取代现行 [AGENTS.md](../../../AGENTS.md)、子项目规范、协议或已关闭决策。若后续实施需要改变既有边界，应先提出独立方案并取得确认，不能以本文件作为直接修改依据。本方案不另设项目级事项状态；项目级状态以 [ROADMAP](../../ROADMAP.md) 为准。
 
 本方案的非目标：
 
@@ -42,7 +42,7 @@ PWA 还使用 react-markdown/remark-gfm、ZXing、Lucide 和 Zod。它们不构�
 
 当前规范与实现之间存在表达差距：`pwa/AGENTS.md` 的 Stack 尚未列出 Mantine、Dexie、Serwist 和分层测试，样式约定仍强调 Tailwind utility-first。这说明规范需要核对与收敛，不表示可以立即绕过现行约束。
 
-详细组件与测试取舍仍分散在历史[组件库迁移方案](../../../plan/66-ui-component-library-migration.md)、[自动化测试方案](../../../plan/67-pwa-automated-testing.md)和 [UI 质量路线](../../../plan/68-pwa-ui-quality-roadmap.md)中。`plan/` 保留历史背景和决策原因，不作为当前实现真源。
+详细组件与测试取舍仍记录在已完成的[组件库迁移方案](../completed/20260828-ui-component-library-migration.md)、[自动化测试方案](../completed/20260830-pwa-automated-testing.md)和 [UI 质量路线](../completed/20260829-pwa-ui-quality-roadmap.md)中。方案文档保留历史背景和决策原因，不作为当前实现真源。
 
 ## 职责调整建议
 
@@ -74,9 +74,9 @@ PWA 还使用 react-markdown/remark-gfm、ZXing、Lucide 和 Zod。它们不构�
 | `docs/ARCHITECTURE.md` | 承载经确认的三端职责与状态所有权 |
 | `README.md` | 提供项目入口和必要导航，不重复维护详细规则 |
 
-当前 `docs/` 尚无 `DESIGN.md`、`ARCHITECTURE.md` 或 `ROADMAP.md`。只有内容确有长期维护价值且获得明确授权时，才创建相应文档，不机械补齐空文件。
+当前 `docs/` 尚无 `DESIGN.md` 或 `ARCHITECTURE.md`。只有内容确有长期维护价值且获得明确授权时，才创建相应文档，不机械补齐空文件。
 
-协议和部署继续引用现有真源，包括[协议参考](../../reference/protocol/)与[部署说明](../../deployment-self-hosted.md)，不复制维护。历史 `plan/` 中仍有效的约束需先核对，再迁入获准的长期落点；历史方案保留决策原因，不继续作为现行规则入口。
+协议和部署继续引用现有真源，包括[协议参考](../../reference/protocol/)与[部署说明](../../DEPLOYMENT.md)，不复制维护。[历史文档索引](../../reference/legacy-plans.md)所指向的归档材料中，仍有效的约束需先核对，再迁入获准的长期落点；历史方案保留决策原因，不继续作为现行规则入口。
 
 ### 状态所有权
 

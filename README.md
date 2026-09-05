@@ -101,7 +101,7 @@ Use `remote-pi remove-cwd <cwd>` for idempotent cwd-based unregistration, includ
 
 ## Status
 
-The project is actively evolving. Current architecture plans live in [`plan/`](./plan).
+The project is actively evolving. Project-level status is tracked in [`docs/ROADMAP.md`](./docs/ROADMAP.md). Current architecture plans live in [`docs/plans/active/`](./docs/plans/active/), and completed records live in [`docs/plans/completed/`](./docs/plans/completed/). Use the [historical document index](./docs/reference/legacy-plans.md) to find archived plans and reference snapshots by their original number or path. Archives preserve past decisions; they are not the current implementation source, and archiving does not mean every historical task was completed.
 
 ## License
 

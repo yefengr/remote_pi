@@ -43,7 +43,7 @@ healthcheck Docker na raiz funcional.
 ## Publicação
 
 部署流程和 Docker 运行事实统一维护在
-[`../docs/deployment-self-hosted.md`](../docs/deployment-self-hosted.md)，本文件不重复维护部署细节。
+[`../docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md)，本文件不重复维护部署细节。
 
 ## Desenvolvimento direto
 

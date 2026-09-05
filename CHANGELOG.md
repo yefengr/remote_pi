@@ -14,7 +14,7 @@ For the canonical protocol specification, see [PROTOCOL.md](PROTOCOL.md).
 This release consolidates the work that turned Remote Pi from "phone controls
 one Pi" into a **mesh of coding agents** running on multiple machines, with
 the phone acting purely as the initial authenticator. Covers plans 23, 24, 25,
-and 27 (see [`plan/`](plan/) directory for design history).
+and 27 (see the [historical document index](docs/reference/legacy-plans.md) for design history).
 
 ### Added
 
@@ -190,7 +190,7 @@ and 27 (see [`plan/`](plan/) directory for design history).
   string-only.
 
 #### Plan/03-protocol historical update
-- `plan/03-protocol.md` (MVP-era spec) now opens with an alert pointing to
+- [Plan 03](docs/reference/history/20260518-protocol.md) (MVP-era spec) now opens with an alert pointing to
   `PROTOCOL.md` as the current canonical document, plus a "Post-MVP changes"
   section summarizing the evolution. The rest of the file is preserved as
   historical reference.
@@ -310,7 +310,7 @@ Documented for context:
 Plans 01–22 covered bootstrap, AI orchestration, protocol MVP, pairing,
 rollback E2E (later reverted), revoke + multi-pairing, presence,
 chat-state recovery, onboarding, mirror cache, rooms, agent network, agent
-tools, setup wizard, and the site MVP. See [`plan/`](plan/) for the design
+tools, setup wizard, and the site MVP. See the [historical document index](docs/reference/legacy-plans.md) for the design
 history of each.
 
 [Unreleased]: https://github.com/jacobaraujo7/remote_pi/compare/v0.1.3...HEAD
