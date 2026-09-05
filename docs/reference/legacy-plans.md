@@ -66,20 +66,23 @@
 
 ## 已先行迁移的文档
 
-以下沿用第一批已经确定的路径与命名；本表不重新判定其实施状态。
+以下列出先行迁移文档及后续整理材料的当前位置；本表只维护路径，不独立判定或维护实施状态。
 
 | 旧路径 | 新位置 |
 | --- | --- |
 | `plan/00-decisions.md` | [`docs/adr/20260518-closed-decisions.md`](../adr/20260518-closed-decisions.md) |
-| `plan/61-pwa-scope.md` | [`docs/plans/active/20260822-pwa-scope.md`](../plans/active/20260822-pwa-scope.md) |
-| `plan/62-pwa-architecture.md` | [`docs/plans/active/20260822-pwa-architecture.md`](../plans/active/20260822-pwa-architecture.md) |
-| `plan/63-pwa-message-duplication.md` | [`docs/plans/active/20260823-pwa-message-duplication.md`](../plans/active/20260823-pwa-message-duplication.md) |
-| `plan/64-pwa-hardening.md` | [`docs/plans/active/20260824-pwa-hardening.md`](../plans/active/20260824-pwa-hardening.md) |
-| `plan/65-pwa-image-attachments.md` | [`docs/plans/active/20260827-pwa-image-attachments.md`](../plans/active/20260827-pwa-image-attachments.md) |
+| `plan/61-pwa-scope.md` | [`docs/plans/completed/20260822-pwa-scope.md`](../plans/completed/20260822-pwa-scope.md) |
+| `plan/62-pwa-architecture.md` | [`docs/plans/completed/20260822-pwa-architecture.md`](../plans/completed/20260822-pwa-architecture.md) |
+| `plan/63-pwa-message-duplication.md` | [`docs/plans/completed/20260823-pwa-message-duplication.md`](../plans/completed/20260823-pwa-message-duplication.md) |
+| `plan/64-pwa-hardening.md` | [`docs/plans/completed/20260824-pwa-hardening.md`](../plans/completed/20260824-pwa-hardening.md)；当前验收计划：[Plan 64](../plans/active/20260824-pwa-hardening.md) |
+| `plan/65-pwa-image-attachments.md` | [`docs/plans/completed/20260827-pwa-image-attachments.md`](../plans/completed/20260827-pwa-image-attachments.md) |
 | `plan/66-ui-component-library-migration.md` | [`docs/plans/completed/20260828-ui-component-library-migration.md`](../plans/completed/20260828-ui-component-library-migration.md) |
 | `plan/67-pwa-automated-testing.md` | [`docs/plans/completed/20260830-pwa-automated-testing.md`](../plans/completed/20260830-pwa-automated-testing.md) |
 | `plan/68-pwa-ui-quality-roadmap.md` | [`docs/plans/completed/20260829-pwa-ui-quality-roadmap.md`](../plans/completed/20260829-pwa-ui-quality-roadmap.md) |
 | `plan/69-remove-agent-mesh-and-rework-daemon.md` | [`docs/plans/completed/20260829-remove-agent-mesh-and-rework-daemon.md`](../plans/completed/20260829-remove-agent-mesh-and-rework-daemon.md) |
 | `plan/70-revoke-peer-stop-lifecycle-gap.md` | [`docs/plans/completed/20260902-revoke-peer-stop-lifecycle-gap.md`](../plans/completed/20260902-revoke-peer-stop-lifecycle-gap.md) |
 | `plan/71-pairing-transaction-atomicity-gap.md` | [`docs/plans/completed/20260904-pairing-transaction-atomicity-gap.md`](../plans/completed/20260904-pairing-transaction-atomicity-gap.md) |
+| `site/docs/DESIGN.md` | [`docs/plans/active/20260830-pwa-theme.md`](../plans/active/20260830-pwa-theme.md) |
+| `site/docs/prototypes/20260830-pwa-theme.html` | [`docs/prototypes/20260830-pwa-theme.html`](../prototypes/20260830-pwa-theme.html) |
+| `docs/plans/active/20260905-framework-component-alignment.md` | [`docs/plans/completed/20260905-framework-component-alignment.md`](../plans/completed/20260905-framework-component-alignment.md) |
 | `docs/deployment-self-hosted.md` | [`docs/DEPLOYMENT.md`](../DEPLOYMENT.md) |

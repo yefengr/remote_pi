@@ -1,3 +1,5 @@
+> 历史边界：本文件记录已结束的 UI 与测试交付路线，不作为当前执行或项目状态真源；长期架构与设计分别以 [ARCHITECTURE](../../ARCHITECTURE.md) 和 [DESIGN](../../DESIGN.md) 为准，当前状态见 [ROADMAP](../../ROADMAP.md)。
+
 # Plan 68 — PWA UI 与自动化测试交付路线
 
 > 状态：已完成

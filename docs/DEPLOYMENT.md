@@ -11,7 +11,9 @@ promote
   复用已传输镜像 -> 启动生产 Relay/PWA
 ```
 
-默认不推送 Docker Hub，也不依赖服务器访问 Docker Hub。Caddy 只在首次初始化或域名/端口变化时调整，普通版本部署不修改 Caddy。
+默认不推送 Docker Hub；镜像传输和服务器启动不要求服务器从镜像仓库拉取应用镜像。本机 Buildx 构建仍需能够取得 Dockerfile 使用的基础镜像和构建依赖。Caddy 只在首次初始化或域名/端口变化时调整，普通版本部署不修改 Caddy。
+
+这是已有环境的版本发布流程，不是空服务器的一键初始化流程：`test` 要求现有生产 Relay 已经 `healthy`，不会替你首次启动 Relay；首次初始化需要单独确认范围。系统职责和数据边界见 [ARCHITECTURE](ARCHITECTURE.md)，部署步骤以本文件及下列脚本、配置为准。
 
 ## 文件职责
 
@@ -45,7 +47,7 @@ $EDITOR deploy.env
 chmod 600 deploy.env
 ```
 
-最小配置示例（使用占位符，不要直接照抄真实信息）：
+最小配置示例（使用占位符，不要直接照抄真实信息；版本仅为示例，发布时使用本次核验的镜像标签）：
 
 ```dotenv
 DEPLOY_SSH=your-ssh-alias
@@ -115,8 +117,8 @@ docker-compose version
 脚本会：
 
 1. 读取未提交的 `deploy.env`；
-2. 检查当前生产 Relay 是否 `healthy`；
-3. 通过 SSH 查询服务器架构；
+2. 通过 SSH 查询服务器架构并检查 Docker/Compose；
+3. 检查当前生产 Relay 是否 `healthy`；
 4. 用 Buildx 构建服务器对应架构的 Relay 和 PWA 镜像；
 5. 可选推送远程镜像（默认关闭）；
 6. 上传 `docker-compose.yml`；
@@ -126,7 +128,7 @@ docker-compose version
 10. 等待测试容器变为 `healthy`；
 11. 检查 `TEST_PWA_URL` 和现有 Relay URL。
 
-测试阶段**不会启动或替换生产 Relay/PWA**。测试 PWA 复用当前生产 Relay，所以可以直接验证登录、配对和消息链路；如果需要测试新的 Relay 行为，应单独设计测试 Relay 和测试数据隔离。
+测试阶段**不会启动或替换生产 Relay/PWA**。测试 PWA 复用当前生产 Relay，可验证连接认证、配对和消息链路；Remote Pi 没有账号登录服务。此阶段虽然构建并传输了新的 Relay 镜像，却没有运行它，因此不能据此宣称新 Relay 行为已通过联调；需要验证 Relay 变更时，应另行确认隔离环境和测试数据范围。
 
 你的 Caddy 测试路由示例：
 
@@ -156,7 +158,7 @@ sudo systemctl reload caddy
 - 页面资源和静态文件正常；
 - PWA 设置中的 Relay URL 正确；
 - 新二维码扫描或粘贴配对流程；
-- Pi/Room 列表和连接状态；
+- device/endpoint 列表、当前 endpoint 选择和连接状态；
 - 发送消息、接收输出、刷新页面后的本地历史；
 - 浏览器 Console 和 Relay 日志无异常。
 
@@ -194,6 +196,8 @@ docker-compose --profile test stop site-test
 ```
 
 停止测试容器不会影响生产 Relay/PWA。
+
+`promote` 会核对 `.remote-pi-test-state` 中的镜像引用和镜像 ID，但不执行自动回滚。若更新部分服务后健康检查失败，应先核对实际容器状态并单独确认恢复方案，不把脚本退出失败理解为生产环境已自动恢复。
 
 ## 镜像模式
 
@@ -265,7 +269,9 @@ PWA test:   127.0.0.1:3002 -> 容器 3000（profile: test）
 PWA prod:   127.0.0.1:3001 -> 容器 3000
 ```
 
-Relay 的 SQLite membership 数据保存在 Docker volume `remote-pi-data`。PWA 不保存服务端会话数据，浏览器本地使用 IndexedDB。
+当前 [Compose](../docker-compose.yml) 没有 Relay 数据卷或 SQLite membership 存储。Relay 的 endpoint registry 和 ACL 仅保存在内存中，重启后由 Host/Owner 重连重建；旧环境是否残留历史 volume 不在本流程中自动清理。PWA 不保存服务端业务会话数据，浏览器本地使用 IndexedDB；Host 身份、配对和 Pi 会话保存在运行 Pi 的电脑上，而不是这些 Relay/PWA 容器中。
+
+源码子项目已名为 `pwa/`，但 Compose 服务 `site` / `site-test`、镜像名 `remote-pi-site` 和变量 `SITE_VERSION` / `SITE_IMAGE` 仍是当前脚本使用的名称；执行部署命令时不要仅按目录新名称替换它们。
 
 服务器上查看状态：
 
@@ -331,7 +337,7 @@ PWA Relay URL: https://relay.example.com
 Pi extension:  https://relay.example.com
 ```
 
-测试 PWA 和生产 PWA 复用同一 Relay 时，二者使用同一个 Relay URL；测试配对建议使用独立的临时 Pi/Room，避免与生产浏览器数据混淆。
+测试 PWA 和生产 PWA 复用同一 Relay 时，二者使用同一个 Relay URL。测试应使用获准的隔离 Pi 身份、endpoint 和浏览器数据，避免影响生产配对与会话；只换一个 endpoint 或网页域名并不隔离同一 Host identity 下的 device-scoped 配对与撤销。
 
 ## 配对检查
 
@@ -380,7 +386,7 @@ docker-compose version
 
 ### Docker Hub 超时
 
-默认部署不依赖 Docker Hub。确认脚本没有设置 `PUBLISH_IMAGES=1`，然后重试 `test` 阶段的本地构建/传输。
+先区分失败发生在本机基础镜像/依赖获取、可选镜像推送，还是 SSH 镜像传输。`PUBLISH_IMAGES=0` 只关闭应用镜像推送，不消除本机构建对基础镜像和依赖源的需求；服务器接收的是本机传输的镜像，不需要从 Docker Hub 拉取这些应用镜像。
 
 ### `promote` 找不到镜像
 
@@ -440,4 +446,4 @@ sudo journalctl -u caddy -n 100 --no-pager
 - 重启 Docker daemon；
 - 停止无关容器；
 - 执行 `docker system prune`；
-- 在默认模式下访问 Docker Hub。
+- 在默认模式下向 Docker Hub 推送应用镜像，或要求服务器拉取这些应用镜像。

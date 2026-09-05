@@ -1,3 +1,5 @@
+> 历史边界：本文件记录已完成的时间线交付，不作为当前执行或项目状态真源；当前时间线边界以 [ARCHITECTURE](../../ARCHITECTURE.md) 与 [PROTOCOL](../../../PROTOCOL.md) 为准。当前状态见 [ROADMAP](../../ROADMAP.md)。
+
 # 计划 63 — PWA 消息去重与权威会话时间线
 
 ## 状态

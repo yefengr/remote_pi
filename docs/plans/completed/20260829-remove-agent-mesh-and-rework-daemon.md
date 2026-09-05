@@ -1,3 +1,5 @@
+> 历史边界：本文件记录已结束的 Mesh 移除与 Daemon 重构，不作为当前执行或项目状态真源；后续验收见 [Plan 68](20260829-pwa-ui-quality-roadmap.md)，revoke 生命周期修复见 [Plan 70](20260902-revoke-peer-stop-lifecycle-gap.md)，当前状态见 [ROADMAP](../../ROADMAP.md)。
+
 # Plan 69 — 移除 Agent Mesh 并重构 Daemon 生命周期
 
 > 状态：已完成（自动化实现与验证通过；真实 Relay 链路验收待部署环境）

@@ -1,3 +1,5 @@
+> 历史边界：本文件记录已修复的 revoke 生命周期缺口，不作为当前执行或项目状态真源；当前协议以 [Protocol v2](../../reference/protocol/protocol-v2.md) 为准，当前状态见 [ROADMAP](../../ROADMAP.md)。
+
 # Plan 70 — Revoke 缺少 `bye(peer_stop)` 生命周期通知
 
 > 状态：已完成

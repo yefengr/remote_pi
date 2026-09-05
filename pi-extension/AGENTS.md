@@ -2,11 +2,7 @@
 
 Remote Pi 的 Pi package：注册 `/remote-pi`，把当前 Pi 进程作为独立 endpoint 连接 Relay，并提供 Browser/PWA pairing、Protocol v2 timeline/actions 和可选 daemon supervisor。
 
-当前身份层级是：
-
-```text
-device_id → endpoint_id → runtime_instance_id → session_id / history_generation
-```
+产品术语见 [`../docs/CONTEXT.md`](../docs/CONTEXT.md)，三端职责、身份生命周期和状态所有权见 [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)。本文件保留 Extension 的实现约束、协作命令与验证要求，不重复维护架构正文。
 
 本项目不提供 Agent Mesh、本地 broker、Pi-to-Pi 通信、room routing、membership、mesh tools 或 MCP mesh server。协议、安全边界与跨端契约见 [`../PROTOCOL.md`](../PROTOCOL.md)、[`../docs/reference/protocol/protocol-v2.md`](../docs/reference/protocol/protocol-v2.md) 和 [`../docs/reference/protocol/pairing.md`](../docs/reference/protocol/pairing.md)。
 

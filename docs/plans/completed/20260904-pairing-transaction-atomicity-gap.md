@@ -1,3 +1,5 @@
+> 历史边界：本文件记录已修复的配对事务缺口，不作为当前执行或项目状态真源；当前配对契约以 [pairing protocol](../../reference/protocol/pairing.md) 为准，当前状态见 [ROADMAP](../../ROADMAP.md)。
+
 # Plan 71 — 配对持久化与 `pair_ok` 缺少事务一致性
 
 > 状态：已完成（当前进程内恢复范围）
