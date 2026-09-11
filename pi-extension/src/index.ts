@@ -246,6 +246,12 @@ function ensureTimeline(sessionManager: SessionManager): TimelineRuntime {
         if (!binding) return;
         sendToOwner(started.correlation.senderRef, binding.service.started(started));
       },
+      onPartial: (partial) => {
+        broadcastV2((service) => {
+          const frame = service.partial(partial);
+          return frame ? [frame] : [];
+        });
+      },
       onPublished: (event, correlation) => {
         broadcastV2((service) => service.publishFrames(event));
         if (correlation.senderRef && correlation.clientRequestId) {
@@ -497,6 +503,10 @@ const extension: ExtensionFactory = (pi): void => {
   pi.on("message_start", (event, ctx) => {
     const manager = (ctx as unknown as { sessionManager?: SessionManager }).sessionManager;
     if (manager) ensureTimeline(manager).onMessageStart(event.message, manager);
+  });
+  pi.on("message_update", (event, ctx) => {
+    const manager = (ctx as unknown as { sessionManager?: SessionManager }).sessionManager;
+    if (manager) ensureTimeline(manager).onMessageUpdate(event, manager);
   });
   pi.on("message_end", (event, ctx) => {
     const manager = (ctx as unknown as { sessionManager?: SessionManager }).sessionManager;

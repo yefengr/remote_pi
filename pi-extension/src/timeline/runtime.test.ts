@@ -15,6 +15,15 @@ function assistantMessage(text: string, timestamp = 2): Record<string, unknown> 
   };
 }
 
+function assistantMessageWithThinking(text: string, thinking: string, timestamp = 2): Record<string, unknown> {
+  return {
+    role: "assistant",
+    content: [{ type: "thinking", thinking }, { type: "text", text }],
+    stopReason: "stop",
+    timestamp,
+  };
+}
+
 function toolMessage(isError = false): Record<string, unknown> {
   return {
     role: "toolResult",
@@ -117,6 +126,116 @@ describe("TimelineRuntime", () => {
     expect(markers[0]?.group_id).toBe(markers[1]?.group_id);
     expect(markers[0]).toMatchObject({ origin: "unknown", delivery: "unknown" });
     expect(runtime.getPublishedEvents().map((event) => event.kind)).toEqual(["user", "user"]);
+  });
+
+  test("publishes stable assistant and thinking partials without persisting them", async () => {
+    const session = SessionManager.inMemory(process.cwd());
+    const partials: unknown[] = [];
+    const runtime = new TimelineRuntime({
+      getHistoryGeneration: () => "generation-stream",
+      onPartial: (partial, correlation) => partials.push({ partial, correlation }),
+    });
+    const correlation: Correlation = {
+      clientRequestId: "request-stream",
+      origin: "pwa",
+      delivery: "normal",
+      senderRef: "owner-stream",
+    };
+    const assistant = assistantMessage("");
+
+    runtime.onAgentStart();
+    runtime.runWithCorrelation(correlation, () => runtime.onMessageStart(assistant, session));
+    const [marker] = markerEntries(session);
+    const partialMessage = { ...assistant, content: [{ type: "text", text: "Hello" }] };
+    runtime.onMessageUpdate({
+      type: "message_update",
+      message: partialMessage,
+      assistantMessageEvent: { type: "text_start", contentIndex: 0, partial: partialMessage },
+    } as never, session);
+    runtime.onMessageUpdate({
+      type: "message_update",
+      message: partialMessage,
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Hello", partial: partialMessage },
+    } as never, session);
+    runtime.onMessageUpdate({
+      type: "message_update",
+      message: partialMessage,
+      assistantMessageEvent: { type: "thinking_start", contentIndex: 1, partial: partialMessage },
+    } as never, session);
+    runtime.onMessageUpdate({
+      type: "message_update",
+      message: partialMessage,
+      assistantMessageEvent: { type: "thinking_delta", contentIndex: 1, delta: "Plan", partial: partialMessage },
+    } as never, session);
+
+    expect(partials).toEqual([
+      { partial: expect.objectContaining({ partial_id: `${marker.event_id}:assistant:0`, group_id: marker.group_id, kind: "assistant", status: "running" }), correlation },
+      { partial: expect.objectContaining({ partial_id: `${marker.event_id}:assistant:0`, kind: "assistant", status: "delta", delta: "Hello", history_generation: "generation-stream" }), correlation },
+      { partial: expect.objectContaining({ partial_id: `${marker.event_id}:thinking:1`, group_id: marker.group_id, kind: "thinking", status: "running" }), correlation },
+      { partial: expect.objectContaining({ partial_id: `${marker.event_id}:thinking:1`, kind: "thinking", status: "delta", delta: "Plan" }), correlation },
+    ]);
+    expect(markerEntries(session)).toHaveLength(1);
+
+    runtime.onMessageEnd(assistant, session);
+    session.appendMessage(assistantMessageWithThinking("Hello", "Plan") as never);
+    await nextMacrotask();
+    const nextAssistant = assistantMessage("", 3);
+    runtime.onMessageStart(nextAssistant, session);
+    runtime.onMessageUpdate({
+      type: "message_update",
+      message: partialMessage,
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: " late", partial: partialMessage },
+    } as never, session);
+    expect(partials).toHaveLength(4);
+    expect(runtime.getPublishedEvents()).toContainEqual(expect.objectContaining({
+      event_id: marker.event_id,
+      group_id: marker.group_id,
+      kind: "assistant",
+      status: "complete",
+      blocks: [{ type: "thinking", text: "Plan" }, { type: "text", text: "Hello" }],
+    }));
+  });
+
+  test("splits oversized deltas without breaking surrogate pairs", () => {
+    const session = SessionManager.inMemory(process.cwd());
+    const partials: Array<{ delta?: string }> = [];
+    const runtime = new TimelineRuntime({ onPartial: (partial) => partials.push(partial) });
+    const assistant = assistantMessage("");
+    const delta = `${"x".repeat(64 * 1024 - 1)}😀tail`;
+    runtime.onAgentStart();
+    runtime.onMessageStart(assistant, session);
+    runtime.onMessageUpdate({
+      type: "message_update",
+      message: { ...assistant },
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta, partial: assistant },
+    } as never, session);
+
+    expect(partials).toHaveLength(2);
+    expect(partials.map((partial) => partial.delta).join("")).toBe(delta);
+    expect(partials.every((partial) => (partial.delta?.length ?? 0) <= 64 * 1024)).toBe(true);
+  });
+
+  test("ignores streaming updates without an active assistant lane", () => {
+    const session = SessionManager.inMemory(process.cwd());
+    const otherSession = SessionManager.inMemory(process.cwd());
+    const partials: unknown[] = [];
+    const runtime = new TimelineRuntime({ onPartial: (partial) => partials.push(partial) });
+    const assistant = assistantMessage("");
+    const delta = (message: unknown, value: string) => ({
+      type: "message_update",
+      message,
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: value, partial: assistant },
+    }) as never;
+
+    runtime.attach(session);
+    runtime.onMessageUpdate(delta(assistant, "before start"), session);
+    runtime.onAgentStart();
+    runtime.onMessageStart(assistant, session);
+    runtime.onMessageUpdate(delta(userMessage("not assistant"), "ignored"), session);
+    runtime.onMessageUpdate(delta(assistant, ""), session);
+    runtime.onMessageUpdate(delta(assistant, "other session"), otherSession);
+
+    expect(partials).toEqual([]);
   });
 
   test("maps assistant, provider errors, and tool messages into immutable formal events", async () => {

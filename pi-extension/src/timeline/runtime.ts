@@ -1,15 +1,17 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import type { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { MessageUpdateEvent, SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   MarkerSchemaV2,
   TimelineEventSchema,
   type JsonValue,
   type MarkerV2,
   type TimelineEvent,
+  type TimelinePartial,
 } from "../protocol/v2/index.js";
 
 export const TIMELINE_MARKER = "remote-pi:timeline-v2" as const;
+const MAX_PARTIAL_DELTA_CHARS = 64 * 1024;
 
 type MessageRole = "user" | "assistant" | "toolResult";
 
@@ -23,6 +25,9 @@ type MessageRecord = {
   toolName?: string;
   isError?: boolean;
   args?: unknown;
+  api?: string;
+  provider?: string;
+  model?: string;
 };
 
 export type Correlation = {
@@ -39,6 +44,7 @@ type PendingMessage = {
   role: MessageRole;
   marker: MarkerV2;
   correlation: Correlation;
+  identity: string | null;
 };
 
 type SessionEntry = ReturnType<SessionManager["getBranch"]>[number];
@@ -56,6 +62,7 @@ export type TimelineRuntimeOptions = {
   getHistoryGeneration?: () => string;
   onStarted?: (started: TimelineStarted) => void;
   onPublished?: (event: TimelineEvent, correlation: Correlation) => void;
+  onPartial?: (partial: TimelinePartial, correlation: Correlation) => void;
 };
 
 export class TimelineRuntime {
@@ -75,11 +82,13 @@ export class TimelineRuntime {
   private readonly getHistoryGenerationValue?: () => string;
   private readonly onStarted?: (started: TimelineStarted) => void;
   private readonly onPublished?: (event: TimelineEvent, correlation: Correlation) => void;
+  private readonly onPartial?: (partial: TimelinePartial, correlation: Correlation) => void;
 
   constructor(options: TimelineRuntimeOptions = {}) {
     this.getHistoryGenerationValue = options.getHistoryGeneration;
     this.onStarted = options.onStarted;
     this.onPublished = options.onPublished;
+    this.onPartial = options.onPartial;
   }
 
   attach(sessionManager: SessionManager): void {
@@ -153,6 +162,9 @@ export class TimelineRuntime {
   onAgentEnd(): void {
     this.active = false;
     this.activeGroupId = null;
+    this.pendingByRole.user = [];
+    this.pendingByRole.assistant = [];
+    this.pendingByRole.toolResult = [];
   }
 
   onMessageStart(message: unknown, sessionManager: SessionManager): TimelineStarted | null {
@@ -170,7 +182,7 @@ export class TimelineRuntime {
     sessionManager.appendCustomEntry(TIMELINE_MARKER, marker);
     const objectMessage = message as object;
     this.messageCorrelations.set(objectMessage, correlation);
-    const pending = { message: objectMessage, role: record.role, marker, correlation };
+    const pending = { message: objectMessage, role: record.role, marker, correlation, identity: this.messageIdentity(record) };
     this.pending.set(objectMessage, pending);
     this.pendingByRole[record.role].push(pending);
     const started: TimelineStarted = {
@@ -184,14 +196,31 @@ export class TimelineRuntime {
     return started;
   }
 
+  onMessageUpdate(event: MessageUpdateEvent, sessionManager: SessionManager): void {
+    if (this.sessionManager !== sessionManager || this.messageRole(event.message) !== "assistant") return;
+    const pending = this.findPending(event.message, "assistant");
+    if (!pending) return;
+    const update = event.assistantMessageEvent;
+    if (update.type === "text_start") {
+      this.publishPartial(pending, "assistant", update.contentIndex, "running");
+    } else if (update.type === "thinking_start") {
+      this.publishPartial(pending, "thinking", update.contentIndex, "running");
+    } else if (update.type === "text_delta" && update.delta) {
+      this.publishPartial(pending, "assistant", update.contentIndex, "delta", update.delta);
+    } else if (update.type === "thinking_delta" && update.delta) {
+      this.publishPartial(pending, "thinking", update.contentIndex, "delta", update.delta);
+    }
+  }
+
   onMessageEnd(message: unknown, sessionManager: SessionManager): void {
     this.attach(sessionManager);
     if (typeof message !== "object" || message === null) return;
     const objectMessage = message as object;
-    const direct = this.pending.get(objectMessage);
     const role = this.messageRole(message);
-    const pending = direct ?? (role && role !== "user" ? this.pendingByRole[role][0] : undefined);
+    const pending = role ? this.findPending(message, role) : undefined;
     if (!pending) return;
+    this.pending.delete(pending.message);
+    this.pending.delete(objectMessage);
     this.pendingByRole[pending.role] = this.pendingByRole[pending.role].filter((candidate) => candidate !== pending);
     setImmediate(() => {
       const branch = sessionManager.getBranch();
@@ -243,10 +272,70 @@ export class TimelineRuntime {
     return recovered;
   }
 
+  private findPending(message: unknown, role: MessageRole): PendingMessage | undefined {
+    if (typeof message !== "object" || message === null) return undefined;
+    const direct = this.pending.get(message);
+    if (direct?.role === role && this.pendingByRole[role].includes(direct)) return direct;
+    const record = this.asMessageRecord(message);
+    const identity = record ? this.messageIdentity(record) : null;
+    if (!identity) return undefined;
+    return this.pendingByRole[role].find((candidate) => candidate.identity === identity);
+  }
+
+  private messageIdentity(message: MessageRecord): string | null {
+    if (typeof message.timestamp !== "number" || !Number.isFinite(message.timestamp)) return null;
+    return [message.role, message.timestamp, message.api ?? "", message.provider ?? "", message.model ?? ""].join(":");
+  }
+
   private publish(event: TimelineEvent, correlation: Correlation): void {
     if (this.published.some((existing) => existing.event_id === event.event_id)) return;
     this.published.push(event);
     this.onPublished?.(event, { ...correlation });
+  }
+
+  private publishPartial(
+    pending: PendingMessage,
+    kind: "assistant" | "thinking",
+    contentIndex: number,
+    status: "running" | "delta",
+    delta?: string,
+  ): void {
+    const sessionId = this.sessionId;
+    const historyGeneration = this.historyGeneration;
+    const groupId = pending.marker.group_id;
+    if (!sessionId || !historyGeneration || !groupId) return;
+    const publish = (chunk?: string): void => {
+      const partial: TimelinePartial = {
+        protocol_version: 2,
+        type: "timeline_partial",
+        session_id: sessionId,
+        history_generation: historyGeneration,
+        group_id: groupId,
+        partial_id: `${pending.marker.event_id}:${kind}:${contentIndex}`,
+        kind,
+        status,
+        ...(chunk === undefined ? {} : { delta: chunk }),
+      };
+      this.onPartial?.(partial, { ...pending.correlation });
+    };
+    if (delta === undefined) {
+      publish();
+      return;
+    }
+    for (const chunk of this.partialDeltaChunks(delta)) publish(chunk);
+  }
+
+  private partialDeltaChunks(delta: string): string[] {
+    const chunks: string[] = [];
+    for (let offset = 0; offset < delta.length;) {
+      let end = Math.min(delta.length, offset + MAX_PARTIAL_DELTA_CHARS);
+      const finalCodeUnit = delta.charCodeAt(end - 1);
+      const nextCodeUnit = delta.charCodeAt(end);
+      if (end < delta.length && finalCodeUnit >= 0xD800 && finalCodeUnit <= 0xDBFF && nextCodeUnit >= 0xDC00 && nextCodeUnit <= 0xDFFF) end -= 1;
+      chunks.push(delta.slice(offset, end));
+      offset = end;
+    }
+    return chunks;
   }
 
   private correlationFor(message: unknown): Correlation {
@@ -430,10 +519,9 @@ export class TimelineRuntime {
     if (!Array.isArray(content)) return [];
     return content.flatMap((part): JsonValue[] => {
       if (!part || typeof part !== "object") return [];
-      const item = part as { type?: unknown; text?: unknown };
-      if ((item.type === "text" || item.type === "thinking") && typeof item.text === "string") {
-        return [{ type: item.type, text: item.text }];
-      }
+      const item = part as { type?: unknown; text?: unknown; thinking?: unknown };
+      if (item.type === "text" && typeof item.text === "string") return [{ type: "text", text: item.text }];
+      if (item.type === "thinking" && typeof item.thinking === "string") return [{ type: "thinking", text: item.thinking }];
       return [];
     });
   }

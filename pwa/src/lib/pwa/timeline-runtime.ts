@@ -257,10 +257,12 @@ export class TimelineRuntime {
     if (previous && JSON.stringify(previous) !== JSON.stringify(event)) return;
     this.events.set(event.event_id, event);
     if (event.kind === "user") this.reconcileUserMessage(event.message_id);
-    if (event.kind === "assistant" || event.kind === "tool") {
+    if (event.kind === "assistant" || event.kind === "provider_error" || event.kind === "tool") {
       for (const [partialId, partial] of this.partials) {
         if (partial.partial.group_id !== event.group_id) continue;
-        const matches = event.kind === "assistant" ? partial.partial.kind === "assistant" || partial.partial.kind === "thinking" : partial.partial.kind === "tool";
+        const matches = event.kind === "tool"
+          ? partial.partial.kind === "tool"
+          : partial.partial.kind === "assistant" || partial.partial.kind === "thinking";
         if (matches) this.partials.delete(partialId);
       }
     }

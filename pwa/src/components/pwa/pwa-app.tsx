@@ -23,6 +23,7 @@ import { useDevicePairing, type DevicePairingResult } from "@/lib/pwa/use-device
 import { ACTIVE_DEVICE_SETTING, activeEndpointSettingKey, useActiveEndpointSelection } from "@/lib/pwa/use-active-endpoint-selection";
 import { useTimelineViewport } from "@/lib/pwa/use-timeline-viewport";
 import { TimelineRuntime, type TimelineScope, type TimelineViewItem } from "@/lib/pwa/timeline-runtime";
+import { StreamDisplayBuffer } from "@/lib/pwa/stream-display-buffer";
 import { getImageOutputMime, prepareImageAttachment } from "@/lib/pwa/image-upload";
 import { HistoryWindowAssembler, TimelineEventFragmentAssembler } from "@/lib/pwa/timeline-transfer";
 import { commitRealtime, loadRecent, replaceRecentWindow, TimelineStoreConflictError } from "@/lib/pwa/timeline-store";
@@ -45,6 +46,7 @@ const LEGACY_DEFAULT_RELAY = "https://relay-rp1.jacobmoura.work";
 const DEFAULT_RELAY = "https://relay-pi.yefengr.cn";
 const RELAY_SETTING = "relay_url";
 const RETRY_DELAYS_MS = [1000, 2000, 5000, 10000, 30000] as const;
+const STREAM_DISPLAY_TICK_MS = 16;
 type StartupState = "loading" | "ready" | "error";
 type ImageAttachment = { source: Blob; previewUrl: string; label: string };
 
@@ -149,6 +151,8 @@ export function PwaApp() {
   const onlineRef = useRef(typeof navigator === "undefined" || navigator.onLine);
   const channelContextRef = useRef<ConnectionContext | null>(null);
   const timelineRuntimeRef = useRef(new TimelineRuntime());
+  const streamDisplayBufferRef = useRef(new StreamDisplayBuffer());
+  const streamDisplayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const historyAssemblerRef = useRef<HistoryWindowAssembler | null>(null);
   const historyModeRef = useRef<"recent" | "earlier">("recent");
   const fragmentAssemblerRef = useRef<TimelineEventFragmentAssembler | null>(null);
@@ -171,7 +175,9 @@ export function PwaApp() {
 
   const onDeviceSelected = useCallback(() => {
     resetOutputFollowing();
-    setTimelineItems([]);
+    if (streamDisplayTimerRef.current) clearTimeout(streamDisplayTimerRef.current);
+    streamDisplayTimerRef.current = null;
+    setTimelineItems(streamDisplayBufferRef.current.reset([]).items);
     setLastSyncedAt(undefined);
     setError(null);
   }, [resetOutputFollowing]);
@@ -198,9 +204,34 @@ export function PwaApp() {
   const sessionOnline = activeEndpoint?.online === true;
   const pairingPresence = useMemo(() => derivePairingPresence(devices, endpoints), [devices, endpoints]);
 
-  const applyTimelineChange = useCallback((change: ReturnType<TimelineRuntime["receive"]>) => {
-    setTimelineItems(change.items);
+  const scheduleStreamDisplay = useCallback(() => {
+    if (streamDisplayTimerRef.current || !streamDisplayBufferRef.current.hasPending()) return;
+    const tick = () => {
+      streamDisplayTimerRef.current = setTimeout(() => {
+        streamDisplayTimerRef.current = null;
+        const change = streamDisplayBufferRef.current.advance();
+        if (change.shouldRender) {
+          setTimelineItems(change.items);
+          const groups = new Set(change.items.flatMap((item) => item.kind === "partial" ? [item.partial.group_id] : []));
+          for (const groupId of groups) receiveRealtimeOutput(groupId);
+        }
+        if (change.hasPending) tick();
+      }, STREAM_DISPLAY_TICK_MS);
+    };
+    tick();
+  }, [receiveRealtimeOutput]);
+  const applyTimelineChange = useCallback((change: ReturnType<TimelineRuntime["receive"]>, resetDisplay = false) => {
+    if (resetDisplay && streamDisplayTimerRef.current) clearTimeout(streamDisplayTimerRef.current);
+    if (resetDisplay) streamDisplayTimerRef.current = null;
+    const displayChange = resetDisplay
+      ? streamDisplayBufferRef.current.reset(change.items)
+      : streamDisplayBufferRef.current.ingest(change.items);
+    if (displayChange.shouldRender) setTimelineItems(displayChange.items);
+    if (displayChange.hasPending) scheduleStreamDisplay();
     for (const frame of change.observed) channelRef.current?.send(frame);
+  }, [scheduleStreamDisplay]);
+  useEffect(() => () => {
+    if (streamDisplayTimerRef.current) clearTimeout(streamDisplayTimerRef.current);
   }, []);
   const clearSessionConnection = useCallback(() => {
     connectionGenerationRef.current += 1;
@@ -223,7 +254,7 @@ export function PwaApp() {
     setNextBefore(null);
     setLoadingEarlier(false);
     resetOutputFollowing();
-    applyTimelineChange(timelineRuntimeRef.current.markDisconnected());
+    applyTimelineChange(timelineRuntimeRef.current.markDisconnected(), true);
   }, [applyTimelineChange, resetOutputFollowing]);
   const restartSession = useCallback(() => {
     sessionRecoveryStateRef.current.replacementBye();
@@ -260,7 +291,7 @@ export function PwaApp() {
       if (frame.type === "bye" && scope.historyGeneration !== frame.history_generation) return;
     }
     const recoveryAction = recoverServerFrame(frame, {
-      invalidateScope: () => applyTimelineChange(timelineRuntimeRef.current.invalidateScope()),
+      invalidateScope: () => applyTimelineChange(timelineRuntimeRef.current.invalidateScope(), true),
       rehello: restartSession,
       reconnect: restartSession,
       disconnect: disconnectSession,
@@ -271,12 +302,12 @@ export function PwaApp() {
       helloRequestRef.current = null;
       const scope: TimelineScope = { deviceId: context.deviceId, endpointId: context.endpointId, runtimeInstanceId: context.runtimeInstanceId, sessionId: frame.session_id, historyGeneration: frame.history_generation, selfSenderRef: frame.self_sender_ref, channelId: context.channel.channelId };
       resetOutputFollowing();
-      applyTimelineChange(timelineRuntimeRef.current.setScope(scope));
+      applyTimelineChange(timelineRuntimeRef.current.setScope(scope), true);
       fragmentAssemblerRef.current = new TimelineEventFragmentAssembler({ session_id: scope.sessionId, history_generation: scope.historyGeneration });
       const historyRequestId = id();
       historyModeRef.current = "recent";
       historyAssemblerRef.current = new HistoryWindowAssembler(historyRequestId, { session_id: scope.sessionId, history_generation: scope.historyGeneration });
-      void loadRecent(scope).then((cached) => { if (sameTimelineScope(timelineRuntimeRef.current.currentScope, scope)) applyTimelineChange(timelineRuntimeRef.current.replaceHistory(cached)); }).catch(() => setError("Could not read local history."));
+      void loadRecent(scope).then((cached) => { if (sameTimelineScope(timelineRuntimeRef.current.currentScope, scope)) applyTimelineChange(timelineRuntimeRef.current.replaceHistory(cached), true); }).catch(() => setError("Could not read local history."));
       context.channel.send({ protocol_version: 2, type: "session_sync", id: historyRequestId, channel_id: scope.channelId, history_generation: scope.historyGeneration, before: null, limit: 5 });
       const modelRequestId = id();
       modelRequestRef.current = modelRequestId;
@@ -325,7 +356,7 @@ export function PwaApp() {
         const scope = timelineRuntimeRef.current.currentScope;
         if (!scope) return;
         if (historyModeRef.current === "earlier") applyTimelineChange(timelineRuntimeRef.current.prependHistory(result.events));
-        else { const journal = [...realtimeJournalRef.current.values()]; applyTimelineChange(timelineRuntimeRef.current.replaceHistory([...result.events, ...journal])); void replaceRecentWindow(scope, result.events, journal).catch(() => setError("Could not update local history.")); realtimeJournalRef.current.clear(); }
+        else { const journal = [...realtimeJournalRef.current.values()]; applyTimelineChange(timelineRuntimeRef.current.replaceHistory([...result.events, ...journal]), true); void replaceRecentWindow(scope, result.events, journal).catch(() => setError("Could not update local history.")); realtimeJournalRef.current.clear(); }
         setNextBefore(result.eos ? null : result.next_before ?? null);
         setLastSyncedAt(Date.now());
         setLoadingEarlier(false);
